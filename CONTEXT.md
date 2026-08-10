@@ -9,6 +9,16 @@
 | DOCX→PDF | docx2pdf（自封装） | `bash tools/docx2pdf/run.sh <in.docx> <out.pdf>` |
 | PDF→DOCX | pdf2docx（自封装） | `bash tools/pdf2docx/run.sh <in.pdf> <out.docx>` |
 
+# 品牌战略调研工作流（brand-strategy-research）
+
+输入品牌名 → Tavily 网络调研 → 产出切入角度 → 用户多选 → 生成品牌战略升级报告（Markdown）。Pi 全程驱动。
+
+- 实现：`tools/brand-research/skills/brand-strategy-research/SKILL.md`
+- 依赖：`tools/brand-research/extensions/web-search.ts`（Tavily 定制搜索：web_search/web_extract/web_crawl）
+- key：`.env` 的 `TAVILY_PROXY_API_KEY`（thb-xxx）
+- 运行：`pi install ./tools/brand-research -l` → `pi` → `/skill:brand-strategy-research <品牌名>`
+- 定义：`workflows/brand-strategy-research.md`
+
 ## 术语表
 
 | 术语 | 含义 |

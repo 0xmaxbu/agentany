@@ -5,6 +5,7 @@
 ## 索引
 
 - **document-tools** — 文档基础能力路由：读 PDF/DOCX、PDF↔DOCX 互转（复用 anydoc + OfficeCLI + 自封装 pdf2docx）
+- **brand-strategy-research** — 品牌战略升级调研工作流（在 `tools/brand-research/skills/` 内，随 Pi 包分发）
 
 ## 结构
 

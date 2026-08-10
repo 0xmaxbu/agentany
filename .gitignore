@@ -1,3 +1,8 @@
 .venv/
 tools/*/.venv/
 .DS_Store
+
+# 密钥与工作产物
+.env
+.work/
+reports/
