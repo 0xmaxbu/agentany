@@ -1,0 +1,57 @@
+// ticket #17：每轮 system prompt 组合（纯函数）。turn.ts 取数据（PROJECT.md / store / listWorkflows）后调此。
+// 返 string[]（每段一个元素，pi --append-system-prompt 可多次）：
+// [项目背景] + [工作流目录] + [挂起工作流]×N + [待处理提问]×N（#16 格式）。空块省略。
+// CHAT_SYSTEM_PROMPT（角色+工具清单）由 turn.ts 在前prepend，不在本函数。
+
+export interface WorkflowInfo {
+  id: string;
+  name?: string;
+  description?: string;
+  inputSchema?: unknown;
+}
+export interface SuspendedRunInfo {
+  runId: string;
+  workflowId: string;
+  stepId: string;
+  payload: unknown;
+  resumeSchema: unknown;
+}
+export interface PendingAsk {
+  runId: string;
+  prompt: string;
+  options: string[];
+  resumeSchema: unknown;
+}
+export interface PromptParts {
+  projectDoc: string;
+  workflows: WorkflowInfo[];
+  suspendedRuns: SuspendedRunInfo[];
+  pendingAsks: PendingAsk[];
+}
+
+export function composeSystemPrompt(p: PromptParts): string[] {
+  const out: string[] = [];
+  out.push(`[项目背景]\n${p.projectDoc}`);
+
+  if (p.workflows.length) {
+    const lines = p.workflows
+      .map((w) => `- ${w.id}${w.name ? `: ${w.name}` : ""}${w.description ? ` — ${w.description}` : ""}（inputSchema: ${JSON.stringify(w.inputSchema ?? {})}）`)
+      .join("\n");
+    out.push(`[工作流目录] 可用工作流（start_workflow 用）：\n${lines}`);
+  }
+
+  for (const r of p.suspendedRuns) {
+    out.push(
+      `[挂起工作流] run ${r.runId}（${r.workflowId}）挂起于步骤「${r.stepId}」，等待续跑。\npayload: ${JSON.stringify(r.payload)}\n续跑契约: ${JSON.stringify(r.resumeSchema)}`,
+    );
+  }
+
+  // #16 pending ask 判答格式（迁自 turn.ts，逐字保留——turn-trigger 内容断言依赖）。
+  for (const q of p.pendingAsks) {
+    out.push(
+      `[待处理提问] 工作流 ${q.runId} 正在等待用户决策。\n提问：${q.prompt}\n选项：${q.options.join(" / ")}\n续跑契约：${JSON.stringify(q.resumeSchema)}\n若用户本次消息是对此提问的回答，请将回答归一化为符合续跑契约的对象，并调用 resume_workflow("${q.runId}", resumeData)。若无关，正常回应用户。`,
+    );
+  }
+
+  return out;
+}

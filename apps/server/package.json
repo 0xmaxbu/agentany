@@ -1,0 +1,19 @@
+{
+  "name": "@agentany/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.36.4",
+    "hono": "^4.6.12"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.13",
+    "drizzle-kit": "^0.28.0"
+  }
+}

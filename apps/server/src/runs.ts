@@ -1,0 +1,78 @@
+// 组合根·装配：start/resume 时 makeRunPi→注入 ctx→调 runner（F4）。runner 保持纯。
+import { getWorkflow } from "./registry";
+import { run, resume, type RunCtx } from "./workflow-engine/runner";
+import { makeRunPi, makeRunPiStream } from "./pi/runPi-factory";
+import { assertValidProjectId } from "./config";
+import { resolveScopePaths, scopeOf } from "./scope";
+import { validate } from "./workflow-engine/schema";
+import type { Workflow } from "./workflow-engine/defineWorkflow";
+import type { WorkflowStore } from "./workflow-engine/store";
+import type { EventBus } from "./chat/eventbus";
+import type { RunRegistry } from "./runs/registry";
+
+export interface RunDeps {
+  store: WorkflowStore;
+  runPiFactory?: typeof makeRunPi; // 测试可换 stub（di）
+  runPiStreamFactory?: typeof makeRunPiStream; // chat 切片①：测试注确定性 delta stub（di）
+  eventBus?: EventBus; // 共享事件中心（持久流 + bridge run 事件；prod 由 index 注入）
+  runRegistry?: RunRegistry; // 异步 run 句柄（bridge /run/* 用）
+  signal?: AbortSignal;
+  log?: (...a: unknown[]) => void;
+}
+
+export class WorkflowNotFound extends Error {
+  constructor(id: string) { super(`workflow not found: ${id}`); this.name = "WorkflowNotFound"; }
+}
+export class RunNotFound extends Error {
+  constructor(id: string) { super(`run not found: ${id}`); this.name = "RunNotFound"; }
+}
+// h2：输入不符 inputSchema。
+export class InvalidInput extends Error {
+  constructor(error: string) { super(`invalid input: ${error}`); this.name = "InvalidInput"; }
+}
+// chat 切片①（ADR-0009）。
+export class ConversationNotFound extends Error {
+  constructor(id: string) { super(`conversation not found: ${id}`); this.name = "ConversationNotFound"; }
+}
+export class QueueFull extends Error {
+  constructor(id: string) { super(`conversation queue full: ${id}`); this.name = "QueueFull"; }
+}
+
+const sessionIdFor = (runId: string) => `run-${runId}`;
+// h8：强随机 runId（runId 是资源主键 + 当前事实上的能力令牌，不得弱）。runId 唯一定义点（RunRegistry 复用）。
+export const makeRunId = (): string => "r_" + globalThis.crypto.randomUUID();
+
+function buildCtx(wf: Workflow, projectId: string | null, runId: string, deps: RunDeps): RunCtx {
+  const factory = deps.runPiFactory ?? makeRunPi;
+  const scope = scopeOf(projectId);
+  const { cwd } = resolveScopePaths(scope, projectId);
+  const runPi = factory({
+    extensions: wf.extensions, scope, projectId, sessionId: sessionIdFor(runId),
+  });
+  return {
+    runPi,
+    projectId: projectId ?? "",
+    cwd,
+    signal: deps.signal ?? new AbortController().signal,
+    log: deps.log ?? (() => {}),
+  };
+}
+
+export async function startRun(deps: RunDeps, workflowId: string, projectId: string, input: unknown) {
+  const wf = getWorkflow(workflowId);
+  if (!wf) throw new WorkflowNotFound(workflowId);
+  assertValidProjectId(projectId); // h1：路径关键输入，先校验
+  const v = validate(wf.inputSchema as any, input); // h2：按 inputSchema 校验
+  if (!v.ok) throw new InvalidInput(v.error);
+  const runId = makeRunId();
+  deps.store.createRun({ runId, workflowId, projectId, input });
+  return run(wf, deps.store, runId, buildCtx(wf, projectId, runId, deps));
+}
+
+export async function resumeRun(deps: RunDeps, runId: string, resumeData: unknown) {
+  const row = deps.store.getRun(runId);
+  if (!row) throw new RunNotFound(runId);
+  const wf = getWorkflow(row.workflowId);
+  if (!wf) throw new WorkflowNotFound(row.workflowId);
+  return resume(wf, deps.store, runId, resumeData, buildCtx(wf, row.projectId, runId, deps));
+}
