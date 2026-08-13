@@ -1,0 +1,10 @@
+{
+  "name": "agentany",
+  "private": true,
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "bun --filter @agentany/server dev",
+    "test": "bun --filter @agentany/server test",
+    "lint:workflows": "bun run scripts/lint-workflows.mjs"
+  }
+}

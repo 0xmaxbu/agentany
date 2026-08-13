@@ -6,3 +6,15 @@ tools/*/.venv/
 .env
 .work/
 reports/
+
+# node / bun / 运行时数据
+node_modules/
+data/
+*.sqlite
+*.sqlite-journal
+
+# 构建产物 / 测试报告 / 工具生成物
+**/dist/
+**/test-results/
+spikes/spike-a/sandbox-wd/
+\ .orca/
