@@ -10,6 +10,9 @@ import { WorkflowStore } from "./workflow-engine/store";
 import { EventBus } from "./chat/eventbus";
 import { RunRegistry } from "./runs/registry";
 import { startBridge, BRIDGE_PORT } from "./bridge/server";
+import { UserStore } from "./auth/store";
+import { StreamRegistry } from "./chat/stream-registry";
+import { WorkspaceStore } from "./workspaces/store";
 import type { ConfiguredRunPiStream, ConfiguredRunPi } from "./pi/runPi-factory";
 import type { RunPiResult } from "./workflow-engine/defineWorkflow";
 
@@ -76,10 +79,20 @@ const scriptedStubFactory = (): ConfiguredRunPiStream => async (call): Promise<R
   return { text: TOKENS.join(""), messages: [], toolResults: [] };
 };
 
-const store = new WorkflowStore(openDbMigrated());
+const db = openDbMigrated();
+const store = new WorkflowStore(db);
 const eventBus = new EventBus(); // 【硬条件·#19】共享：bridge run 事件 → TurnTrigger 自动 turn（不传则全链断）
 const runRegistry = new RunRegistry({ store, eventBus, runPiFactory: stubRunPiFactory });
-const app = createApp({ store, eventBus, runRegistry, runPiStreamFactory: scriptedStubFactory });
+// auth/鉴权依赖（e2e 走 dev 放行；workspaceStore 公司 ws 由迁移 seed）
+const app = createApp({
+  store,
+  userStore: new UserStore(db),
+  streamRegistry: new StreamRegistry(),
+  workspaceStore: new WorkspaceStore(db),
+  eventBus,
+  runRegistry,
+  runPiStreamFactory: scriptedStubFactory,
+});
 startBridge(BRIDGE_PORT, { runRegistry, store, eventBus }); // bridge RPC（loopback:3199，stub 经此驱动）
 
 const port = Number(process.env.PORT ?? 3000);

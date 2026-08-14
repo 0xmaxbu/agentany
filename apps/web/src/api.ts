@@ -12,7 +12,7 @@ function headers(json = false): Record<string, string> {
 }
 
 export interface Conversation {
-  id: string; projectId: string | null; title: string | null; createdAt: string;
+  id: string; workspaceId: string; title: string | null; createdAt: string;
 }
 export interface Message {
   id: number; conversationId: string; role: "user" | "assistant"; content: string; createdAt: string;
@@ -28,7 +28,7 @@ export interface Question {
 }
 
 export async function createConversation(title?: string): Promise<Conversation> {
-  const r = await fetch("/conversations", { method: "POST", headers: headers(true), body: JSON.stringify({ projectId: "dev", title }) });
+  const r = await fetch("/conversations", { method: "POST", headers: headers(true), body: JSON.stringify({ title }) }); // 缺省 workspaceId=公司 ws（ADR-0018）
   if (!r.ok) throw new Error(`createConversation: ${r.status}`);
   return r.json();
 }

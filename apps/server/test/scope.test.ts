@@ -1,4 +1,5 @@
-// ticket #10 会话 scope：project / general 路径解析 + projectId 可空 + 路由建会话 + general 跑通 turn。
+// workspace scope（ADR-0018）：ws_company→general（data/general）、其余→workspace（data/workspaces/<id>）。
+// 含：路径解析 + 防注入 + 路由建会话缺省公司 ws + general 会话跑通 turn。
 import { describe, test, expect } from "bun:test";
 import { resolve } from "node:path";
 import { resolveScopePaths, scopeOf } from "../src/scope";
@@ -11,73 +12,70 @@ import { fullDeps } from "./deps";
 
 const JH = { "content-type": "application/json" };
 
-// scopeOf：projectId 非空 → project；空 → general。
 describe("scope.scopeOf", () => {
-  test("非空 → project；null/undefined/空串 → general", () => {
-    expect(scopeOf("acme")).toBe("project");
-    expect(scopeOf(null)).toBe("general");
-    expect(scopeOf(undefined)).toBe("general");
-    expect(scopeOf("")).toBe("general");
+  test("公司 ws → general；其余 → workspace", () => {
+    expect(scopeOf("ws_company")).toBe("general");
+    expect(scopeOf("ws_abc123")).toBe("workspace");
+    expect(scopeOf(null)).toBe("workspace"); // 非 general 皆 workspace（null 无目录——resolveScopePaths 会抛）
   });
 });
 
-// resolveScopePaths：两 scope 路径正确 + project 校验。
 describe("scope.resolveScopePaths", () => {
-  test("general → data/general/{workspace,pi-sessions}", () => {
+  test("general（公司 ws）→ data/general/{workspace,pi-sessions}", () => {
     const p = resolveScopePaths("general");
     expect(p.cwd).toBe(resolve(DATA_DIR, "general", "workspace"));
     expect(p.sessionDir).toBe(resolve(DATA_DIR, "general", "pi-sessions"));
   });
 
-  test("project + 合法 id → data/projects/<id>/{workspace,pi-sessions}", () => {
-    const p = resolveScopePaths("project", "acme");
-    expect(p.cwd).toBe(resolve(DATA_DIR, "projects", "acme", "workspace"));
-    expect(p.sessionDir).toBe(resolve(DATA_DIR, "projects", "acme", "pi-sessions"));
+  test("workspace + 合法 id → data/workspaces/<id>/{workspace,pi-sessions}", () => {
+    const p = resolveScopePaths("workspace", "ws_acme");
+    expect(p.cwd).toBe(resolve(DATA_DIR, "workspaces", "ws_acme", "workspace"));
+    expect(p.sessionDir).toBe(resolve(DATA_DIR, "workspaces", "ws_acme", "pi-sessions"));
   });
 
-  test("project + 穿越串 → 抛（h1 路径防注入）", () => {
-    expect(() => resolveScopePaths("project", "../etc")).toThrow();
-    expect(() => resolveScopePaths("project", "/abs/path")).toThrow();
+  test("workspace + 穿越串 → 抛（h1 路径防注入）", () => {
+    expect(() => resolveScopePaths("workspace", "../etc")).toThrow();
+    expect(() => resolveScopePaths("workspace", "/abs/path")).toThrow();
   });
 
-  test("project + 缺 id → 抛", () => {
-    expect(() => resolveScopePaths("project", undefined)).toThrow();
-    expect(() => resolveScopePaths("project", null)).toThrow();
+  test("workspace + 缺 id → 抛", () => {
+    expect(() => resolveScopePaths("workspace", undefined)).toThrow();
+    expect(() => resolveScopePaths("workspace", null)).toThrow();
   });
 });
 
-// makeRunPiStream 构造时即按 scope 解析路径（projectId=null → general，不抛；非法 → 抛）。
+// makeRunPiStream 构造时即按 scope 解析路径（公司 ws → general，不抛；非法 → 抛）。
 // 闭包不调用 → 不 spawn 真 pi；只验解析路由正确。
 describe("scope.runPi-factory 按 scope 解析", () => {
-  test("projectId=null（general）构造不抛", () => {
-    expect(() => makeRunPiStream({ projectId: null, sessionId: "chat-x" })).not.toThrow();
+  test("workspaceId=公司 ws（general）构造不抛", () => {
+    expect(() => makeRunPiStream({ workspaceId: "ws_company", sessionId: "chat-x" })).not.toThrow();
   });
-  test("projectId=合法（project）构造不抛", () => {
-    expect(() => makeRunPiStream({ projectId: "acme", sessionId: "chat-x" })).not.toThrow();
+  test("workspaceId=合法 ws（workspace）构造不抛", () => {
+    expect(() => makeRunPiStream({ workspaceId: "ws_acme", sessionId: "chat-x" })).not.toThrow();
   });
-  test("projectId=穿越串（project）构造抛", () => {
-    expect(() => makeRunPiStream({ projectId: "../etc", sessionId: "chat-x" })).toThrow();
+  test("workspaceId=穿越串（workspace）构造抛", () => {
+    expect(() => makeRunPiStream({ workspaceId: "../etc", sessionId: "chat-x" })).toThrow();
   });
 });
 
-// DB：conversations.projectId 可空。
-describe("scope.DB projectId 可空", () => {
-  test("createConversation(null) → getConversation 返 null", () => {
+// DB：conversations.workspaceId 恒非空（缺省公司 ws）。
+describe("scope.DB workspaceId", () => {
+  test("createConversation(公司 ws) → 回读一致", () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u", title: "g" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u", title: "g" });
     const conv = store.getConversation("c1");
     expect(conv).toBeTruthy();
-    expect(conv!.projectId).toBeNull();
+    expect(conv!.workspaceId).toBe("ws_company");
   });
 
-  test("createConversation('dev') → 返 'dev'", () => {
+  test("createConversation(自定义 ws) → 回读一致", () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c2", projectId: "dev", userId: "u" });
-    expect(store.getConversation("c2")!.projectId).toBe("dev");
+    store.createConversation({ id: "c2", workspaceId: "ws_acme", userId: "u" });
+    expect(store.getConversation("c2")!.workspaceId).toBe("ws_acme");
   });
 });
 
-// 路由：建 general / project / 非法。
+// 路由：建会话缺省公司 ws；projectId 字段废止；非法 workspaceId 400。
 function newApp() {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
   const deps = fullDeps(store);
@@ -85,30 +83,35 @@ function newApp() {
 }
 
 describe("scope.路由建会话", () => {
-  test("无 projectId → 201 + projectId=null（general）", async () => {
+  test("无 workspaceId → 201 + ws_company（缺省公司 ws）", async () => {
     const { app } = newApp();
     const r = await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) });
     expect(r.status).toBe(201);
     const conv: any = await r.json();
-    expect(conv.projectId).toBeNull();
+    expect(conv.workspaceId).toBe("ws_company");
   });
 
-  test("projectId=dev → 201 + projectId='dev'（project）", async () => {
+  test("projectId 字段废止：携带即 404（不落悬空锚）", async () => {
     const { app } = newApp();
     const r = await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev" }) });
-    expect(r.status).toBe(201);
-    expect(((await r.json()) as any).projectId).toBe("dev");
+    expect(r.status).toBe(404);
   });
 
-  test("projectId=穿越串 → 400", async () => {
+  test("workspaceId=穿越串 → 400", async () => {
     const { app } = newApp();
-    const r = await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({ projectId: "../etc" }) });
+    const r = await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({ workspaceId: "../etc" }) });
     expect(r.status).toBe(400);
+  });
+
+  test("workspaceId=存在但无权（非成员 ws，dev-admin 全通例外见 workspace-authz）→ 此处全库仅 seed 公司 ws，自定义 ws 不存在 → 404", async () => {
+    const { app } = newApp();
+    const r = await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({ workspaceId: "ws_nope" }) });
+    expect(r.status).toBe(404);
   });
 });
 
-describe("scope.general 会话跑通 turn（事件驱动 / ticket #13）", () => {
-  test("general 会话 POST message(202) → 持久流收 delta→done", async () => {
+describe("scope.公司 ws 会话跑通 turn（事件驱动 / ticket #13）", () => {
+  test("公司 ws 会话 POST message(202) → 持久流收 delta→done", async () => {
     const echo = (): ConfiguredRunPiStream => async (call) => {
       call.onDelta(call.prompt);
       return { text: call.prompt, messages: [], toolResults: [] };
@@ -118,7 +121,7 @@ describe("scope.general 会话跑通 turn（事件驱动 / ticket #13）", () =>
     const app = createApp(deps);
 
     const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();
-    expect(c.projectId).toBeNull(); // general
+    expect(c.workspaceId).toBe("ws_company");
 
     // 开持久流（首个 read 触发 streamSSE callback→订阅）
     const streamResp = await app.request(`/conversations/${c.id}/stream`);

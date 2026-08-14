@@ -18,12 +18,12 @@ afterEach(() => { rmSync(CWD, { recursive: true, force: true }); });
 function ctx(capture?: { p: string }): RunCtx {
   return {
     runPi: async (opts: { prompt: string }) => { if (capture) capture.p = opts.prompt; return { text: "[stub]", messages: [], toolResults: [] }; },
-    projectId: "test", cwd: CWD, signal: new AbortController().signal, log: () => {},
+    workspaceId: "ws_test", cwd: CWD, signal: new AbortController().signal, log: () => {},
   };
 }
 async function startWith(store: WorkflowStore, input: unknown) {
   const runId = newRunId();
-  store.createRun({ runId, workflowId: brandStrategyAnalysis.id, projectId: "test", input });
+  store.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input });
   return { runId, res: await run(brandStrategyAnalysis, store, runId, ctx()) };
 }
 

@@ -1,13 +1,13 @@
 // ticket #17：项目记忆 PROJECT.md。pi 不自动加载 PROJECT.md（默认认 AGENTS.md），故每轮注入。
 // loadProjectDoc(workspaceCwd)：mkdir -p + 缺则写模板 + 返内容（idempotent）。
-// turn.ts 传 resolveScopePaths(scopeOf(projectId), projectId).cwd —— 项目级/通用级由 cwd 区分（已过 assertValidProjectId）。
+// turn.ts 传 resolveScopePaths(scopeOf(workspaceId), workspaceId).cwd —— 公司 ws/其余 ws 由 cwd 区分（已过 assertValidWorkspaceId）。
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const PROJECT_TEMPLATE = `# 项目背景（PROJECT.md）
 
 > 本文件是项目记忆，**每轮对话会注入给 AI**。请填写项目背景、目标、约束、术语等，让 AI 回应有据可依。
-> 项目级：仅当前项目可见；通用级（general 会话，无项目）：所有无项目会话共享（如公司规定、通用规范）。
+> workspace 级：仅当前 workspace 可见；公司级（公司 workspace）：全员共享（如公司规定、通用规范）。
 
 ## 项目概述
 （待填写：这是什么项目、服务谁、解决什么问题）

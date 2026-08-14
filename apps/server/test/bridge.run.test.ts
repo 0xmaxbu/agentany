@@ -17,7 +17,7 @@ const delayUntil = async (p: () => boolean, t = 3000) => {
 
 function setup() {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
-  store.createConversation({ id: "c-bridge", projectId: null, userId: "u" });
+  store.createConversation({ id: "c-bridge", workspaceId: "ws_company", userId: "u" });
   const eventBus = new EventBus();
   const registry = new RunRegistry({ store, eventBus, runPiFactory: stubFactory });
   return { store, eventBus, registry };
@@ -105,7 +105,7 @@ describe("bridge /run/start + /run/read（ticket #14）", () => {
 
   test("#codex /run/read 跨会话 guard：B 的 nonce 读 A 的 run → 403（同 /ask_user /run/resume）；A 自读 → 200", async () => {
     const { store, eventBus, registry } = setup();
-    store.createConversation({ id: "c-other", projectId: null, userId: "u" });
+    store.createConversation({ id: "c-other", workspaceId: "ws_company", userId: "u" });
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
     const tokenA = issueNonce("c-bridge");
     try {

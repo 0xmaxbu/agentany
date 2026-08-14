@@ -1,17 +1,17 @@
 import { resolve, sep } from "node:path";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 
-// h1：projectId 是构建文件系统路径的关键输入，必须严格校验（防 ../../、绝对路径注入 cwd/sessionDir）。
-export class InvalidProjectId extends Error {
-  constructor(id: string) { super(`invalid projectId: ${JSON.stringify(id)}`); this.name = "InvalidProjectId"; }
+// h1：workspaceId 是构建文件系统路径的关键输入，必须严格校验（防 ../../、绝对路径注入 cwd/sessionDir）。
+export class InvalidWorkspaceId extends Error {
+  constructor(id: string) { super(`invalid workspaceId: ${JSON.stringify(id)}`); this.name = "InvalidWorkspaceId"; }
 }
-const PROJECT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-export function assertValidProjectId(projectId: string): void {
-  if (typeof projectId !== "string" || !PROJECT_ID_RE.test(projectId)) throw new InvalidProjectId(projectId);
-  // 纵深防御：解析后仍须落在 DATA_DIR/projects/ 下。
-  const root = resolve(DATA_DIR, "projects");
-  const resolved = resolve(root, projectId);
-  if (resolved !== root && !resolved.startsWith(root + sep)) throw new InvalidProjectId(projectId);
+const WORKSPACE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+export function assertValidWorkspaceId(workspaceId: string): void {
+  if (typeof workspaceId !== "string" || !WORKSPACE_ID_RE.test(workspaceId)) throw new InvalidWorkspaceId(workspaceId);
+  // 纵深防御：解析后仍须落在 DATA_DIR/workspaces/ 下。
+  const root = resolve(DATA_DIR, "workspaces");
+  const resolved = resolve(root, workspaceId);
+  if (resolved !== root && !resolved.startsWith(root + sep)) throw new InvalidWorkspaceId(workspaceId);
 }
 
 // h2：把自由文本拍成安全路径段（brand/region 进文件系统路径前用它）。
@@ -48,13 +48,13 @@ export const DATA_DIR = resolve(process.env.DATA_DIR ?? `${REPO_ROOT}data`);
 
 export const PORT = Number(process.env.PORT ?? 3000);
 
-// 项目工作区 / Pi session 目录（ADR-0006）。runPi-factory 与 workflow steps 共用。
-export const projectWorkspacePath = (projectId: string): string =>
-  resolve(DATA_DIR, "projects", projectId, "workspace");
-export const projectSessionDir = (projectId: string): string =>
-  resolve(DATA_DIR, "projects", projectId, "pi-sessions");
+// 工作空间工作区 / Pi session 目录（ADR-0018：ws=目录锚的唯一单位）。runPi-factory 与 workflow steps 共用。
+export const workspaceWorkspacePath = (workspaceId: string): string =>
+  resolve(DATA_DIR, "workspaces", workspaceId, "workspace");
+export const workspaceSessionDir = (workspaceId: string): string =>
+  resolve(DATA_DIR, "workspaces", workspaceId, "pi-sessions");
 
-// 通用（无项目）工作区 / Pi session 目录（ADR-0009 / ticket #10：general scope）。
+// 通用（公司 workspace ws_company）工作区 / Pi session 目录（ADR-0009 general 沿用；ADR-0018）。
 export const generalWorkspacePath = (): string => resolve(DATA_DIR, "general", "workspace");
 export const generalSessionDir = (): string => resolve(DATA_DIR, "general", "pi-sessions");
 

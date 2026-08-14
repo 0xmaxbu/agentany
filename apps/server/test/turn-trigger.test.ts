@@ -18,7 +18,7 @@ const delayUntil = async (pred: () => boolean, t = 3000): Promise<void> => {
 describe("TurnTrigger · EventBus 扇出驱动 turn（#13）", () => {
   test("attach 后 publish(user_message) → turn 起 → delta/done 经 EventBus 回（订阅驱动）", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     const stubStream = (): ConfiguredRunPiStream => async (call) => {
       call.onDelta("PONG");
       return { text: "PONG", messages: [], toolResults: [] };
@@ -54,7 +54,7 @@ describe("TurnTrigger · EventBus 扇出驱动 turn（#13）", () => {
 
   test("attach 幂等（重复 attach 不重复订阅→不重复起 turn）", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     let turns = 0;
     const stubStream = (): ConfiguredRunPiStream => async () => { turns++; return { text: "x", messages: [], toolResults: [] }; };
     const deps = fullDeps(store, { runPiStreamFactory: stubStream });
@@ -74,9 +74,9 @@ describe("TurnTrigger · EventBus 扇出驱动 turn（#13）", () => {
 describe("TurnTrigger · run_* 边界事件驱动自动 turn（#15）", () => {
   function setup(run?: { runId: string; log?: { stepId: string; status: string }[] }) {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     if (run) {
-      store.createRun({ runId: run.runId, workflowId: "wf-x", projectId: null, conversationId: "c1", input: {} });
+      store.createRun({ runId: run.runId, workflowId: "wf-x", workspaceId: "ws_company", conversationId: "c1", input: {} });
       for (const e of run.log ?? []) store.appendLog(run.runId, { stepId: e.stepId, status: e.status as any, input: {}, output: {} });
     }
     let turnCount = 0, lastPrompt = "", lastAppend: string[] | undefined;
@@ -135,7 +135,7 @@ describe("TurnTrigger · run_* 边界事件驱动自动 turn（#15）", () => {
 describe("TurnTrigger · pending 提问每轮注入（#16）", () => {
   test("store 有 pending question → turn appendSystemPrompt 含 [待处理提问] + runId + prompt", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     store.createQuestion({ conversationId: "c1", runId: "r-pending", prompt: "选角度？", options: ["A", "B"], resumeSchema: { _t: "enum", vals: ["A", "B"] } });
     let capturedAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
@@ -161,7 +161,7 @@ describe("TurnTrigger · pending 提问每轮注入（#16）", () => {
 
   test("无 pending question → appendSystemPrompt 只含基础 chat system（无 [待处理提问]）", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     let capturedAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt;
@@ -183,7 +183,7 @@ describe("TurnTrigger · pending 提问每轮注入（#16）", () => {
 
   test("#18：approval 卡（kind=approval）不注入 pi——只 kind=ask 注入；审批走 /approvals，不污染 turn 判答", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     store.createQuestion({ conversationId: "c1", runId: "r-ask", prompt: "选角度？", options: ["A", "B"] }); // ask 卡（应注入）
     store.createQuestion({ conversationId: "c1", runId: null, kind: "approval", workflowId: "brand-research", input: {}, prompt: "需审批", options: ["批准", "拒绝"] }); // approval 卡（不应注入）
     let capturedAppend: string[] | undefined;
@@ -211,8 +211,8 @@ describe("TurnTrigger · pending 提问每轮注入（#16）", () => {
 describe("TurnTrigger · #17 每轮注入（项目背景 / 工作流目录 / 挂起 run）", () => {
   test("挂起 run → 下一轮 appendSystemPrompt 含 [挂起工作流] + runId/stepId", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
-    store.createRun({ runId: "r-susp", workflowId: "wf-x", projectId: null, conversationId: "c1", input: {} });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+    store.createRun({ runId: "r-susp", workflowId: "wf-x", workspaceId: "ws_company", conversationId: "c1", input: {} });
     store.updateRunStatus("r-susp", "suspended");
     store.appendLog("r-susp", { stepId: "review", status: "suspended", suspendPayload: { options: ["A"] }, resumeSchema: { _t: "enum" } });
     let capturedAppend: string[] | undefined;
@@ -237,7 +237,7 @@ describe("TurnTrigger · #17 每轮注入（项目背景 / 工作流目录 / 挂
 
   test("工作流目录段含已注册工作流（synthetic-3step / brand-research）", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     let capturedAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt;
@@ -260,7 +260,7 @@ describe("TurnTrigger · #17 每轮注入（项目背景 / 工作流目录 / 挂
 
   test("项目背景段（PROJECT.md）每轮注入——首 turn 缺则建模板", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c-projdoc", projectId: null, userId: "u" });
+    store.createConversation({ id: "c-projdoc", workspaceId: "ws_company", userId: "u" });
     let capturedAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt;

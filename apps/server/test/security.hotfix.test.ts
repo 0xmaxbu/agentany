@@ -1,4 +1,4 @@
-// 安全 hotfix 回归（h1 projectId/h2 input/h5 token+body/h7 resume 竞态/h8 runId）。
+// 安全 hotfix 回归（h1 workspaceId/h2 input/h5 token+body/h7 resume 竞态/h8 runId）。
 // 见 docs/adr/0009 + 安全审查合并清单；LIVE 代码层堵漏。
 import { describe, test, expect } from "bun:test";
 import { createApp } from "../src/app";
@@ -15,22 +15,26 @@ function newApp() {
   return createApp(fullDeps(store, { runPiFactory }));
 }
 
-describe("security hotfix · h1 projectId 校验", () => {
-  test("坏 projectId（穿越/绝对/空格/超长/点）→ 400", async () => {
+describe("security hotfix · h1 workspaceId 校验（ADR-0018）", () => {
+  test("坏 workspaceId（穿越/绝对/空格/超长/点）→ 400", async () => {
     const app = newApp();
-    for (const pid of ["../x", "../../etc", "/etc", "a/b", "a b", "a.b", "a\\b", "a".repeat(65)]) {
+    for (const wid of ["../x", "../../etc", "/etc", "a/b", "a b", "a.b", "a\\b", "a".repeat(65)]) {
       const r = await app.request("/workflows/synthetic-3step/runs", {
-        method: "POST", headers: JH, body: JSON.stringify({ projectId: pid, input: {} }),
+        method: "POST", headers: JH, body: JSON.stringify({ workspaceId: wid, input: {} }),
       });
-      expect(r.status, `projectId=${JSON.stringify(pid)}`).toBe(400);
+      expect(r.status, `workspaceId=${JSON.stringify(wid)}`).toBe(400);
     }
   });
-  test("好 projectId 放行", async () => {
+  test("好 workspaceId（缺省公司 ws）放行；projectId 字段废止 → 404", async () => {
     const app = newApp();
     const r = await app.request("/workflows/synthetic-3step/runs", {
-      method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev", input: {} }),
+      method: "POST", headers: JH, body: JSON.stringify({ input: {} }),
     });
     expect(r.status).toBe(200);
+    const r2 = await app.request("/workflows/synthetic-3step/runs", {
+      method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev", input: {} }),
+    });
+    expect(r2.status).toBe(404);
   });
 });
 
@@ -38,14 +42,14 @@ describe("security hotfix · h2 input 校验", () => {
   test("brand-research 缺 brand → 400（不触达 runPi）", async () => {
     const app = newApp();
     const r = await app.request("/workflows/brand-research/runs", {
-      method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev", input: {} }),
+      method: "POST", headers: JH, body: JSON.stringify({ input: {} }),
     });
     expect(r.status).toBe(400);
   });
   test("brand-research brand 非法类型 → 400", async () => {
     const app = newApp();
     const r = await app.request("/workflows/brand-research/runs", {
-      method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev", input: { brand: 123 } }),
+      method: "POST", headers: JH, body: JSON.stringify({ input: { brand: 123 } }),
     });
     expect(r.status).toBe(400);
   });
@@ -55,7 +59,7 @@ describe("security hotfix · h8 强 runId", () => {
   test("runId = r_<UUID>", async () => {
     const app = newApp();
     const r = await app.request("/workflows/synthetic-3step/runs", {
-      method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev", input: {} }),
+      method: "POST", headers: JH, body: JSON.stringify({ input: {} }),
     });
     const runId = ((await r.json()) as any).runId;
     expect(runId).toMatch(/^r_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -66,7 +70,7 @@ describe("security hotfix · h7 并发 resume 不双执行", () => {
   test("两次并发 resume → log 无重复", async () => {
     const app = newApp();
     const start = await app.request("/workflows/synthetic-3step/runs", {
-      method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev", input: {} }),
+      method: "POST", headers: JH, body: JSON.stringify({ input: {} }),
     });
     const runId = ((await start.json()) as any).runId;
     const body = JSON.stringify({ resumeData: { decision: "accept" } });

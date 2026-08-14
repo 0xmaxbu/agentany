@@ -60,7 +60,7 @@ describe.skipIf(!HAS_KEY)("真 pi 冒烟 · 跑合成三步全链（#19）", () 
   afterAll(() => { stopAll?.(); });
 
   test("跑合成三步 → run_started+step+run_suspended+hitl_request；accept → run_completed", async () => {
-    const conv = await (await fetch(`${baseUrl}/conversations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId: null }) })).json() as { id: string };
+    const conv = await (await fetch(`${baseUrl}/conversations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) })).json() as { id: string };
     const cid = conv.id;
     const frames: any[] = [];
 

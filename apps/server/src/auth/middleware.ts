@@ -16,6 +16,8 @@ const bearerOf = (h?: string): string | null => (h && h.startsWith("Bearer ") ? 
 export const userIdOf = (c: AppContext): string => c.var.user.id;
 /** 当前 role（admin 守卫用）。 */
 export const userRoleOf = (c: AppContext): UserRole => c.var.user.role;
+/** 当前身份整体（workspace 守卫用；= c.var.user）。 */
+export const principalOf = (c: AppContext): { id: string; role: UserRole } => c.var.user;
 
 export function createAuthMiddleware(userStore: UserStore): MiddlewareHandler<AppEnv> {
   return async (c, next) => {

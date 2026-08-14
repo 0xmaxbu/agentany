@@ -32,7 +32,7 @@ export interface LogRow {
 export interface RunRow {
   runId: string;
   workflowId: string;
-  projectId: string | null;
+  workspaceId: string; // ADR-0018：run 挂 workspace（缺省公司 ws）
   conversationId: string | null;
   status: RunStatus;
   input: unknown;
@@ -51,8 +51,8 @@ export interface FeedbackRow {
 
 export interface ConversationRow {
   id: string;
-  projectId: string | null; // null = general（无项目）会话（ticket #10）
-  userId: string;
+  workspaceId: string; // ADR-0018：会话挂 workspace（缺省公司 ws）
+  userId: string; // 创建者（会话一律创建者私有）
   title: string | null;
   createdAt: string;
   updatedAt: string;
@@ -94,14 +94,14 @@ export class WorkflowStore {
   // store 只做泛化查询、不依赖 schema 的具体类型；<any> 绕开 BunSQLiteDatabase 泛型不协变。
   constructor(private db: BunSQLiteDatabase<any>) {}
 
-  createRun(p: { runId: string; workflowId: string; projectId: string | null; conversationId?: string | null; input: unknown }): void {
+  createRun(p: { runId: string; workflowId: string; workspaceId: string; conversationId?: string | null; input: unknown }): void {
     const ts = now();
     this.db
       .insert(workflowRuns)
       .values({
         runId: p.runId,
         workflowId: p.workflowId,
-        projectId: p.projectId,
+        workspaceId: p.workspaceId,
         conversationId: p.conversationId ?? null,
         status: "running",
         input: J(p.input) as string,
@@ -225,13 +225,13 @@ export class WorkflowStore {
   }
 
   // ── chat 切片①（ADR-0009：1 会话 = 1 Pi session）──
-  createConversation(p: { id: string; projectId: string | null; userId: string; title?: string }): ConversationRow {
+  createConversation(p: { id: string; workspaceId: string; userId: string; title?: string }): ConversationRow {
     const ts = now();
     this.db
       .insert(conversations)
-      .values({ id: p.id, projectId: p.projectId, userId: p.userId, title: p.title ?? null, createdAt: ts, updatedAt: ts })
+      .values({ id: p.id, workspaceId: p.workspaceId, userId: p.userId, title: p.title ?? null, createdAt: ts, updatedAt: ts })
       .run();
-    return { id: p.id, projectId: p.projectId, userId: p.userId, title: p.title ?? null, createdAt: ts, updatedAt: ts };
+    return { id: p.id, workspaceId: p.workspaceId, userId: p.userId, title: p.title ?? null, createdAt: ts, updatedAt: ts };
   }
 
   getConversation(id: string): ConversationRow | undefined {

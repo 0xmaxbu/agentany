@@ -37,13 +37,13 @@ export async function runTurn(
   if (!conv) { send({ type: "error", message: "conversation not found" }); return; }
 
   const makeStream = deps.runPiStreamFactory ?? makeRunPiStream;
-  const runPiStream = makeStream({ projectId: conv.projectId, sessionId: `chat-${conv.id}`, extensions: CHAT_EXTENSIONS });
+  const runPiStream = makeStream({ workspaceId: conv.workspaceId, sessionId: `chat-${conv.id}`, extensions: CHAT_EXTENSIONS });
 
   const nonce = issueNonce(conv.id); // per-turn bridge 令牌（#11）；finally 吊销
   let full = "";
   // 每轮注入（#15 角色 + #17 项目背景/工作流目录/挂起 run + #16 pending ask 判答）。
   // #18：只注入 kind='ask' 的提问——审批卡走 /approvals（人类点），不进 pi 判答。
-  const cwd = resolveScopePaths(scopeOf(conv.projectId), conv.projectId).cwd;
+  const cwd = resolveScopePaths(scopeOf(conv.workspaceId), conv.workspaceId).cwd;
   const appendDynamic = composeSystemPrompt({
     projectDoc: loadProjectDoc(cwd),
     workflows: listWorkflows(),

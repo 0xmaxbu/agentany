@@ -20,7 +20,7 @@ const delayUntil = async (pred: () => boolean, t = 3000): Promise<void> => {
 
 function setup() {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
-  store.createConversation({ id: "c-appr", projectId: null, userId: "u" });
+  store.createConversation({ id: "c-appr", workspaceId: "ws_company", userId: "u" });
   const eventBus = new EventBus();
   const registry = new RunRegistry({ store, eventBus, runPiFactory: stubFactory });
   return { store, eventBus, registry };
@@ -175,7 +175,7 @@ describe("审批只人类 enforce + HTTP 旁路（#18）", () => {
     const app = createApp(fullDeps(store, { runRegistry: registry, eventBus, runPiFactory: stubFactory as any }));
     const frames: any[] = [];
     eventBus.subscribe("c-appr", (f) => frames.push(f));
-    await app.request("/workflows/brand-research/runs", { method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev", input: { brand: "x" } }) });
+    await app.request("/workflows/brand-research/runs", { method: "POST", headers: JH, body: JSON.stringify({ input: { brand: "x" } }) });
     // 不经审批门：无 approval 卡
     expect(store.listQuestions("c-appr", { includeAnswered: true, kind: "approval" })).toHaveLength(0);
     expect(frames.some((f) => f.type === "hitl_request" && f.kind === "approval")).toBe(false);

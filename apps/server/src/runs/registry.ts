@@ -28,7 +28,7 @@ export interface RunHandle {
 export interface RunRegistryDeps {
   store: WorkflowStore;
   eventBus: EventBus;
-  runPiFactory?: (opts: { extensions?: string[]; scope: Scope; projectId: string | null; sessionId: string }) => ConfiguredRunPi;
+  runPiFactory?: (opts: { extensions?: string[]; scope: Scope; workspaceId: string | null; sessionId: string }) => ConfiguredRunPi;
 }
 
 // #18 审批门：start 的三态出口。allow→running；deny→拒（当前 POSTURES 下对已注册工作流不可达，防御）；
@@ -61,14 +61,14 @@ export class RunRegistry {
 
     const conv = this.deps.store.getConversation(p.conversationId);
     if (!conv) throw new Error(`conversation not found: ${p.conversationId}`);
-    const projectId = conv.projectId; // 可空
-    const scope = scopeOf(projectId);
+    const workspaceId = conv.workspaceId;
+    const scope = scopeOf(workspaceId);
 
     const runId = makeRunId();
-    this.deps.store.createRun({ runId, workflowId: p.workflowId, projectId, conversationId: p.conversationId, input: p.input });
+    this.deps.store.createRun({ runId, workflowId: p.workflowId, workspaceId, conversationId: p.conversationId, input: p.input });
 
     const abortCtrl = new AbortController();
-    const ctx = this.ctxFor(wf, scope, projectId, runId, abortCtrl);
+    const ctx = this.ctxFor(wf, scope, workspaceId, runId, abortCtrl);
     this.handles.set(runId, { conversationId: p.conversationId, scope, sessionId: `run-${runId}`, abortCtrl });
     void this.runDetached(runId, p.conversationId, wf, ctx); // detached：fire-and-forget（状态经 DB + EventBus 推流，不持 promise）
     return { runId, status: "running" };
@@ -97,11 +97,10 @@ export class RunRegistry {
     if (!row) throw new Error(`run not found: ${runId}`);
     const wf = getWorkflow(row.workflowId);
     if (!wf) throw new WorkflowNotFound(row.workflowId);
-    const conv = row.conversationId ? this.deps.store.getConversation(row.conversationId) : undefined;
-    const projectId = conv?.projectId ?? row.projectId ?? null;
-    const scope = scopeOf(projectId);
+    const workspaceId = row.workspaceId; // NOT NULL（迁移 backfill；run 恒有 ws 锚）
+    const scope = scopeOf(workspaceId);
     const abortCtrl = this.handles.get(runId)?.abortCtrl ?? new AbortController();
-    const ctx = this.ctxFor(wf, scope, projectId, runId, abortCtrl);
+    const ctx = this.ctxFor(wf, scope, workspaceId, runId, abortCtrl);
     const publish = (frame: Frame) => {
       if (row.conversationId) this.deps.eventBus.publish(row.conversationId, frame);
     };
@@ -160,11 +159,11 @@ export class RunRegistry {
   }
 
   // —— 内部 ——
-  private ctxFor(wf: Workflow, scope: Scope, projectId: string | null, runId: string, abortCtrl: AbortController): RunCtx {
+  private ctxFor(wf: Workflow, scope: Scope, workspaceId: string, runId: string, abortCtrl: AbortController): RunCtx {
     const factory = this.deps.runPiFactory ?? makeRunPi;
-    const { cwd } = resolveScopePaths(scope, projectId);
-    const runPi = factory({ extensions: wf.extensions, scope, projectId, sessionId: `run-${runId}` });
-    return { runPi, projectId: projectId ?? "", cwd, signal: abortCtrl.signal, log: () => {} };
+    const { cwd } = resolveScopePaths(scope, workspaceId);
+    const runPi = factory({ extensions: wf.extensions, scope, workspaceId: workspaceId, sessionId: `run-${runId}` });
+    return { runPi, workspaceId, cwd, signal: abortCtrl.signal, log: () => {} };
   }
 
   private async runDetached(runId: string, conversationId: string, wf: Workflow, ctx: RunCtx): Promise<RunOutcome> {

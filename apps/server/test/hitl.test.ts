@@ -25,7 +25,7 @@ function startHitl(registry: RunRegistry, conv = "c-hitl") {
 }
 function bridgeSetup() {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
-  store.createConversation({ id: "c-hitl", projectId: null, userId: "u" });
+  store.createConversation({ id: "c-hitl", workspaceId: "ws_company", userId: "u" });
   const eventBus = new EventBus();
   const registry = new RunRegistry({ store, eventBus, runPiFactory: stubFactory });
   return { store, eventBus, registry };
@@ -38,7 +38,7 @@ const resumeRun = (port: number, token: string, runId: string, resumeData: unkno
 
 function newStore(conv = "c1") {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
-  store.createConversation({ id: conv, projectId: null, userId: "u" });
+  store.createConversation({ id: conv, workspaceId: "ws_company", userId: "u" });
   return store;
 }
 
@@ -75,7 +75,7 @@ describe("store · HITL question CRUD（#16 步骤1）", () => {
 
   test("listQuestions 按 id 排序 + 跨会话隔离", () => {
     const store = newStore();
-    store.createConversation({ id: "c2", projectId: null, userId: "u" });
+    store.createConversation({ id: "c2", workspaceId: "ws_company", userId: "u" });
     store.createQuestion({ conversationId: "c1", runId: "r1", prompt: "q1", options: [] });
     store.createQuestion({ conversationId: "c1", runId: "r2", prompt: "q2", options: [] });
     store.createQuestion({ conversationId: "c2", runId: "r3", prompt: "q3", options: [] });
@@ -225,7 +225,7 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
 describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
   test("/ask_user 状态 guard: run 非 suspended → 409", async () => {
     const { store, eventBus, registry } = bridgeSetup();
-    store.createRun({ runId: "r-run", workflowId: "synthetic-3step", projectId: null, conversationId: "c-hitl", input: {} }); // 默认 running
+    store.createRun({ runId: "r-run", workflowId: "synthetic-3step", workspaceId: "ws_company", conversationId: "c-hitl", input: {} }); // 默认 running
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
     const token = issueNonce("c-hitl");
     try {
@@ -236,8 +236,8 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
 
   test("/ask_user 跨会话 guard: run 属别的会话 → 403", async () => {
     const { store, eventBus, registry } = bridgeSetup();
-    store.createConversation({ id: "c-other", projectId: null, userId: "u" });
-    store.createRun({ runId: "r-other", workflowId: "synthetic-3step", projectId: null, conversationId: "c-other", input: {} });
+    store.createConversation({ id: "c-other", workspaceId: "ws_company", userId: "u" });
+    store.createRun({ runId: "r-other", workflowId: "synthetic-3step", workspaceId: "ws_company", conversationId: "c-other", input: {} });
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
     const token = issueNonce("c-hitl"); // c-hitl 的 nonce
     try {
@@ -287,7 +287,7 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
 describe("GET /conversations/:id/hitl · 刷新恢复（#16）", () => {
   test("返回 pending + answered（按 id 排）", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     store.createQuestion({ conversationId: "c1", runId: "r1", prompt: "q1", options: ["A"] });
     store.createQuestion({ conversationId: "c1", runId: "r2", prompt: "q2", options: ["B"] });
     store.markPendingAnsweredByRun("r2", { decision: "B" });
@@ -312,8 +312,8 @@ describe("GET /conversations/:id/hitl · 刷新恢复（#16）", () => {
 describe("POST /conversations/:id/abort（#19）", () => {
   test("停该会话 running run → {aborted:false, stopped:N}；run 置 failed", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
-    store.createRun({ runId: "r-run", workflowId: "wf", projectId: null, conversationId: "c1", input: {} }); // running，无句柄
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+    store.createRun({ runId: "r-run", workflowId: "wf", workspaceId: "ws_company", conversationId: "c1", input: {} }); // running，无句柄
     const eventBus = new EventBus();
     const registry = new RunRegistry({ store, eventBus, runPiFactory: stubFactory });
     const app = createApp(fullDeps(store, { runRegistry: registry, eventBus }));

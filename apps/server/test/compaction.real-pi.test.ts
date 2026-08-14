@@ -64,7 +64,7 @@ describe.skipIf(!HAS_KEY)("compaction 实测 · 真 pi 长对话 jsonl（#19）"
   });
 
   test(`${N} 轮长对话 → session jsonl 落 transcript + compaction 标记报告`, async () => {
-    const conv = await (await fetch(`${baseUrl}/conversations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId: null }) })).json() as { id: string };
+    const conv = await (await fetch(`${baseUrl}/conversations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) })).json() as { id: string };
     const cid = conv.id;
     // 长消息催 compaction（每轮请 pi 写长段）
     for (let i = 0; i < N; i++) {

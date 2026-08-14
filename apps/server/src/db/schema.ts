@@ -4,7 +4,7 @@ import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core
 export const workflowRuns = sqliteTable("workflow_runs", {
   runId: text("runId").primaryKey(),
   workflowId: text("workflowId").notNull(),
-  projectId: text("projectId"), // 可空：general 会话起的 run 无 project（ticket #14）
+  workspaceId: text("workspaceId").notNull().default("ws_company"), // ADR-0018：run 挂 workspace；缺省公司 ws
   conversationId: text("conversationId"), // chat 起的 run 绑会话（事件推回该会话流；ticket #14）
   status: text("status").notNull(), // running|suspended|completed|failed
   input: text("input").notNull(), // JSON
@@ -39,8 +39,8 @@ export const feedback = sqliteTable("feedback", {
 // chat 切片①（ADR-0009）：会话 = 一条持久 Pi session（chat-<conversationId>）。
 export const conversations = sqliteTable("conversations", {
   id: text("id").primaryKey(),
-  projectId: text("projectId"), // 可空：null = general（无项目）会话（ADR-0009 / ticket #10）
-  userId: text("userId").notNull(), // dev 桩 = dev-user；真 auth 后由 session 派生
+  workspaceId: text("workspaceId").notNull().default("ws_company"), // ADR-0018：会话挂 workspace；缺省公司 ws
+  userId: text("userId").notNull(), // 创建者（会话一律创建者私有，ADR-0018）
   title: text("title"),
   createdAt: text("createdAt").notNull(),
   updatedAt: text("updatedAt").notNull(),
@@ -95,30 +95,29 @@ export const authTokens = sqliteTable("auth_tokens", {
   createdAt: text("createdAt").notNull(),
 });
 
-// 项目（ADR-0013：元数据实体，替纯路径段）。id=p_<uuid> 既 PK 又=文件目录名（稳定不变，过 assertValidProjectId）。
-export const projects = sqliteTable("projects", {
-  id: text("id").primaryKey(),
-  slug: text("slug").notNull().unique(), // 人类可读、URL 友好、唯一；改名不挪目录（目录用 id）
+// 工作空间（ADR-0018）：可访问目录 + 权限控制的唯一原子单位。无 type——权限只有 allUsers ∪ 名单两种表达。
+// 公司 ws 固定 id "ws_company"（迁移 seed）；目录锚：ws_company→data/general，其余→data/workspaces/<id>。
+export const workspaces = sqliteTable("workspaces", {
+  id: text("id").primaryKey(), // "ws_" + crypto.randomUUID()；公司级固定 "ws_company"
+  slug: text("slug").notNull().unique(), // 人类可读、URL 友好、唯一
   name: text("name").notNull(),
-  description: text("description"),
-  ownerId: text("ownerId").notNull(), // 创建者 userId（= 首个 owner 成员）
+  allUsers: integer("allUsers", { mode: "boolean" }).notNull().default(false), // true=全体在职用户可访
   status: text("status").notNull().default("active"),
   createdAt: text("createdAt").notNull(),
   updatedAt: text("updatedAt").notNull(),
 });
 
-// 项目成员（ADR-0014：用户↔项目多对多 + 项目内角色 owner|member，与用户级 admin 正交）。
-export const projectMembers = sqliteTable(
-  "project_members",
+// 工作空间可访问名单（ADR-0018）。读时 join users 过滤 active（注销用户悬空行留作审计，不清理）。
+export const workspaceMembers = sqliteTable(
+  "workspace_members",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    projectId: text("projectId").notNull(),
+    workspaceId: text("workspaceId").notNull(),
     userId: text("userId").notNull(),
-    role: text("role").notNull().default("member"),
     createdAt: text("createdAt").notNull(),
   },
   (t) => ({
     // SQLiteTableExtraConfig = Record<string,…>（对象形式，非数组）；防重复加成员
-    pidUid: uniqueIndex("project_members_projectId_userId_unique").on(t.projectId, t.userId),
+    wsUid: uniqueIndex("workspace_members_workspaceId_userId_unique").on(t.workspaceId, t.userId),
   }),
 );

@@ -30,16 +30,17 @@
 | 工作流定义 (Workflow Definition) | 工作流**「是什么」**：它的步骤、输入/输出契约、所需能力、允许的角色。一个定义可被**多次运行**（不变）。 |
 | 工作流运行 (Workflow Run) | 工作流**「跑了一回」**的具体实例：带输入、每步产出、状态（运行中/挂起/完成/失败）。HITL 工作流的一次运行可中途**挂起**、等人输入后**续跑**（甚至跨进程）。 |
 | 全自动工作流 vs HITL 工作流 | 工作流按是否需人介入分两种：**全自动**的跑到底、人工只验收（不足可定向重跑，如「调研」）；**HITL**的中途挂起等人输入再续（如「战略升级分析」选角度）。决定一个工作流能否被无门程序化触发（如「新建项目」自动跑调研） |
-| 角色 (Role) | 用户的功能身份（如「策略师」「管理员」），**决定能调用哪些工作流、能访问哪些项目**。一个用户可有多个角色；角色写在工作流定义上，鉴权在系统边缘执行（引擎本身不管鉴权）。 |
+| 角色 (Role) | 用户的**功能身份**（v1：admin | member 单值）。admin 管用户/workspace；**可见性不由角色控制**——workspace 访问看名单/allUsers，会话看创建者（ADR-0018）。 |
 | 执行 (Execution) | 一次 agent 调用（**工作流运行** or **对话**），有过程、可收反馈、可被提取经验。工作流运行和对话都是「执行」的形态（ADR-0008）。 |
 | 反馈 (Feedback) | 用户对一次「执行」的评价/批注（文本 + 可选评分），是经验提取的原料。**多态挂载**（`workflow_run` / `chat`，同表同接口）。 |
 | 经验提取 (Experience Extraction) | 从「执行过程（pi session）+ 反馈」蒸馏可复用经验 → 直写对应 skill 的 `experience.md`（agent 即时受益）+ `learnings/` 审计（ADR-0008，后期定时 LLM 任务）。 |
 | 经验文档 (learning) | 一次运行后沉淀的结论/教训，带证据和适用场景。见 `learnings/` |
 | Skill | 成熟的经验固化为 agent 可直接调用的能力（SKILL.md）。见 `skills/` |
 | 能力 (Capability) | chat 里可用的一个动作（工作流或工具型 skill）。**触发走对话 NL 自动发现**——用户在对话里说，系统自动匹配并触发，不靠点菜单；**菜单里的工作流/skill 列表是管理面**（查看/配置可用能力），非触发入口。基础通用工具（如搜索）默认开启。方法论型 skill 是各自工作流的内部深度指引，不独立触发 |
-| 项目 (Project) | 一次客户/品牌 engagement 的工作空间。项目内的资料/报告/对话/产出**对其它项目不可见**，靠「用户↔项目成员关系」控制可见性 |
-| 会话 (Conversation) | 项目内（或「临时」空间内）的一条聊天线索；用户在其中对话、上传资料、触发「能力」 |
-| 资料 (Materials) | 用户在会话/项目中上传的文件，落入该项目的服务器工作区；可被 agent 当上下文读、喂给触发的「能力」、或用文档工具加工 |
+| 工作空间 (Workspace) | **可访问目录 + 权限控制的唯一原子单位**（ADR-0018）：一个服务器目录（工作区+pi session）配一份权限（`allUsers` 全员布尔 ∪ 可访问名单）。无类型之分——公司级/团队级只是名单范围差异。默认存在全员可访的公司 workspace（`ws_company`）。仅 admin 可建/可管。会话与工作流运行都挂 workspace；run 可见性随 workspace 权限。 |
+| 项目 (Project) | **逻辑概念**（非系统实体）：一次客户/品牌 engagement 的通称。系统里以 workspace 承载（如为 engagement `acme` 建 ws）；曾试实体化（ADR-0013/0014），被 ADR-0018 废除——作用域归 workspace，组织归属不进权限链。 |
+| 会话 (Conversation) | 一条聊天线索，挂在 workspace 上（缺省公司 workspace）；**一律创建者私有**（+admin）——对话隐私与 workspace 权限是正交维度。用户在其中对话、上传资料、触发「能力」 |
+| 资料 (Materials) | 用户在会话中上传的文件，落入该会话 workspace 的服务器工作区；可被 agent 当上下文读、喂给触发的「能力」、或用文档工具加工 |
 | 用户 (User) | 内部团队成员（设计师、客户经理等）。每人一个账号（用户名+密码），由管理员开通/注销；不接 SSO |
 | Pi 会话 (Pi session) | Pi 自己的跨轮记忆文件（`--session-id`+`--session-dir` 存盘），按 sessionId 定位。**不同于「会话(Conversation)」**——一个 Conversation 确定性派生一个 Pi session（`chat-<conversationId>`），但 Pi session 是技术物件、Conversation 是产品概念。工作流运行也各派生一个（`run-<runId>`）。 |
 | chat 界面 (Chat surface) | agentany 的主产品面：用户在此对话、上传资料、触发能力。闲聊流式走 SSE（ADR-0003），单进程 Hono + React/Vite 托管。 |
@@ -47,7 +48,6 @@
 | 自动发现 (Auto-discovery) | pi 的标准能力发现：每次运行自动扫全部 repo skills（ADR-0005），模型按需调用。工作流经**桥接工具**同样被 pi 自动发现、从 NL 触发（ADR-0009）。 |
 | 桥接工具 (Bridge tool) | 注册给 pi 的工具（`start_workflow`/`resume_workflow`），让 pi 在对话里从 NL 触发/续跑服务端工作流。薄桥：pi 子进程 → localhost HTTP → 工作流引擎（ADR-0009）。 |
 | 交互工具 (Interaction tool) | chat 界面提供给 pi、用于与用户交互的工具（v1：`ask_user` 单/多选；后期加更多）。pi 用它把 HITL 挂起/澄清等结构化提问渲染成 chat 里的选择 UI（ADR-0009）。 |
-| 项目记忆 (Project memory) | 项目工作区的 `AGENTS.md`（L2）——pi 每轮自动加载，承载项目/品牌背景与关键决策，给 pi 稳定的**项目级持久记忆**、抗会话压缩丢失。不同于会话 transcript（L1，会话内）与 skill 经验（L3，repo 级）。 |
+| 项目记忆 (Project memory) | workspace 工作区的 `AGENTS.md`（L2）——pi 每轮自动加载，承载 engagement/品牌背景与关键决策，给 pi 稳定的**workspace 级持久记忆**、抗会话压缩丢失。不同于会话 transcript（L1，会话内）与 skill 经验（L3，repo 级）。 |
 | 系统 (System) | 承载**全局、跨项目配置**（安全姿态 `SECURITY_POSTURE`、运行参数、全局开关等）的实体；对所有项目/会话生效，与「项目级」配置对立。是独立实体、非范围限定词（ADR-0013）。 |
-| 定时任务 (Scheduled Task) | 用户配置的 **cron 触发器**：按计划自动启动指定工作流，归属项目；区别于系统自身的内部调度任务（ADR-0013）。 |
-| 项目成员 (Project Member) | 用户↔项目的**多对多归属关系**（成员表：用户 + 项目 + 角色）。一个用户可属多个项目，每个关系带角色（角色定权限，见「角色」），以此控制项目可见性（ADR-0014）。 |
+| 定时任务 (Scheduled Task) | 用户配置的 **cron 触发器**：按计划自动启动指定工作流，**归属 workspace**（ADR-0018；原文「归属项目」已废）；区别于系统自身的内部调度任务（ADR-0013）。 |

@@ -22,7 +22,7 @@ const stubFactory = (): ConfiguredRunPi => async () => ({ text: "", messages: []
 function newRegistry() {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
   const eventBus = new EventBus();
-  store.createConversation({ id: "c-test", projectId: null, userId: "u" }); // general 会话
+  store.createConversation({ id: "c-test", workspaceId: "ws_company", userId: "u" }); // general 会话
   const registry = new RunRegistry({ store, eventBus, runPiFactory: stubFactory });
   return { store, eventBus, registry };
 }
@@ -94,7 +94,7 @@ describe("RunRegistry · abort + sweepCrashed", () => {
 
   test("sweepCrashed → DB 里 running 的 run 标 failed", () => {
     const { store, registry } = newRegistry();
-    store.createRun({ runId: "r-stuck", workflowId: "synthetic-3step", projectId: null, input: {} }); // 默认 running
+    store.createRun({ runId: "r-stuck", workflowId: "synthetic-3step", workspaceId: "ws_company", input: {} }); // 默认 running
     expect(store.getRun("r-stuck")!.status).toBe("running");
     const n = registry.sweepCrashed();
     expect(n).toBeGreaterThanOrEqual(1);
@@ -105,16 +105,16 @@ describe("RunRegistry · abort + sweepCrashed", () => {
 describe("store · listSuspendedRuns（#17）", () => {
   test("返该会话的挂起 run（带 stepId/payload/resumeSchema）；排除非挂起 + 跨会话", () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
-    store.createConversation({ id: "c2", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+    store.createConversation({ id: "c2", workspaceId: "ws_company", userId: "u" });
     // c1 挂起 run
-    store.createRun({ runId: "r-susp", workflowId: "wf-a", projectId: null, conversationId: "c1", input: {} });
+    store.createRun({ runId: "r-susp", workflowId: "wf-a", workspaceId: "ws_company", conversationId: "c1", input: {} });
     store.updateRunStatus("r-susp", "suspended");
     store.appendLog("r-susp", { stepId: "review", status: "suspended", suspendPayload: { options: ["A"] }, resumeSchema: { _t: "enum", vals: ["A"] } });
     // c1 running run（排除）
-    store.createRun({ runId: "r-run", workflowId: "wf-b", projectId: null, conversationId: "c1", input: {} });
+    store.createRun({ runId: "r-run", workflowId: "wf-b", workspaceId: "ws_company", conversationId: "c1", input: {} });
     // c2 挂起 run（跨会话排除）
-    store.createRun({ runId: "r-other", workflowId: "wf-c", projectId: null, conversationId: "c2", input: {} });
+    store.createRun({ runId: "r-other", workflowId: "wf-c", workspaceId: "ws_company", conversationId: "c2", input: {} });
     store.updateRunStatus("r-other", "suspended");
     store.appendLog("r-other", { stepId: "s", status: "suspended", suspendPayload: {}, resumeSchema: {} });
 
@@ -129,7 +129,7 @@ describe("store · listSuspendedRuns（#17）", () => {
 
   test("无挂起 run → []", () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     expect(store.listSuspendedRuns("c1")).toEqual([]);
   });
 });
@@ -137,18 +137,18 @@ describe("store · listSuspendedRuns（#17）", () => {
 describe("store · listRunningRunIds（#19 abort）", () => {
   test("返该会话的 running run；排除非 running + 跨会话", () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
-    store.createConversation({ id: "c2", projectId: null, userId: "u" });
-    store.createRun({ runId: "r-run", workflowId: "wf", projectId: null, conversationId: "c1", input: {} }); // running
-    store.createRun({ runId: "r-susp", workflowId: "wf", projectId: null, conversationId: "c1", input: {} });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+    store.createConversation({ id: "c2", workspaceId: "ws_company", userId: "u" });
+    store.createRun({ runId: "r-run", workflowId: "wf", workspaceId: "ws_company", conversationId: "c1", input: {} }); // running
+    store.createRun({ runId: "r-susp", workflowId: "wf", workspaceId: "ws_company", conversationId: "c1", input: {} });
     store.updateRunStatus("r-susp", "suspended"); // 非 running
-    store.createRun({ runId: "r-other", workflowId: "wf", projectId: null, conversationId: "c2", input: {} }); // 跨会话
+    store.createRun({ runId: "r-other", workflowId: "wf", workspaceId: "ws_company", conversationId: "c2", input: {} }); // 跨会话
     expect(store.listRunningRunIds("c1")).toEqual(["r-run"]);
   });
 
   test("无 running → []", () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     expect(store.listRunningRunIds("c1")).toEqual([]);
   });
 });
@@ -156,10 +156,10 @@ describe("store · listRunningRunIds（#19 abort）", () => {
 describe("RunRegistry · stopConversationRuns（#19 abort）", () => {
   test("无句柄 stale run → 直接置 failed + 发一次 run_failed（去重）；跨会话不动", () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
-    store.createConversation({ id: "c2", projectId: null, userId: "u" });
-    store.createRun({ runId: "r-stale", workflowId: "wf", projectId: null, conversationId: "c1", input: {} }); // running，无句柄
-    store.createRun({ runId: "r-c2", workflowId: "wf", projectId: null, conversationId: "c2", input: {} }); // 跨会话
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+    store.createConversation({ id: "c2", workspaceId: "ws_company", userId: "u" });
+    store.createRun({ runId: "r-stale", workflowId: "wf", workspaceId: "ws_company", conversationId: "c1", input: {} }); // running，无句柄
+    store.createRun({ runId: "r-c2", workflowId: "wf", workspaceId: "ws_company", conversationId: "c2", input: {} }); // 跨会话
     const eventBus = new EventBus();
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
@@ -176,7 +176,7 @@ describe("RunRegistry · stopConversationRuns（#19 abort）", () => {
 
   test("无 running → 0，不发帧", () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", projectId: null, userId: "u" });
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     const eventBus = new EventBus();
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));

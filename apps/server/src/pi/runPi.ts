@@ -46,11 +46,12 @@ function buildArgs(opts: RunPiOptions): string[] {
 
 // h3：pi 子进程 env 白名单——只放行 pi/tavily/系统必需，排除未来 TURN_SECRET/DB 凭据等。
 // 注：密钥仍在 pi env 内（pi 需用它鉴权 provider）；彻底不让 pi 见密钥靠 A1 沙箱 + A4 LLM-经服务端代理。
-const ENV_NAME_ALLOW = new Set(["PATH", "HOME", "TZ", "TMPDIR", "NODE_PATH", "LANG", "AGENTANY_DEV_USER"]);
+const ENV_NAME_ALLOW = new Set(["PATH", "HOME", "TZ", "TMPDIR", "NODE_PATH", "LANG"]);
 // bridge 变量实际经 extraEnv per-turn 注入（见 childEnv 的 extra 合并），不进服务端 process.env，
 // 故此条前缀日常匹配不到——保留作 defense-in-depth（spec #11 要求放行；防以后有人把 AGENTANY_BRIDGE_* 设进 env）。
 const ENV_PREFIX_ALLOW = [/^PI_/, /^TAVILY_/, /^GO_/, /^LC_/, /^AGENTANY_BRIDGE_/];
-function childEnv(extra?: Record<string, string | undefined>): Record<string, string | undefined> {
+// 导出供单测（泄漏收口断言：AGENTANY_DEV_USER 不透传 pi——ADR-0014 债务，step c 收）。
+export function childEnv(extra?: Record<string, string | undefined>): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (ENV_NAME_ALLOW.has(k) || ENV_PREFIX_ALLOW.some((re) => re.test(k))) out[k] = v;

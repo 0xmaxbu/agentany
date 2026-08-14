@@ -1,18 +1,18 @@
-// 会话 scope（ADR-0009 / ticket #10）：project（挂项目）/ general（无项目，如公司规定）。
-// scope 决定 pi 的 cwd + sessionDir；工作流是全局能力，不绑 scope（run 仍 project-scoped）。
+// 会话/run 的 workspace scope（ADR-0018）：WORKSPACE=作用域+权限唯一原子单位。
 //
-// 路径真相全在 config.ts（project*/general*）；本文件只加 scope 维度的分发，
-// 避免 runPi-factory 硬编码 project 路径。
+// 目录锚（纯函数，不查表）：ws_company（公司默认 ws）→ data/general/（原 general 通道沿用，文件零迁移）；
+// 其余 → data/workspaces/<workspaceId>/。路径真相全在 config.ts；本文件只做 scope 维度分发。
 import {
-  assertValidProjectId, projectWorkspacePath, projectSessionDir,
+  assertValidWorkspaceId, workspaceWorkspacePath, workspaceSessionDir,
   generalWorkspacePath, generalSessionDir,
 } from "./config";
+import { COMPANY_WORKSPACE_ID } from "./workspaces/store";
 
-export type Scope = "project" | "general";
+export type Scope = "workspace" | "general";
 
-/** projectId 非空 → project；空 → general。 */
-export function scopeOf(projectId: string | null | undefined): Scope {
-  return projectId ? "project" : "general";
+/** 公司 ws → general（data/general/）；其余 → workspace（data/workspaces/<id>）。 */
+export function scopeOf(workspaceId: string | null | undefined): Scope {
+  return workspaceId === COMPANY_WORKSPACE_ID ? "general" : "workspace";
 }
 
 export interface ScopePaths {
@@ -22,14 +22,14 @@ export interface ScopePaths {
 
 /**
  * 按 scope 解析 pi cwd + sessionDir。
- * - general：data/general/{workspace, pi-sessions}（全用户共享的通用工作区）。
- * - project：data/projects/<projectId>/{workspace, pi-sessions}；projectId 走 assertValidProjectId（h1：路径关键输入防注入）。
+ * - general：公司 workspace（ws_company）→ data/general/{workspace, pi-sessions}。
+ * - workspace：data/workspaces/<workspaceId>/；workspaceId 走 assertValidWorkspaceId（h1：防注入）。
  */
-export function resolveScopePaths(scope: Scope, projectId?: string | null): ScopePaths {
+export function resolveScopePaths(scope: Scope, workspaceId?: string | null): ScopePaths {
   if (scope === "general") {
     return { cwd: generalWorkspacePath(), sessionDir: generalSessionDir() };
   }
-  if (!projectId) throw new Error("resolveScopePaths: project scope requires projectId");
-  assertValidProjectId(projectId); // 防穿越/绝对路径注入 cwd、sessionDir
-  return { cwd: projectWorkspacePath(projectId), sessionDir: projectSessionDir(projectId) };
+  if (!workspaceId) throw new Error("resolveScopePaths: workspace scope requires workspaceId");
+  assertValidWorkspaceId(workspaceId); // 防穿越/绝对路径注入 cwd、sessionDir
+  return { cwd: workspaceWorkspacePath(workspaceId), sessionDir: workspaceSessionDir(workspaceId) };
 }

@@ -75,7 +75,7 @@ const postMsg = (app: ReturnType<typeof createApp>, id: string, content: string)
 describe("chat 切片② · 建会话 + 历史", () => {
   test("POST /conversations → 201；GET messages 初始 []", async () => {
     const { app } = newApp(countingFactory().factory);
-    const r = await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev", title: "t1" }) });
+    const r = await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({ title: "t1" }) });
     expect(r.status).toBe(201);
     const conv: any = await r.json();
     expect(conv.id).toBeTruthy();
@@ -93,7 +93,7 @@ describe("chat 切片② · 建会话 + 历史", () => {
 describe("chat 切片② · 事件驱动（POST=202 + 持久流）", () => {
   test("POST message → 202；流收 user_message + delta...done；GET 含 user+assistant", async () => {
     const { app } = newApp(countingFactory().factory);
-    const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev" }) })).json();
+    const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();
     const s = await openStream(app, c.id);
     await delay(15); // 确保流已订阅（首个 read 触发 streamSSE callback）
 

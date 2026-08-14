@@ -4,7 +4,7 @@ import { openDbMigrated } from "../src/db/client";
 import { WorkflowStore } from "../src/workflow-engine/store";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
-import { ProjectStore } from "../src/projects/store";
+import { WorkspaceStore } from "../src/workspaces/store";
 import type { RunDeps } from "../src/runs";
 
 export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {
@@ -13,18 +13,18 @@ export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {
     store: new WorkflowStore(db),
     userStore: new UserStore(db),
     streamRegistry: new StreamRegistry(),
-    projectStore: new ProjectStore(db), // 与 store/userStore 共享同一 db（listMembers join users）
+    workspaceStore: new WorkspaceStore(db), // 与 store/userStore 共享同一 db（名单 join users；公司 ws 由迁移 seed）
     ...overrides,
   };
 }
 
-/** 已有 store 的测试用：userStore/projectStore 独立 db（非 auth/项目测试不触达）、streamRegistry 真实（/stream 用）。overrides 可覆盖。 */
+/** 已有 store 的测试用：userStore/workspaceStore 独立 db、streamRegistry 真实（/stream 用）。overrides 可覆盖。 */
 export function fullDeps(store: WorkflowStore, overrides: Partial<RunDeps> = {}): RunDeps {
   return {
     store,
     userStore: new UserStore(openDbMigrated(":memory:")),
     streamRegistry: new StreamRegistry(),
-    projectStore: new ProjectStore(openDbMigrated(":memory:")),
+    workspaceStore: new WorkspaceStore(openDbMigrated(":memory:")),
     ...overrides,
   };
 }

@@ -1,9 +1,11 @@
-// ticket #18 审批门路由（main app，经 authStub → userIdOf）。**审批只人类**：
+// ticket #18 审批门路由（main app，经 auth → userIdOf）。**审批只人类**：
 // pi 经 bridge 无法到此（bridge 无 /approvals 端点 + pi 沙箱禁 main app loopback）。
 // POST /approvals/:id/decide：approve→CAS claim→createRun→回填 runId（引擎自发 run_started）；deny→CAS→不建 run。
+// ADR-0018：decide 走会话守卫（创建者/admin），非创建者 404。
 import type { Hono } from "hono";
 import type { RunDeps } from "../runs";
-import { userIdOf, type AppEnv } from "../auth/middleware";
+import { userIdOf, principalOf, type AppEnv } from "../auth/middleware";
+import { canAccessConversation } from "../workspaces/guard";
 import { jsonBody } from "../http";
 
 export function registerApprovalRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
@@ -17,6 +19,10 @@ export function registerApprovalRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
     const q = deps.store.getQuestion(id);
     if (!q || q.kind !== "approval") return c.json({ error: "approval not found" }, 404);
     const userId = userIdOf(c);
+    const conv = deps.store.getConversation(q.conversationId);
+    if (!conv || !canAccessConversation(conv, principalOf(c))) {
+      return c.json({ error: "approval not found" }, 404);
+    }
 
     if (decision === "deny") {
       const row = deps.store.markApprovalDecided(id, { decision: "deny" }, userId); // CAS 占位

@@ -12,7 +12,7 @@ import { run, resume, type RunCtx } from "../src/workflow-engine/runner";
 const newStore = () => new WorkflowStore(openDbMigrated(":memory:"));
 const stubCtx = (cwd: string): RunCtx => ({
   runPi: async () => ({ text: "[stub-report]", messages: [], toolResults: [] }),
-  projectId: "test",
+  workspaceId: "ws_test",
   cwd,
   signal: new AbortController().signal,
   log: () => {},
@@ -24,7 +24,7 @@ describe("brand-research · 全自动 1 步", () => {
     const store = newStore();
     const cwd = mkdtempSync(join(tmpdir(), "br-"));
     const runId = newRunId();
-    store.createRun({ runId, workflowId: brandResearch.id, projectId: "test", input: { brand: "测试品牌", region: "重庆" } });
+    store.createRun({ runId, workflowId: brandResearch.id, workspaceId: "ws_test", input: { brand: "测试品牌", region: "重庆" } });
     const r = await run(brandResearch, store, runId, stubCtx(cwd));
     expect(r.status).toBe("completed");
     const log = store.getLog(runId);
@@ -39,7 +39,7 @@ describe("brand-research · 全自动 1 步", () => {
     const store = newStore();
     const cwd = mkdtempSync(join(tmpdir(), "br-"));
     const runId = newRunId();
-    store.createRun({ runId, workflowId: brandResearch.id, projectId: "test", input: { brand: "X" } });
+    store.createRun({ runId, workflowId: brandResearch.id, workspaceId: "ws_test", input: { brand: "X" } });
     await run(brandResearch, store, runId, stubCtx(cwd));
     const out = store.getLog(runId).at(-1)?.output as any;
     expect(out.region).toBe("全国");
@@ -61,7 +61,7 @@ describe("brand-strategy-analysis · HITL 3 步 + revise 循环", () => {
       JSON.stringify([{ id: 1, title: "t1", insight: "i1" }, { id: 2, title: "t2", insight: "i2" }]),
     );
     const runId = newRunId();
-    store.createRun({ runId, workflowId: brandStrategyAnalysis.id, projectId: "test", input: { brand, region } });
+    store.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input: { brand, region } });
     const ctx = stubCtx(cwd);
 
     // 1. start → select-angles suspend（带 angles）
@@ -94,7 +94,7 @@ describe("brand-strategy-analysis · HITL 3 步 + revise 循环", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "angles.json"), "[]");
     const runId = newRunId();
-    store.createRun({ runId, workflowId: brandStrategyAnalysis.id, projectId: "test", input: { brand: "B" } });
+    store.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input: { brand: "B" } });
     const ctx = stubCtx(cwd);
     await run(brandStrategyAnalysis, store, runId, ctx); // → select suspend
     // 选完到 approve suspend

@@ -6,7 +6,7 @@ import type { WorkflowStore, RunStatus } from "./store";
 
 export interface RunCtx {
   runPi: (opts: { prompt: string; timeoutMs?: number }) => Promise<RunPiResult>;
-  projectId: string;
+  workspaceId: string;
   cwd: string;
   signal: AbortSignal;
   log: (...args: unknown[]) => void;
@@ -46,7 +46,7 @@ function mkCtx(st: { input: unknown }, runId: string, ctx: RunCtx, resumed: unkn
     input: st.input,
     resumed,
     runPi: ctx.runPi,
-    projectId: ctx.projectId,
+    workspaceId: ctx.workspaceId,
     runId,
     cwd: ctx.cwd,
     signal: ctx.signal,

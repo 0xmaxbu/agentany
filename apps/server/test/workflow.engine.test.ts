@@ -15,7 +15,7 @@ function newStore(): WorkflowStore {
 function ctx(): RunCtx {
   return {
     runPi: async () => ({ text: "[stub]", messages: [], toolResults: [] }),
-    projectId: "test",
+    workspaceId: "ws_test",
     cwd: "/tmp/agentany-test-workspace",
     signal: new AbortController().signal,
     log: () => {},
@@ -26,7 +26,7 @@ function newRunId(): string {
 }
 async function start(store: WorkflowStore, input: unknown) {
   const runId = newRunId();
-  store.createRun({ runId, workflowId: synthetic.id, projectId: "test", input });
+  store.createRun({ runId, workflowId: synthetic.id, workspaceId: "ws_test", input });
   const res = await run(synthetic, store, runId, ctx());
   return { runId, res };
 }
@@ -74,7 +74,7 @@ describe("engine · 杀进程跨实例 resume", () => {
     rmSync(KILL_DB, { force: true });
     const storeA = new WorkflowStore(openDbMigrated(KILL_DB));
     const runId = newRunId();
-    storeA.createRun({ runId, workflowId: synthetic.id, projectId: "test", input: { offset: 5 } });
+    storeA.createRun({ runId, workflowId: synthetic.id, workspaceId: "ws_test", input: { offset: 5 } });
     const a = await run(synthetic, storeA, runId, ctx());
     expect(a.status).toBe("suspended");
 
@@ -125,7 +125,7 @@ describe("engine · step 抛错 → failed（不卡 running）", () => {
   test("step.execute 抛错 → run 返 failed、status=failed、有 failed 日志", async () => {
     const store = newStore();
     const runId = newRunId();
-    store.createRun({ runId, workflowId: throwing.id, projectId: "test", input: {} });
+    store.createRun({ runId, workflowId: throwing.id, workspaceId: "ws_test", input: {} });
     const res = await run(throwing, store, runId, ctx());
     expect(res.status).toBe("failed");
     expect((res as any).note).toContain("pi exploded");
@@ -139,7 +139,7 @@ describe("engine · step 抛错 → failed（不卡 running）", () => {
   test("resume 一个 failed run → 报 failed、不再推进（可审计，不卡死）", async () => {
     const store = newStore();
     const runId = newRunId();
-    store.createRun({ runId, workflowId: throwing.id, projectId: "test", input: {} });
+    store.createRun({ runId, workflowId: throwing.id, workspaceId: "ws_test", input: {} });
     await run(throwing, store, runId, ctx());
     const before = store.getLog(runId).length;
     const r = await resume(throwing, store, runId, {} as any, ctx());

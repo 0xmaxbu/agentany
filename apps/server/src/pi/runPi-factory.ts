@@ -1,5 +1,5 @@
-// makeRunPi / makeRunPiStream：按 scope 装配 pi cwd + sessionDir（ticket #10，不再硬编码 project 路径）。
-// makeRunPi（工作流 run）总是 project-scoped；makeRunPiStream（chat 会话）可 general（projectId=null）。
+// makeRunPi / makeRunPiStream：按 workspace scope 装配 pi cwd + sessionDir（ADR-0018）。
+// makeRunPi（工作流 run）总是 workspace-scoped；makeRunPiStream（chat 会话）可 general（公司 ws）。
 // cwd/sessionDir 由 src/scope.ts 的 resolveScopePaths 解析；sessionId 由调用方派生。
 import { runPi, runPiStream, type RunPiOptions, type RunPiStreamOptions } from "./runPi";
 import { resolveScopePaths, scopeOf, type Scope } from "../scope";
@@ -8,21 +8,21 @@ import type { RunPiResult } from "../workflow-engine/defineWorkflow";
 
 export interface MakeRunPiOpts {
   extensions?: string[];
-  scope: Scope; // project | general（ticket #14：run scope 取自会话）
-  projectId: string | null; // project scope 必填；general 为 null
+  scope: Scope; // workspace | general（run scope 取自会话/请求的 workspaceId）
+  workspaceId: string | null; // workspace scope 必填（=workspaceId）；general（公司 ws）为 null
   sessionId: string;
 }
-// chat 会话可 general（projectId=null）；路径按 scope 解析（ADR-0009 / ticket #10）。
+// chat 会话可 general（公司 ws）；路径按 scope 解析（ADR-0009 / ADR-0018）。
 export interface MakeRunPiStreamOpts {
   extensions?: string[];
-  projectId: string | null;
+  workspaceId: string | null;
   sessionId: string;
 }
 
 export type ConfiguredRunPi = (call: { prompt: string; timeoutMs?: number }) => Promise<RunPiResult>;
 
 export function makeRunPi(opts: MakeRunPiOpts): ConfiguredRunPi {
-  const { cwd, sessionDir } = resolveScopePaths(opts.scope, opts.projectId);
+  const { cwd, sessionDir } = resolveScopePaths(opts.scope, opts.workspaceId);
   return async (call) => {
     const rpOpts: RunPiOptions = {
       prompt: call.prompt,
@@ -48,7 +48,7 @@ export type ConfiguredRunPiStream = (call: {
 }) => Promise<RunPiResult>;
 
 export function makeRunPiStream(opts: MakeRunPiStreamOpts): ConfiguredRunPiStream {
-  const { cwd, sessionDir } = resolveScopePaths(scopeOf(opts.projectId), opts.projectId);
+  const { cwd, sessionDir } = resolveScopePaths(scopeOf(opts.workspaceId), opts.workspaceId);
   return async (call) => {
     const rpOpts: RunPiStreamOptions = {
       prompt: call.prompt,

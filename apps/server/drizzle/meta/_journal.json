@@ -64,6 +64,20 @@
       "when": 1786682774878,
       "tag": "0008_young_jane_foster",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786689929698,
+      "tag": "0009_living_cerise",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786690047755,
+      "tag": "0010_real_frog_thor",
+      "breakpoints": true
     }
   ]
 }

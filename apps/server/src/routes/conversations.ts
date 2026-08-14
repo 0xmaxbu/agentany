@@ -1,18 +1,18 @@
 // chat 切片② 路由（ADR-0009 / ticket #13）：建会话 / 历史 / 持久流 / POST 消息(202 ACK) / abort。
 // 事件驱动：POST /messages 不再返流，回 202 + 投 EventBus；前端经 GET /stream 长连订阅所有帧。
+// ADR-0018 鉴权：会话一律创建者私有（+admin）——canAccessConversation 全家守卫；建会话须 canAccessWorkspace。
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { RunDeps } from "../runs";
 import { ConversationQueues } from "../chat/queue";
 import { EventBus, type Frame } from "../chat/eventbus";
 import { TurnTrigger } from "../chat/turn-trigger";
-import { assertValidProjectId } from "../config";
-import { userIdOf, type AppEnv } from "../auth/middleware";
+import { canAccessConversation, resolveRequestWorkspace } from "../workspaces/guard";
+import { userIdOf, principalOf, type AppEnv } from "../auth/middleware";
 import { jsonBody } from "../http";
 
 const HEARTBEAT_MS = Number(process.env.CHAT_HEARTBEAT_MS ?? 15000);
 const makeConversationId = (): string => "c_" + globalThis.crypto.randomUUID();
-
 
 export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
   // 单实例（per app = per 进程）：FIFO + 事件中心 + 调度入口。
@@ -20,23 +20,24 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
   const eventBus = deps.eventBus ?? new EventBus(); // 共享单例（prod 由 index 注入；bridge run 事件经此到持久流）
   const turnTrigger = new TurnTrigger({ deps, queues, eventBus });
 
+  // 会话存在 + 当前用户可访问（创建者/admin）→ conv；否则 null（路由统一 404，不泄漏存在）。
+  const loadIfVisible = (id: string, u: { id: string; role: "admin" | "member" }) => {
+    const conv = deps.store.getConversation(id);
+    if (!conv || !canAccessConversation(conv, u)) return null;
+    return conv;
+  };
+
   app.post("/conversations", async (c) => {
     const body = await jsonBody(c);
     const title: string | undefined = body.title;
-    // 无 projectId → general（null，无项目会话）；提供则校验防路径注入（h1）。
-    let projectId: string | null = null;
-    const raw = body.projectId;
-    if (typeof raw === "string" && raw.length > 0) {
-      try {
-        assertValidProjectId(raw);
-        projectId = raw;
-      } catch {
-        return c.json({ error: "invalid projectId" }, 400);
-      }
-    }
+    if (body.projectId !== undefined) return c.json({ error: "projectId is gone; use workspaceId" }, 404); // 字段废止：显式拒绝，防旧客户端静默落错锚
+    // 缺省 → 公司 ws；提供则格式（400）→ 存在性/权限（404）。统一走 resolveRequestWorkspace（与 workflows/runs 同口径）。
+    const r = resolveRequestWorkspace(deps.workspaceStore, body.workspaceId, principalOf(c));
+    if (!r.ok) return c.json({ error: r.error }, r.status);
+    const workspaceId = r.workspaceId;
     const conv = deps.store.createConversation({
       id: makeConversationId(),
-      projectId,
+      workspaceId,
       userId: userIdOf(c),
       title,
     });
@@ -45,28 +46,29 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
   });
 
   app.get("/conversations/:id", (c) => {
-    const conv = deps.store.getConversation(c.req.param("id"));
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
     return c.json(conv);
   });
 
   app.get("/conversations/:id/messages", (c) => {
-    const id = c.req.param("id");
-    if (!deps.store.getConversation(id)) return c.json({ error: "conversation not found" }, 404);
-    return c.json(deps.store.listMessages(id));
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
+    if (!conv) return c.json({ error: "conversation not found" }, 404);
+    return c.json(deps.store.listMessages(conv.id));
   });
 
   // HITL 提问列表（ticket #16）：前端刷新恢复（pending 显卡 / answered 显答案）。
   app.get("/conversations/:id/hitl", (c) => {
-    const id = c.req.param("id");
-    if (!deps.store.getConversation(id)) return c.json({ error: "conversation not found" }, 404);
-    return c.json(deps.store.listQuestions(id, { includeAnswered: true }));
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
+    if (!conv) return c.json({ error: "conversation not found" }, 404);
+    return c.json(deps.store.listQuestions(conv.id, { includeAnswered: true }));
   });
 
   // 持久流（SSE，长连，承载所有帧）：订阅 EventBus 转发；心跳保活；客户端断开→取消订阅。
   app.get("/conversations/:id/stream", (c) => {
-    const id = c.req.param("id");
-    if (!deps.store.getConversation(id)) return c.json({ error: "conversation not found" }, 404);
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
+    if (!conv) return c.json({ error: "conversation not found" }, 404);
+    const id = conv.id;
     return streamSSE(c, async (stream) => {
       // 所有写串一条 promise 链——防心跳注释插进 data 帧（Hono writeSSE/write 非原子）。
       let chain: Promise<unknown> = Promise.resolve();
@@ -99,8 +101,9 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
 
   // POST 消息 → 202 ACK + 投 EventBus（不再返流）。429 由 TurnTrigger 同步判（满即不入队）。
   app.post("/conversations/:id/messages", async (c) => {
-    const id = c.req.param("id");
-    if (!deps.store.getConversation(id)) return c.json({ error: "conversation not found" }, 404);
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
+    if (!conv) return c.json({ error: "conversation not found" }, 404);
+    const id = conv.id;
     const body = await jsonBody(c);
     const content: unknown = body.content;
     if (typeof content !== "string" || content.length === 0) return c.json({ error: "content required" }, 400);
@@ -111,10 +114,10 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
   });
 
   app.post("/conversations/:id/abort", (c) => {
-    const id = c.req.param("id");
-    if (!deps.store.getConversation(id)) return c.json({ error: "conversation not found" }, 404);
-    const aborted = queues.abort(id); // 杀当前在跑 turn（无论来源）
-    const stopped = deps.runRegistry?.stopConversationRuns(id) ?? 0; // #19：停该会话所有 running run（kill pi + 置 failed）
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
+    if (!conv) return c.json({ error: "conversation not found" }, 404);
+    const aborted = queues.abort(conv.id); // 杀当前在跑 turn（无论来源）
+    const stopped = deps.runRegistry?.stopConversationRuns(conv.id) ?? 0; // #19：停该会话所有 running run（kill pi + 置 failed）
     return c.json({ aborted, stopped });
   });
 }

@@ -13,9 +13,9 @@ export interface StepContext<TInput = any> {
   input: TInput;
   resumed?: any; // 续跑数据（resume 时引擎注入）
   runPi: (opts: { prompt: string; timeoutMs?: number }) => Promise<RunPiResult>;
-  projectId: string;
+  workspaceId: string;
   runId: string;
-  cwd: string; // 项目工作区（ADR-0006），step 据 it 算产出路径
+  cwd: string; // workspace 工作区（ADR-0006/0018），step 据它算产出路径
   signal: AbortSignal;
   log: (...args: unknown[]) => void;
 }
