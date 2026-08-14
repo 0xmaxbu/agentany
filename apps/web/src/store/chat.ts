@@ -1,21 +1,18 @@
 // chat 状态（借鉴 #17 Zustand）。切片②（ticket #13）：事件驱动——POST /messages=202，输出经持久流异步到。
 // 单一真相 = 持久流：user_message/delta/done 帧驱动 UI；会话历史从 GET /messages 加载。
-// 会话列表客户端 localStorage 跟踪（后端无"列会话"端点；slice① 单用户够用）。
+// f2-3：会话列表职责迁 workspace store（服务端真相，弃 localStorage）；URL /c/:id 为当前会话锚
+//（ChatPage effect 唯一驱动 switchConversation/newConversation——init 已废）。
 import { create } from "zustand";
-import { abortConversation, createConversation, decideApproval as decideApprovalApi, getHitlQuestions, getMessages, openStream, postMessage, type Question } from "./api";
-import type { SSEEvent } from "./sse";
-import type { Message } from "./api";
+import { abortConversation, createConversation, decideApproval as decideApprovalApi, getHitlQuestions, getMessages, openStream, postMessage, type Conversation, type Question } from "../api";
+import { useWorkspace } from "./workspace";
+import type { SSEEvent } from "../sse";
+import type { Message } from "../api";
 
 export interface UIMessage {
   id: number | null; // null = 流式中（done 后赋值）
   role: "user" | "assistant";
   content: string;
   status: "streaming" | "complete" | "error" | "aborted";
-}
-export interface Convo {
-  id: string;
-  title: string | null;
-  createdAt: string;
 }
 // ticket #14：工作流 run 进度（基础渲染）。
 export interface UIRunStep {
@@ -43,50 +40,26 @@ export interface UIQuestion {
 
 interface ChatState {
   conversationId: string | null;
-  conversations: Convo[];
   messages: UIMessage[];
   sending: boolean;
   streamCtrl: AbortController | null; // 持久流生命周期（切会话/卸载时 abort）
   runs: UIRun[]; // 工作流 run 进度（持久流 run_*/step_* 驱动）
   questions: UIQuestion[]; // HITL 提问（持久流 hitl_* 驱动；刷新从 GET /hitl 恢复）
-  init: () => Promise<void>;
   send: (content: string) => Promise<void>;
   stop: () => Promise<void>;
-  newConversation: () => Promise<void>;
-  switchConversation: (id: string) => Promise<void>;
+  newConversation: () => Promise<string | null>; // 返新会话 id（ChatPage navigate 用）
+  switchConversation: (id: string) => Promise<void>; // 幂等（同 id return）
+  closeStream: () => void; // 断持久流（登出/forceLogout 时 auth store 调）
   decideApproval: (questionId: number, decision: "approve" | "deny") => Promise<void>; // #18 审批门
 }
-
-// —— localStorage 持久化（当前会话 + 会话列表）——
-const LS_KEY = "agentany.chat.v1";
-interface SavedState {
-  current: string | null;
-  conversations: Convo[];
-}
-function loadState(): SavedState {
-  try {
-    const v = JSON.parse(localStorage.getItem(LS_KEY) ?? "") as SavedState;
-    return v && Array.isArray(v.conversations) ? v : { current: null, conversations: [] };
-  } catch {
-    return { current: null, conversations: [] };
-  }
-}
-function saveState(s: ChatState): void {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify({ current: s.conversationId, conversations: s.conversations }));
-  } catch {
-    /* 无 localStorage 忽略 */
-  }
-}
-
-// init 并发去重（React StrictMode dev 双触发）。
-let initPromise: Promise<void> | null = null;
 
 const errMsg = (message: string): UIMessage => ({ id: null, role: "assistant", content: `⚠️ ${message}`, status: "error" });
 const rollback = (messages: UIMessage[], message: string): UIMessage[] => messages.slice(0, -2).concat([errMsg(message)]);
 const toUIMessage = (m: Message): UIMessage => ({ id: m.id, role: m.role, content: m.content, status: "complete" });
 const toUIQuestion = (q: Question): UIQuestion => ({ id: q.id, runId: q.runId, kind: q.kind, workflowId: q.workflowId, prompt: q.prompt, options: q.options, status: q.status, answer: q.answer });
-const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+import { msg } from "../lib/msg";
+// 建会话并发去重（模块级，同旧 store initPromise 模式）：React StrictMode dev 双触发复用同一 promise
+let creatingInflight: Promise<string | null> | null = null;
 
 export const useChat = create<ChatState>((set, get) => {
   // 持久流帧 → UI 更新（单一真相）。
@@ -154,54 +127,36 @@ export const useChat = create<ChatState>((set, get) => {
 
   return {
     conversationId: null,
-    conversations: [],
     messages: [],
     sending: false,
     streamCtrl: null,
     runs: [],
     questions: [],
 
-    init: () => {
-      if (get().conversationId) return Promise.resolve();
-      if (!initPromise) {
-        initPromise = (async () => {
-          const saved = loadState();
-          if (saved.current && saved.conversations.some((c) => c.id === saved.current)) {
-            set({ conversationId: saved.current, conversations: saved.conversations });
-            try {
-              set({
-                messages: (await getMessages(saved.current)).map(toUIMessage),
-                questions: (await getHitlQuestions(saved.current)).map(toUIQuestion),
-              });
-            } catch (e) {
-              set({ messages: [errMsg(msg(e))] });
-            }
-            openStreamFor(saved.current);
-            return;
-          }
-          await get().newConversation();
-          initPromise = null;
-        })();
-      }
-      return initPromise;
-    },
-
     newConversation: async () => {
-      try {
-        const conv = await createConversation();
-        const conversations = [{ id: conv.id, title: conv.title, createdAt: conv.createdAt }, ...get().conversations];
-        set({ conversationId: conv.id, conversations, messages: [], runs: [], questions: [] });
-        saveState(get());
-        openStreamFor(conv.id);
-      } catch (e) {
-        set({ messages: [errMsg(msg(e))] });
-      }
+      // StrictMode dev 双触发（ChatPage index effect 双跑）去重：进行中的建会话复用同一 promise
+      if (creatingInflight) return creatingInflight;
+      creatingInflight = (async () => {
+        try {
+          const conv: Conversation = await createConversation();
+          useWorkspace.getState().prependConversation({ ...conv, updatedAt: new Date().toISOString() }); // 乐观 prepend（refresh 兜底校正）
+          set({ conversationId: conv.id, messages: [], runs: [], questions: [] });
+          openStreamFor(conv.id);
+          void useWorkspace.getState().refreshConversations();
+          return conv.id;
+        } catch (e) {
+          set({ messages: [errMsg(msg(e))] });
+          return null;
+        } finally {
+          creatingInflight = null;
+        }
+      })();
+      return creatingInflight;
     },
 
     switchConversation: async (id) => {
       if (get().sending || id === get().conversationId) return;
       set({ conversationId: id, messages: [], runs: [], questions: [] });
-      saveState(get());
       try {
         set({
           messages: (await getMessages(id)).map(toUIMessage),
@@ -213,6 +168,8 @@ export const useChat = create<ChatState>((set, get) => {
       openStreamFor(id);
     },
 
+    closeStream,
+
     send: async (content) => {
       const convId = get().conversationId;
       if (!convId || get().sending) return;
@@ -223,7 +180,8 @@ export const useChat = create<ChatState>((set, get) => {
       } else if (status === false) {
         set((s) => ({ messages: [...s.messages, errMsg("send failed")], sending: false }));
       }
-      // 202：user_message / delta / done 由持久流异步驱动 UI
+      // 202：user_message / delta / done 由持久流异步驱动 UI；touch 变列表序 → 刷新侧栏
+      if (status === 202) void useWorkspace.getState().refreshConversations();
     },
 
     stop: async () => {

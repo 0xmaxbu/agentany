@@ -1,5 +1,7 @@
+// 输入区（f2-4 接 ui/Button）：契约——全局唯一 textarea、button.stop 类名（e2e）。
 import { useState } from "react";
-import { useChat } from "../store";
+import { useChat } from "../store/chat";
+import { Button } from "./ui/button";
 
 export function Composer() {
   const [text, setText] = useState("");
@@ -29,9 +31,13 @@ export function Composer() {
         rows={2}
       />
       {sending ? (
-        <button className="stop" onClick={() => void stop()}>停止</button>
+        <Button variant="destructive" className="stop" onClick={() => void stop()}>
+          停止
+        </Button>
       ) : (
-        <button onClick={() => void submit()} disabled={!text.trim()}>发送</button>
+        <Button onClick={() => void submit()} disabled={!text.trim()}>
+          发送
+        </Button>
       )}
     </footer>
   );

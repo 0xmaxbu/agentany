@@ -10,6 +10,9 @@ export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
   expect: { timeout: 10_000 },
+  // f2 后会话列表=服务端真相（GET /conversations 按 userId=dev-user 过滤）——并行 worker
+  // 冒充同一 dev-user，列表/SSE 互相污染（localStorage 时代每 context 隔离）。串行消除变量。
+  workers: 1,
   reporter: process.env.CI ? "line" : "list",
   use: {
     baseURL: `http://127.0.0.1:${WEB_PORT}`,
