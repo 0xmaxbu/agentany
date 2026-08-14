@@ -17,12 +17,17 @@ test("工作流全链：start → suspend → ask → resume → completed + 刷
 
   // run 进入 suspended（run_suspended）+ ask 卡出现（suspend 事件 turn → ask_user）
   await expect(runCard).toContainText("suspended", { timeout: 8_000 });
+  // #19 step 进度：s1 已完成、review 挂起（step_started/completed 经持久流 → run.steps 渲染）
+  await expect(runCard).toContainText("s1", { timeout: 5_000 });
+  await expect(runCard).toContainText("review", { timeout: 5_000 });
   const askCard = page.locator(".hitl").filter({ hasText: "选哪个？" });
   await expect(askCard).toBeVisible({ timeout: 8_000 });
 
   // 点 accept → stub 判答 resume → synthetic 续跑至 completed
   await askCard.locator("button", { hasText: "accept" }).click();
   await expect(runCard).toContainText("completed", { timeout: 8_000 });
+  // #19 step 进度：s2 终结步出现（resume 后 review→s2）
+  await expect(runCard).toContainText("s2", { timeout: 5_000 });
 
   // 总结气泡（completed 事件 turn）
   await expect(page.locator(".bubble.assistant").last()).toContainText("总结", { timeout: 8_000 });
