@@ -48,3 +48,6 @@
 | 桥接工具 (Bridge tool) | 注册给 pi 的工具（`start_workflow`/`resume_workflow`），让 pi 在对话里从 NL 触发/续跑服务端工作流。薄桥：pi 子进程 → localhost HTTP → 工作流引擎（ADR-0009）。 |
 | 交互工具 (Interaction tool) | chat 界面提供给 pi、用于与用户交互的工具（v1：`ask_user` 单/多选；后期加更多）。pi 用它把 HITL 挂起/澄清等结构化提问渲染成 chat 里的选择 UI（ADR-0009）。 |
 | 项目记忆 (Project memory) | 项目工作区的 `AGENTS.md`（L2）——pi 每轮自动加载，承载项目/品牌背景与关键决策，给 pi 稳定的**项目级持久记忆**、抗会话压缩丢失。不同于会话 transcript（L1，会话内）与 skill 经验（L3，repo 级）。 |
+| 系统 (System) | 承载**全局、跨项目配置**（安全姿态 `SECURITY_POSTURE`、运行参数、全局开关等）的实体；对所有项目/会话生效，与「项目级」配置对立。是独立实体、非范围限定词（ADR-0013）。 |
+| 定时任务 (Scheduled Task) | 用户配置的 **cron 触发器**：按计划自动启动指定工作流，归属项目；区别于系统自身的内部调度任务（ADR-0013）。 |
+| 项目成员 (Project Member) | 用户↔项目的**多对多归属关系**（成员表：用户 + 项目 + 角色）。一个用户可属多个项目，每个关系带角色（角色定权限，见「角色」），以此控制项目可见性（ADR-0014）。 |
