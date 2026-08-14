@@ -1,12 +1,13 @@
 // 工作流/运行路由（runner 薄封装）。注册到主 app 的绝对路径，免 :id 前缀冲突。
 import type { Hono } from "hono";
+import type { AppEnv } from "../auth/middleware";
 import { listWorkflows } from "../registry";
 import { startRun, resumeRun, WorkflowNotFound, RunNotFound, InvalidInput, type RunDeps } from "../runs";
 import { InvalidProjectId } from "../config";
 import { PiBusy } from "../pi/runPi";
 import { jsonBody } from "../http";
 
-export function registerWorkflowRoutes(app: Hono, deps: RunDeps): void {
+export function registerWorkflowRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
   app.get("/workflows", (c) => c.json(listWorkflows()));
 
   app.post("/workflows/:id/runs", async (c) => {

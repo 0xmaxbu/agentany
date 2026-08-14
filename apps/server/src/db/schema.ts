@@ -76,3 +76,21 @@ export const hitlQuestions = sqliteTable("hitl_questions", {
   createdAt: text("createdAt").notNull(),
   answeredAt: text("answeredAt"),
 });
+
+// 用户（真 auth；ADR-0014）。dev-user 为虚拟行（逃生阀派生，不落表）。
+export const users = sqliteTable("users", {
+  id: text("id").primaryKey(), // "u_" + crypto.randomUUID()
+  username: text("username").notNull().unique(), // UNIQUE → 重名抛 SQLITE_CONSTRAINT → 409
+  passwordHash: text("passwordHash").notNull(), // argon2id（Bun.password）
+  displayName: text("displayName"),
+  role: text("role").notNull().default("member"), // admin | member（全局管理员；项目角色另表，步骤 c）
+  status: text("status").notNull().default("active"), // active | deactivated（注销=停用）
+  createdAt: text("createdAt").notNull(),
+});
+
+// opaque token（ADR-0014）：落库存 sha256(token)（非明文）；注销/改密/重置=删行；强断已开 SSE 走 StreamRegistry。
+export const authTokens = sqliteTable("auth_tokens", {
+  tokenHash: text("tokenHash").primaryKey(), // sha256(明文 token)
+  userId: text("userId").notNull(),
+  createdAt: text("createdAt").notNull(),
+});

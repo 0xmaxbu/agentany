@@ -5,6 +5,7 @@ import { WorkflowStore } from "../src/workflow-engine/store";
 import { openDbMigrated } from "../src/db/client";
 import { startBridge } from "../src/bridge/server";
 import { createApp } from "../src/app";
+import { fullDeps } from "./deps";
 import { issueNonce, _clearNonces } from "../src/bridge/nonce";
 import { RunRegistry } from "../src/runs/registry";
 import { EventBus } from "../src/chat/eventbus";
@@ -290,7 +291,7 @@ describe("GET /conversations/:id/hitl · 刷新恢复（#16）", () => {
     store.createQuestion({ conversationId: "c1", runId: "r1", prompt: "q1", options: ["A"] });
     store.createQuestion({ conversationId: "c1", runId: "r2", prompt: "q2", options: ["B"] });
     store.markPendingAnsweredByRun("r2", { decision: "B" });
-    const app = createApp({ store });
+    const app = createApp(fullDeps(store));
     const resp = await app.request("/conversations/c1/hitl");
     expect(resp.status).toBe(200);
     const list: any = await resp.json();
@@ -303,7 +304,7 @@ describe("GET /conversations/:id/hitl · 刷新恢复（#16）", () => {
 
   test("会话不存在 → 404", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    const app = createApp({ store });
+    const app = createApp(fullDeps(store));
     expect((await app.request("/conversations/nope/hitl")).status).toBe(404);
   });
 });
@@ -315,7 +316,7 @@ describe("POST /conversations/:id/abort（#19）", () => {
     store.createRun({ runId: "r-run", workflowId: "wf", projectId: null, conversationId: "c1", input: {} }); // running，无句柄
     const eventBus = new EventBus();
     const registry = new RunRegistry({ store, eventBus, runPiFactory: stubFactory });
-    const app = createApp({ store, runRegistry: registry, eventBus });
+    const app = createApp(fullDeps(store, { runRegistry: registry, eventBus }));
     const resp = await app.request("/conversations/c1/abort", { method: "POST" });
     expect(resp.status).toBe(200);
     const data: any = await resp.json();
@@ -326,7 +327,7 @@ describe("POST /conversations/:id/abort（#19）", () => {
 
   test("会话不存在 → 404", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    const app = createApp({ store });
+    const app = createApp(fullDeps(store));
     expect((await app.request("/conversations/nope/abort", { method: "POST" })).status).toBe(404);
   });
 });

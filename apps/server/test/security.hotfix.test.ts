@@ -5,13 +5,14 @@ import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
 import { WorkflowStore } from "../src/workflow-engine/store";
 import type { RunDeps } from "../src/runs";
+import { fullDeps } from "./deps";
 
 const JH = { "content-type": "application/json" };
 function newApp() {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
   const runPiFactory: RunDeps["runPiFactory"] = () =>
     async () => ({ text: "[stub]", messages: [], toolResults: [] });
-  return createApp({ store, runPiFactory });
+  return createApp(fullDeps(store, { runPiFactory }));
 }
 
 describe("security hotfix · h1 projectId 校验", () => {

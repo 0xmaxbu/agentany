@@ -3,10 +3,10 @@
 // POST /approvals/:id/decide：approve→CAS claim→createRun→回填 runId（引擎自发 run_started）；deny→CAS→不建 run。
 import type { Hono } from "hono";
 import type { RunDeps } from "../runs";
-import { userIdOf } from "./auth-stub";
+import { userIdOf, type AppEnv } from "../auth/middleware";
 import { jsonBody } from "../http";
 
-export function registerApprovalRoutes(app: Hono, deps: RunDeps): void {
+export function registerApprovalRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
   app.post("/approvals/:id/decide", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "invalid id" }, 400);
@@ -16,7 +16,7 @@ export function registerApprovalRoutes(app: Hono, deps: RunDeps): void {
 
     const q = deps.store.getQuestion(id);
     if (!q || q.kind !== "approval") return c.json({ error: "approval not found" }, 404);
-    const userId = userIdOf(c as any);
+    const userId = userIdOf(c);
 
     if (decision === "deny") {
       const row = deps.store.markApprovalDecided(id, { decision: "deny" }, userId); // CAS 占位

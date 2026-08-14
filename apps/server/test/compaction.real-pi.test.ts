@@ -5,6 +5,7 @@
 // 慢、耗 token。**须以 `DATA_DIR=<temp> bun test` 运行**（config.DATA_DIR 是模块加载时常量，beforeAll 设太晚）。
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { createApp } from "../src/app";
+import { fullDeps } from "./deps";
 import { openDbMigrated } from "../src/db/client";
 import { WorkflowStore } from "../src/workflow-engine/store";
 import { EventBus } from "../src/chat/eventbus";
@@ -49,7 +50,7 @@ describe.skipIf(!HAS_KEY)("compaction 实测 · 真 pi 长对话 jsonl（#19）"
     const store = new WorkflowStore(openDbMigrated());
     const eventBus = new EventBus();
     const runRegistry = new RunRegistry({ store, eventBus });
-    const app = createApp({ store, eventBus, runRegistry });
+    const app = createApp(fullDeps(store, { eventBus, runRegistry }));
     const bridgeSrv = startBridge(BRIDGE_PORT, { runRegistry, store, eventBus });
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", idleTimeout: 255, fetch: (r) => app.fetch(r) });
     baseUrl = `http://127.0.0.1:${server.port}`;

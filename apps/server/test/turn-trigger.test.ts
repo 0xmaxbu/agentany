@@ -6,8 +6,8 @@ import { ConversationQueues } from "../src/chat/queue";
 import { EventBus } from "../src/chat/eventbus";
 import { WorkflowStore } from "../src/workflow-engine/store";
 import { openDbMigrated } from "../src/db/client";
-import type { RunDeps } from "../src/runs";
 import type { ConfiguredRunPiStream } from "../src/pi/runPi-factory";
+import { fullDeps } from "./deps";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const delayUntil = async (pred: () => boolean, t = 3000): Promise<void> => {
@@ -23,7 +23,7 @@ describe("TurnTrigger · EventBus 扇出驱动 turn（#13）", () => {
       call.onDelta("PONG");
       return { text: "PONG", messages: [], toolResults: [] };
     };
-    const deps: RunDeps = { store, runPiStreamFactory: stubStream };
+    const deps = fullDeps(store, { runPiStreamFactory: stubStream });
     const queues = new ConversationQueues();
     const eventBus = new EventBus();
     const tt = new TurnTrigger({ deps, queues, eventBus });
@@ -41,10 +41,9 @@ describe("TurnTrigger · EventBus 扇出驱动 turn（#13）", () => {
 
   test("未 attach 的会话 → publish(user_message) 不起 turn", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    const deps: RunDeps = {
-      store,
+    const deps = fullDeps(store, {
       runPiStreamFactory: (): ConfiguredRunPiStream => async () => ({ text: "", messages: [], toolResults: [] }),
-    };
+    });
     const queues = new ConversationQueues();
     const eventBus = new EventBus();
     new TurnTrigger({ deps, queues, eventBus }); // 不 attach
@@ -58,7 +57,7 @@ describe("TurnTrigger · EventBus 扇出驱动 turn（#13）", () => {
     store.createConversation({ id: "c1", projectId: null, userId: "u" });
     let turns = 0;
     const stubStream = (): ConfiguredRunPiStream => async () => { turns++; return { text: "x", messages: [], toolResults: [] }; };
-    const deps: RunDeps = { store, runPiStreamFactory: stubStream };
+    const deps = fullDeps(store, { runPiStreamFactory: stubStream });
     const queues = new ConversationQueues();
     const eventBus = new EventBus();
     const tt = new TurnTrigger({ deps, queues, eventBus });
@@ -86,7 +85,7 @@ describe("TurnTrigger · run_* 边界事件驱动自动 turn（#15）", () => {
       call.onDelta("OK");
       return { text: "OK", messages: [], toolResults: [] };
     };
-    const deps: RunDeps = { store, runPiStreamFactory: factory };
+    const deps = fullDeps(store, { runPiStreamFactory: factory });
     const eventBus = new EventBus();
     const tt = new TurnTrigger({ deps, queues: new ConversationQueues(), eventBus });
     const frames: any[] = [];
@@ -144,7 +143,7 @@ describe("TurnTrigger · pending 提问每轮注入（#16）", () => {
       call.onDelta("x");
       return { text: "x", messages: [], toolResults: [] };
     };
-    const deps: RunDeps = { store, runPiStreamFactory: factory };
+    const deps = fullDeps(store, { runPiStreamFactory: factory });
     const eventBus = new EventBus();
     const tt = new TurnTrigger({ deps, queues: new ConversationQueues(), eventBus });
     const frames: any[] = [];
@@ -169,7 +168,7 @@ describe("TurnTrigger · pending 提问每轮注入（#16）", () => {
       call.onDelta("x");
       return { text: "x", messages: [], toolResults: [] };
     };
-    const deps: RunDeps = { store, runPiStreamFactory: factory };
+    const deps = fullDeps(store, { runPiStreamFactory: factory });
     const eventBus = new EventBus();
     const tt = new TurnTrigger({ deps, queues: new ConversationQueues(), eventBus });
     const frames: any[] = [];
@@ -193,7 +192,7 @@ describe("TurnTrigger · pending 提问每轮注入（#16）", () => {
       call.onDelta("x");
       return { text: "x", messages: [], toolResults: [] };
     };
-    const deps: RunDeps = { store, runPiStreamFactory: factory };
+    const deps = fullDeps(store, { runPiStreamFactory: factory });
     const eventBus = new EventBus();
     const tt = new TurnTrigger({ deps, queues: new ConversationQueues(), eventBus });
     const frames: any[] = [];
@@ -222,7 +221,7 @@ describe("TurnTrigger · #17 每轮注入（项目背景 / 工作流目录 / 挂
       call.onDelta("x");
       return { text: "x", messages: [], toolResults: [] };
     };
-    const deps: RunDeps = { store, runPiStreamFactory: factory };
+    const deps = fullDeps(store, { runPiStreamFactory: factory });
     const eventBus = new EventBus();
     const tt = new TurnTrigger({ deps, queues: new ConversationQueues(), eventBus });
     const frames: any[] = [];
@@ -245,7 +244,7 @@ describe("TurnTrigger · #17 每轮注入（项目背景 / 工作流目录 / 挂
       call.onDelta("x");
       return { text: "x", messages: [], toolResults: [] };
     };
-    const deps: RunDeps = { store, runPiStreamFactory: factory };
+    const deps = fullDeps(store, { runPiStreamFactory: factory });
     const eventBus = new EventBus();
     const tt = new TurnTrigger({ deps, queues: new ConversationQueues(), eventBus });
     const frames: any[] = [];
@@ -268,7 +267,7 @@ describe("TurnTrigger · #17 每轮注入（项目背景 / 工作流目录 / 挂
       call.onDelta("x");
       return { text: "x", messages: [], toolResults: [] };
     };
-    const deps: RunDeps = { store, runPiStreamFactory: factory };
+    const deps = fullDeps(store, { runPiStreamFactory: factory });
     const eventBus = new EventBus();
     const tt = new TurnTrigger({ deps, queues: new ConversationQueues(), eventBus });
     const frames: any[] = [];

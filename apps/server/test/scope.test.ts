@@ -7,7 +7,7 @@ import { WorkflowStore } from "../src/workflow-engine/store";
 import { openDbMigrated } from "../src/db/client";
 import { createApp } from "../src/app";
 import { makeRunPiStream, type ConfiguredRunPiStream } from "../src/pi/runPi-factory";
-import type { RunDeps } from "../src/runs";
+import { fullDeps } from "./deps";
 
 const JH = { "content-type": "application/json" };
 
@@ -80,7 +80,7 @@ describe("scope.DB projectId 可空", () => {
 // 路由：建 general / project / 非法。
 function newApp() {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
-  const deps: RunDeps = { store };
+  const deps = fullDeps(store);
   return { app: createApp(deps), store };
 }
 
@@ -114,7 +114,7 @@ describe("scope.general 会话跑通 turn（事件驱动 / ticket #13）", () =>
       return { text: call.prompt, messages: [], toolResults: [] };
     };
     const store = new WorkflowStore(openDbMigrated(":memory:"));
-    const deps: RunDeps = { store, runPiStreamFactory: echo };
+    const deps = fullDeps(store, { runPiStreamFactory: echo });
     const app = createApp(deps);
 
     const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();

@@ -6,6 +6,7 @@ import { EventBus } from "../src/chat/eventbus";
 import { WorkflowStore } from "../src/workflow-engine/store";
 import { openDbMigrated } from "../src/db/client";
 import { createApp } from "../src/app";
+import { fullDeps } from "./deps";
 import { startBridge } from "../src/bridge/server";
 import { issueNonce, _clearNonces } from "../src/bridge/nonce";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
@@ -92,7 +93,7 @@ const JH = { "content-type": "application/json" } as const;
 describe("POST /approvals/:id/decide（#18 main app 路由）", () => {
   test("approve：{approve} → {approved, runId}；run_started；卡 answered + 回填 runId + decidedBy + hitl_answered{approval}", async () => {
     const { store, eventBus, registry } = setup();
-    const app = createApp({ store, runRegistry: registry, eventBus });
+    const app = createApp(fullDeps(store, { runRegistry: registry, eventBus }));
     const frames: any[] = [];
     eventBus.subscribe("c-appr", (f) => frames.push(f));
     const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "测试品牌" } });
@@ -114,7 +115,7 @@ describe("POST /approvals/:id/decide（#18 main app 路由）", () => {
 
   test("deny：{deny} → {denied}；不 createRun（无 run_started）；卡 answered{deny} + runId 仍 null", async () => {
     const { store, eventBus, registry } = setup();
-    const app = createApp({ store, runRegistry: registry, eventBus });
+    const app = createApp(fullDeps(store, { runRegistry: registry, eventBus }));
     const frames: any[] = [];
     eventBus.subscribe("c-appr", (f) => frames.push(f));
     const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "x" } });
@@ -132,7 +133,7 @@ describe("POST /approvals/:id/decide（#18 main app 路由）", () => {
 
   test("双击幂等：approve 后再 approve → 409 already decided（CAS）", async () => {
     const { store, registry } = setup();
-    const app = createApp({ store, runRegistry: registry });
+    const app = createApp(fullDeps(store, { runRegistry: registry }));
     const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "x" } });
     if (r.status !== "needs_approval") throw new Error("expected needs_approval");
     await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "approve" }) });
@@ -142,7 +143,7 @@ describe("POST /approvals/:id/decide（#18 main app 路由）", () => {
 
   test("非审批卡（kind=ask）→ 404", async () => {
     const { store, registry } = setup();
-    const app = createApp({ store, runRegistry: registry });
+    const app = createApp(fullDeps(store, { runRegistry: registry }));
     const askId = store.createQuestion({ conversationId: "c-appr", runId: "r1", prompt: "q", options: ["A"] }); // 默认 kind=ask
     const resp = await app.request(`/approvals/${askId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "approve" }) });
     expect(resp.status).toBe(404);
@@ -150,7 +151,7 @@ describe("POST /approvals/:id/decide（#18 main app 路由）", () => {
 
   test("坏 decision → 400", async () => {
     const { store, registry } = setup();
-    const app = createApp({ store, runRegistry: registry });
+    const app = createApp(fullDeps(store, { runRegistry: registry }));
     const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "x" } });
     if (r.status !== "needs_approval") throw new Error("expected needs_approval");
     const resp = await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "maybe" }) });
@@ -171,7 +172,7 @@ describe("审批只人类 enforce + HTTP 旁路（#18）", () => {
 
   test("HTTP 旁路锁定：POST /workflows/brand-research/runs 直接 createRun（不经审批门、无 approval 卡）—— 规格明定，A2 收口", async () => {
     const { store, eventBus, registry } = setup();
-    const app = createApp({ store, runRegistry: registry, eventBus, runPiFactory: stubFactory as any });
+    const app = createApp(fullDeps(store, { runRegistry: registry, eventBus, runPiFactory: stubFactory as any }));
     const frames: any[] = [];
     eventBus.subscribe("c-appr", (f) => frames.push(f));
     await app.request("/workflows/brand-research/runs", { method: "POST", headers: JH, body: JSON.stringify({ projectId: "dev", input: { brand: "x" } }) });
@@ -187,7 +188,7 @@ describe("approve CAS 顺序 + 失败回滚（#codex review：占位不得永久
     // 真建审批卡（registry.start 返 needs_approval，不建 run）
     const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "x" } });
     if (r.status !== "needs_approval") throw new Error("expected needs_approval");
-    const app = createApp({ store }); // 无 runRegistry → approve 应 503
+    const app = createApp(fullDeps(store)); // 无 runRegistry → approve 应 503
     const resp = await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "approve" }) });
     expect(resp.status).toBe(503);
     expect(store.getQuestion(r.questionId)!.status).toBe("pending"); // 未占位 → 可重试
@@ -199,7 +200,7 @@ describe("approve CAS 顺序 + 失败回滚（#codex review：占位不得永久
     if (r.status !== "needs_approval") throw new Error("expected needs_approval");
     // 注入 start 会抛错的假 registry（模拟会话被删 / 工作流失注等 start 抛错）
     const boomRegistry = { start: () => { throw new Error("conversation gone"); } };
-    const app = createApp({ store, runRegistry: boomRegistry as any });
+    const app = createApp(fullDeps(store, { runRegistry: boomRegistry as any }));
     const resp = await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "approve" }) });
     expect(resp.status).toBe(500);
     expect(store.getQuestion(r.questionId)!.status).toBe("pending"); // 回滚 → 可重试

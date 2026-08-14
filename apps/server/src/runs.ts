@@ -9,9 +9,13 @@ import type { Workflow } from "./workflow-engine/defineWorkflow";
 import type { WorkflowStore } from "./workflow-engine/store";
 import type { EventBus } from "./chat/eventbus";
 import type { RunRegistry } from "./runs/registry";
+import type { UserStore } from "./auth/store";
+import type { StreamRegistry } from "./chat/stream-registry";
 
 export interface RunDeps {
   store: WorkflowStore;
+  userStore: UserStore; // 真 auth（ADR-0014）：身份解析 + 用户/token CRUD
+  streamRegistry: StreamRegistry; // 活跃 SSE 登记：token 吊销时强断（不杀 run）
   runPiFactory?: typeof makeRunPi; // 测试可换 stub（di）
   runPiStreamFactory?: typeof makeRunPiStream; // chat 切片①：测试注确定性 delta stub（di）
   eventBus?: EventBus; // 共享事件中心（持久流 + bridge run 事件；prod 由 index 注入）

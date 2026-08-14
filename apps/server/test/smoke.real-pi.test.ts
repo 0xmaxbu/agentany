@@ -5,6 +5,7 @@
 // 注：完整确定性全链由 e2e/workflow.spec.ts（scripted stub 驱动真桥接真事件）覆盖；本测用真 pi 复核。
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { createApp } from "../src/app";
+import { fullDeps } from "./deps";
 import { openDbMigrated } from "../src/db/client";
 import { WorkflowStore } from "../src/workflow-engine/store";
 import { EventBus } from "../src/chat/eventbus";
@@ -49,7 +50,7 @@ describe.skipIf(!HAS_KEY)("真 pi 冒烟 · 跑合成三步全链（#19）", () 
     const store = new WorkflowStore(openDbMigrated());
     const eventBus = new EventBus();
     const runRegistry = new RunRegistry({ store, eventBus });
-    const app = createApp({ store, eventBus, runRegistry });
+    const app = createApp(fullDeps(store, { eventBus, runRegistry }));
     const bridgeSrv = startBridge(BRIDGE_PORT, { runRegistry, store, eventBus });
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", idleTimeout: 255, fetch: (r) => app.fetch(r) });
     baseUrl = `http://127.0.0.1:${server.port}`;

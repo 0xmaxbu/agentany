@@ -4,13 +4,14 @@ import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
 import { WorkflowStore } from "../src/workflow-engine/store";
 import type { RunDeps } from "../src/runs";
+import { fullDeps } from "./deps";
 
 function newDeps(): RunDeps {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
   // synthetic 是纯程序步、不调 runPi；工厂给个 stub 兜底。
   const runPiFactory: RunDeps["runPiFactory"] = () =>
     async () => ({ text: "[stub]", messages: [], toolResults: [] });
-  return { store, runPiFactory };
+  return fullDeps(store, { runPiFactory });
 }
 
 const JSON_HEADERS = { "content-type": "application/json" };

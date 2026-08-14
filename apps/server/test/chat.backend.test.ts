@@ -5,7 +5,7 @@ import { describe, test, expect } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
 import { WorkflowStore } from "../src/workflow-engine/store";
-import type { RunDeps } from "../src/runs";
+import { fullDeps } from "./deps";
 import type { ConfiguredRunPiStream } from "../src/pi/runPi-factory";
 
 const JH = { "content-type": "application/json" };
@@ -65,7 +65,7 @@ function countingFactory(): { factory: () => ConfiguredRunPiStream; maxActive: (
 
 function newApp(streamFactory: () => ConfiguredRunPiStream) {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
-  const deps: RunDeps = { store, runPiStreamFactory: streamFactory };
+  const deps = fullDeps(store, { runPiStreamFactory: streamFactory });
   return { app: createApp(deps), store };
 }
 

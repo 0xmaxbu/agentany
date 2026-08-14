@@ -7,14 +7,14 @@ import { ConversationQueues } from "../chat/queue";
 import { EventBus, type Frame } from "../chat/eventbus";
 import { TurnTrigger } from "../chat/turn-trigger";
 import { assertValidProjectId } from "../config";
-import { userIdOf } from "./auth-stub";
+import { userIdOf, type AppEnv } from "../auth/middleware";
 import { jsonBody } from "../http";
 
 const HEARTBEAT_MS = Number(process.env.CHAT_HEARTBEAT_MS ?? 15000);
 const makeConversationId = (): string => "c_" + globalThis.crypto.randomUUID();
 
 
-export function registerConversationRoutes(app: Hono, deps: RunDeps): void {
+export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
   // 单实例（per app = per 进程）：FIFO + 事件中心 + 调度入口。
   const queues = new ConversationQueues();
   const eventBus = deps.eventBus ?? new EventBus(); // 共享单例（prod 由 index 注入；bridge run 事件经此到持久流）
@@ -37,7 +37,7 @@ export function registerConversationRoutes(app: Hono, deps: RunDeps): void {
     const conv = deps.store.createConversation({
       id: makeConversationId(),
       projectId,
-      userId: userIdOf(c as any),
+      userId: userIdOf(c),
       title,
     });
     turnTrigger.attach(conv.id); // 会话建立即订阅 EventBus（user_message → 起 turn；#13 扇出到 TurnTrigger）
@@ -80,12 +80,19 @@ export function registerConversationRoutes(app: Hono, deps: RunDeps): void {
       const unsub = eventBus.subscribe(id, send);
       let release!: () => void;
       const hold = new Promise<void>((r) => (release = r));
-      stream.onAbort(() => {
+      // 幂等 close：客户端断开（onAbort）或 token 吊销（streamRegistry.abortUser）都走它——只断 SSE，不杀 run。
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
         unsub();
         clearInterval(hb);
         release();
-      });
-      await hold; // 长连直到客户端断开
+      };
+      stream.onAbort(close);
+      const detach = deps.streamRegistry.attach(userIdOf(c), close);
+      await hold; // 长连直到客户端断开 / token 吊销强断
+      detach();
       await chain; // flush 残留写
     });
   });
