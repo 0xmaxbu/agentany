@@ -5,6 +5,7 @@ import { EventBus } from "./chat/eventbus";
 import { RunRegistry } from "./runs/registry";
 import { UserStore } from "./auth/store";
 import { StreamRegistry } from "./chat/stream-registry";
+import { ProjectStore } from "./projects/store";
 import { bootstrapAdmin } from "./auth/bootstrap";
 import { PORT } from "./config";
 import { warnIfNoSandbox } from "./pi/sandbox";
@@ -15,11 +16,12 @@ const db = openDbMigrated(); // 启动跑迁移（data/db.sqlite）
 const store = new WorkflowStore(db);
 const userStore = new UserStore(db); // 真 auth（ADR-0014）：与 store 共享同一 db
 const streamRegistry = new StreamRegistry(); // 活跃 SSE 登记：token 吊销时强断
+const projectStore = new ProjectStore(db); // 项目 + 成员（步骤 b）：与 store/userStore 共享同一 db
 const eventBus = new EventBus(); // 共享事件中心：持久流订阅 + bridge run 事件，同一实例
 const runRegistry = new RunRegistry({ store, eventBus });
 runRegistry.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed（进程没在跑了）
 await bootstrapAdmin(userStore); // env 设了 bootstrap admin 则幂等 upsert（否则走纯 dev 阀）
-const deps: RunDeps = { store, userStore, streamRegistry, eventBus, runRegistry };
+const deps: RunDeps = { store, userStore, streamRegistry, projectStore, eventBus, runRegistry };
 const app = createApp(deps);
 warnIfNoSandbox(); // 逃生阀开启时显眼告警（ADR-0011 A1）
 

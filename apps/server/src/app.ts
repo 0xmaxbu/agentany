@@ -2,6 +2,7 @@
 import { Hono } from "hono";
 import { createAuthMiddleware, type AppEnv } from "./auth/middleware";
 import { registerAuthRoutes, registerUserRoutes } from "./auth/routes";
+import { registerProjectRoutes } from "./projects/routes";
 import { registerWorkflowRoutes } from "./routes/workflows";
 import { registerFeedbackRoutes } from "./routes/feedback";
 import { registerConversationRoutes } from "./routes/conversations";
@@ -21,6 +22,7 @@ export function createApp(deps: RunDeps): Hono<AppEnv> {
   app.get("/health", (c) => c.json({ ok: true }));
   registerAuthRoutes(app, deps);
   registerUserRoutes(app, deps);
+  registerProjectRoutes(app, deps);
   registerWorkflowRoutes(app, deps);
   registerFeedbackRoutes(app, deps);
   registerConversationRoutes(app, deps);

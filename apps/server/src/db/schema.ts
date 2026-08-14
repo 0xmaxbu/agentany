@@ -1,5 +1,5 @@
 // Drizzle schema：对齐 Spike B 的 append-only 执行日志两表（ADR-0004/0007）。
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const workflowRuns = sqliteTable("workflow_runs", {
   runId: text("runId").primaryKey(),
@@ -94,3 +94,31 @@ export const authTokens = sqliteTable("auth_tokens", {
   userId: text("userId").notNull(),
   createdAt: text("createdAt").notNull(),
 });
+
+// 项目（ADR-0013：元数据实体，替纯路径段）。id=p_<uuid> 既 PK 又=文件目录名（稳定不变，过 assertValidProjectId）。
+export const projects = sqliteTable("projects", {
+  id: text("id").primaryKey(),
+  slug: text("slug").notNull().unique(), // 人类可读、URL 友好、唯一；改名不挪目录（目录用 id）
+  name: text("name").notNull(),
+  description: text("description"),
+  ownerId: text("ownerId").notNull(), // 创建者 userId（= 首个 owner 成员）
+  status: text("status").notNull().default("active"),
+  createdAt: text("createdAt").notNull(),
+  updatedAt: text("updatedAt").notNull(),
+});
+
+// 项目成员（ADR-0014：用户↔项目多对多 + 项目内角色 owner|member，与用户级 admin 正交）。
+export const projectMembers = sqliteTable(
+  "project_members",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: text("projectId").notNull(),
+    userId: text("userId").notNull(),
+    role: text("role").notNull().default("member"),
+    createdAt: text("createdAt").notNull(),
+  },
+  (t) => ({
+    // SQLiteTableExtraConfig = Record<string,…>（对象形式，非数组）；防重复加成员
+    pidUid: uniqueIndex("project_members_projectId_userId_unique").on(t.projectId, t.userId),
+  }),
+);

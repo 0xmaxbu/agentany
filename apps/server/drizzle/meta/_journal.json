@@ -57,6 +57,13 @@
       "when": 1786677547194,
       "tag": "0007_moaning_molly_hayes",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786682774878,
+      "tag": "0008_young_jane_foster",
+      "breakpoints": true
     }
   ]
 }
