@@ -1,18 +1,45 @@
-// 后端 HTTP/SSE 封装（ticket #13 事件驱动）。dev 经 Vite proxy（同源）；prod 经反代。dev-token（若设）→ Bearer。
+// 后端 HTTP/SSE 封装（ticket #13 事件驱动）。dev 经 Vite proxy（同源）；prod 经反代。
+// f2：apiFetch 统一 token 注入 + 401 拦截（onUnauthorized 回调→auth store 注册，避免 api↔store 循环依赖）。
 import { parseSSEFrames, type SSEEvent } from "./sse";
+import { getToken } from "./lib/token";
 
 // Vite 注入（VITE_DEV_TOKEN 来自 AGENTANY_DEV_TOKEN）；未设则 undefined（dev 放行）。
+// token 优先级：登录 token > 构建期 DEV_TOKEN（e2e/无登录环境兜底）。
 const DEV_TOKEN = (import.meta.env.VITE_DEV_TOKEN as string | undefined) ?? "";
 
-function headers(json = false): Record<string, string> {
-  const h: Record<string, string> = {};
-  if (DEV_TOKEN) h["Authorization"] = `Bearer ${DEV_TOKEN}`;
-  if (json) h["Content-Type"] = "application/json";
-  return h;
+// 401 回调（auth store 启动时注册 forceLogout——api 层不 import store，防循环依赖）
+let onUnauthorized: (() => void) | null = null;
+export function setOnUnauthorized(fn: () => void): void {
+  onUnauthorized = fn;
+}
+
+/**
+ * 统一 fetch：自动 Bearer（token ?? DEV_TOKEN）；401 且非 login 请求 → 401 回调 + throw。
+ * login 自身 401 是正常业务结果（错密码），由调用方内联处理——不走拦截。
+ */
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const token = getToken() ?? DEV_TOKEN;
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const r = await fetch(path, { ...init, headers });
+  if (r.status === 401 && !path.startsWith("/auth/login")) {
+    onUnauthorized?.();
+    throw new Error(`unauthorized: ${path}`);
+  }
+  return r;
 }
 
 export interface Conversation {
   id: string; workspaceId: string; title: string | null; createdAt: string;
+}
+// ConversationRow（GET /conversations 列表形状，含 updatedAt——f1 端点）。
+// userId 可选：乐观 prepend（createConversation 响应无此字段，refresh 兜底补真值）。
+export interface ConversationRow {
+  id: string; workspaceId: string; userId?: string; title: string | null; createdAt: string; updatedAt: string;
+}
+// Workspace（GET /workspaces 形状——toWorkspace；member=allUsers∪名单，admin=全部）
+export interface Workspace {
+  id: string; slug: string; name: string; allUsers: boolean; createdAt: string; updatedAt: string;
 }
 export interface Message {
   id: number; conversationId: string; role: "user" | "assistant"; content: string; createdAt: string;
@@ -27,32 +54,48 @@ export interface Question {
   createdAt: string; answeredAt: string | null;
 }
 
+const jsonHeaders = { "Content-Type": "application/json" };
+
 export async function createConversation(title?: string): Promise<Conversation> {
-  const r = await fetch("/conversations", { method: "POST", headers: headers(true), body: JSON.stringify({ title }) }); // 缺省 workspaceId=公司 ws（ADR-0018）
+  const r = await apiFetch("/conversations", { method: "POST", headers: jsonHeaders, body: JSON.stringify({ title }) }); // 缺省 workspaceId=公司 ws（ADR-0018）
   if (!r.ok) throw new Error(`createConversation: ${r.status}`);
   return r.json();
 }
 
 export async function getMessages(conversationId: string): Promise<Message[]> {
-  const r = await fetch(`/conversations/${conversationId}/messages`, { headers: headers() });
+  const r = await apiFetch(`/conversations/${conversationId}/messages`);
   if (!r.ok) throw new Error(`getMessages: ${r.status}`);
   return r.json();
 }
 
+// 会话列表（f1 端点）：创建者私有，updatedAt 倒序。可选 workspaceId 过滤（f2 前端全量取+本地分组）。
+export async function listConversations(): Promise<ConversationRow[]> {
+  const r = await apiFetch("/conversations");
+  if (!r.ok) throw new Error(`listConversations: ${r.status}`);
+  return r.json();
+}
+
+// 我的 workspace 列表（allUsers∪名单；admin=全部）。
+export async function listWorkspaces(): Promise<Workspace[]> {
+  const r = await apiFetch("/workspaces");
+  if (!r.ok) throw new Error(`listWorkspaces: ${r.status}`);
+  return r.json();
+}
+
 export async function getHitlQuestions(conversationId: string): Promise<Question[]> {
-  const r = await fetch(`/conversations/${conversationId}/hitl`, { headers: headers() });
+  const r = await apiFetch(`/conversations/${conversationId}/hitl`);
   if (!r.ok) throw new Error(`getHitlQuestions: ${r.status}`);
   return r.json();
 }
 
 export async function abortConversation(conversationId: string): Promise<void> {
-  await fetch(`/conversations/${conversationId}/abort`, { method: "POST", headers: headers() });
+  await apiFetch(`/conversations/${conversationId}/abort`, { method: "POST" });
 }
 
 // #18 审批门：人类审批某 pending 审批卡。POST /approvals/:id/decide（main app, authStub）。
 // 返 200（已决，hitl_answered 帧经持久流驱动 UI）/ 409（已决并发）/ 其它。
 export async function decideApproval(questionId: number, decision: "approve" | "deny"): Promise<number> {
-  const r = await fetch(`/approvals/${questionId}/decide`, { method: "POST", headers: headers(true), body: JSON.stringify({ decision }) });
+  const r = await apiFetch(`/approvals/${questionId}/decide`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ decision }) });
   return r.status;
 }
 
@@ -62,9 +105,9 @@ export async function decideApproval(questionId: number, decision: "approve" | "
  */
 export async function postMessage(conversationId: string, content: string): Promise<number | false> {
   try {
-    const r = await fetch(`/conversations/${conversationId}/messages`, {
+    const r = await apiFetch(`/conversations/${conversationId}/messages`, {
       method: "POST",
-      headers: headers(true),
+      headers: jsonHeaders,
       body: JSON.stringify({ content }),
     });
     if (r.status === 202 || r.status === 429) return r.status;
@@ -79,7 +122,7 @@ export async function postMessage(conversationId: string, content: string): Prom
  * signal 取消即关流（切会话/卸载时）。重连期丢帧是已知缺口（#19+/序列号再补）。
  */
 export async function openStream(conversationId: string, onEvent: (e: SSEEvent) => void, signal?: AbortSignal): Promise<void> {
-  const r = await fetch(`/conversations/${conversationId}/stream`, { headers: headers(), signal });
+  const r = await apiFetch(`/conversations/${conversationId}/stream`, { signal });
   if (!r.ok) throw new Error(`openStream: ${r.status}`);
   if (!r.body) throw new Error("no response body");
   const reader = r.body.getReader();
