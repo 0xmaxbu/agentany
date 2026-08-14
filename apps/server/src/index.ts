@@ -21,6 +21,7 @@ warnIfNoSandbox(); // 逃生阀开启时显眼告警（ADR-0011 A1）
 const server = Bun.serve({
   port: PORT,
   hostname: process.env.HOST ?? "127.0.0.1",
+  idleTimeout: 255, // SSE 持久流长连：默认 10s 会在事件间隙（pi 首 token 延迟常 >10s）掐断 GET /stream
   fetch: (req) => app.fetch(req),
 });
 startBridge(BRIDGE_PORT, { runRegistry, store, eventBus }); // bridge RPC（loopback:3199，pi↔server；nonce 闸；#11/#14/#16）

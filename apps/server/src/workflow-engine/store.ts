@@ -280,7 +280,8 @@ export class WorkflowStore {
       })
       .returning({ id: hitlQuestions.id })
       .get();
-    return r?.id ?? 0;
+    if (!r) throw new Error("createQuestion: insert returned no row"); // fail-fast：插入失败不静默返 0（否则 ask_user/审批门会渲染 id=0 假卡，点批准必 404）
+    return r.id;
   }
 
   listQuestions(conversationId: string, opts?: { includeAnswered?: boolean; kind?: "ask" | "approval" }): QuestionRow[] {

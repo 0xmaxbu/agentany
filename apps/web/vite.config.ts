@@ -12,6 +12,7 @@ export default defineConfig({
     strictPort: true, // E2E 依赖固定 5173
     proxy: {
       "/conversations": BACKEND,
+      "/approvals": BACKEND, // #18 审批门（POST /approvals/:id/decide）
       "/health": BACKEND,
       "/workflows": BACKEND,
       "/runs": BACKEND,
