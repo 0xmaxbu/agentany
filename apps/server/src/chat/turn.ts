@@ -57,6 +57,12 @@ export async function runTurn(
       prompt: userContent, // pi session chat-<conversationId> 持历史，每轮只送新消息（事件 turn 时 = 事件 prompt）
       signal,
       onDelta: (t) => { full += t; send({ type: "delta", text: t }); },
+      // #20：block 三帧（thinking/tool_use/tool_result）——与 legacy delta 双发，f3 前端切换后删 legacy
+      onBlock: (b) => {
+        if (b.op === "start") send({ type: "block_start", blockId: b.blockId, kind: b.kind, meta: b.meta });
+        else if (b.op === "delta") send({ type: "block_delta", blockId: b.blockId, delta: b.delta });
+        else send({ type: "block_end", blockId: b.blockId });
+      },
       bridge: { port: BRIDGE_PORT, nonce, url: `http://localhost:${BRIDGE_PORT}` },
       appendSystemPrompt: [CHAT_SYSTEM_PROMPT, ...appendDynamic],
     });

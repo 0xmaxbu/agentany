@@ -8,6 +8,10 @@ export type Frame =
   | { type: "user_message"; id: number; content: string }
   | { type: "delta"; text: string }
   | { type: "done"; messageId?: number; text?: string; aborted?: boolean }
+  // #20 block 三帧：消息=blocks 序列（text/thinking/tool_use/tool_result）；f3 前与 delta/done 双发。
+  | { type: "block_start"; blockId: string; kind: "text" | "thinking" | "tool_use" | "tool_result"; meta?: Record<string, unknown> }
+  | { type: "block_delta"; blockId: string; delta: string }
+  | { type: "block_end"; blockId: string }
   | { type: "error"; message: string }
   | { type: "run_started"; runId: string; workflowId: string }
   | { type: "run_resumed"; runId: string }

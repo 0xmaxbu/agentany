@@ -7,6 +7,7 @@ import { StringDecoder } from "node:string_decoder";
 import "../config"; // 副作用：加载仓库 .env（runPi 读 PI_* / GO_API_KEY）
 import { repoSkillPaths, repoSkillsDir } from "../config";
 import { wrapSpawn } from "./sandbox";
+import { createBlockEmitter, type StreamBlock } from "../blocks";
 import type { RunPiResult } from "../workflow-engine/defineWorkflow";
 
 export interface RunPiOptions {
@@ -25,6 +26,7 @@ export interface RunPiOptions {
 // 流式版（chat 用，ADR-0009 Q3）：多一个 onDelta 回调；其余同 RunPiOptions。
 export interface RunPiStreamOptions extends RunPiOptions {
   onDelta?: (text: string) => void;
+  onBlock?: (b: StreamBlock) => void; // #20：thinking/tool_use/tool_result 增量（三帧流；见 blocks.ts）
 }
 
 function buildArgs(opts: RunPiOptions): string[] {
@@ -78,8 +80,8 @@ function piRelease(): void {
   if (w) w();
 }
 
-// 共享 spawn core：缓冲版 runPi 与流式版 runPiStream 同一路径，只差 onDelta 回调（ADR-0009 BE-Q3）。
-async function spawnPiCore(opts: RunPiOptions, onDelta?: (text: string) => void): Promise<RunPiResult> {
+// 共享 spawn core：缓冲版 runPi 与流式版 runPiStream 同一路径，只差 onDelta/onBlock 回调（ADR-0009 BE-Q3；#20）。
+async function spawnPiCore(opts: RunPiStreamOptions): Promise<RunPiResult> {
   const cwd = opts.cwd ?? process.cwd();
   mkdirSync(cwd, { recursive: true });
 
@@ -122,18 +124,21 @@ async function spawnPiCore(opts: RunPiOptions, onDelta?: (text: string) => void)
     let errBuf = "";
     const dec = new StringDecoder("utf8");
     let buf = "";
+    const emitBlocks = createBlockEmitter(); // #20：事件→三帧（无 onBlock 时也计算无害，事件量小）
 
     const onLine = (line: string) => {
       if (!line.trim()) return;
       let ev: any;
       try { ev = JSON.parse(line); } catch { return; }
+      // #20：block 三帧（text/thinking/tool_use/tool_result）——与 legacy onDelta 双发（f3 切换后删 legacy）
+      if (opts.onBlock) for (const b of emitBlocks(ev)) opts.onBlock(b);
       switch (ev.type) {
         case "message_update": {
           const d = ev.assistantMessageEvent;
           if (d && d.type === "text_delta") {
             const piece = d.delta ?? "";
             textBuf += piece;
-            onDelta?.(piece); // 流式：边到边外吐（chat SSE）
+            opts.onDelta?.(piece); // 流式：边到边外吐（chat SSE）
           }
           break;
         }
@@ -201,11 +206,11 @@ export async function runPi(opts: RunPiOptions): Promise<RunPiResult> {
   }
 }
 
-// 流式壳（chat 用）：多 onDelta；复用 spawnPiCore，行为与 runPi 一致（含 signal/timeout）。
+// 流式壳（chat 用）：多 onDelta/onBlock；复用 spawnPiCore，行为与 runPi 一致（含 signal/timeout）。
 export async function runPiStream(opts: RunPiStreamOptions): Promise<RunPiResult> {
   await piAcquire();
   try {
-    return await spawnPiCore(opts, opts.onDelta);
+    return await spawnPiCore(opts);
   } finally {
     piRelease();
   }

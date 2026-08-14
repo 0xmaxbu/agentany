@@ -1,6 +1,6 @@
 // Drizzle 版 WorkflowStore（替 spike-b 裸 bun:sqlite；方法同 spike-b）。
 // 这是引擎里唯一耦合 db 的文件；runner 只接收本类实例、不 import db。
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { conversations, feedback, hitlQuestions, messages, workflowRunLog, workflowRuns } from "../db/schema";
 
@@ -237,6 +237,23 @@ export class WorkflowStore {
   getConversation(id: string): ConversationRow | undefined {
     const r = this.db.select().from(conversations).where(eq(conversations.id, id)).get();
     return r ? (r as ConversationRow) : undefined;
+  }
+
+  /** 会话活跃触达（#20）：updatedAt = 列表排序锚（此前建后无人更新，倒序退化成插入序）。no-op 安全。 */
+  touchConversation(id: string): void {
+    this.db.update(conversations).set({ updatedAt: now() }).where(eq(conversations.id, id)).run();
+  }
+
+  /** 创建者的会话列表（#20/f2：前端按 ws 分组）。updatedAt 倒序。 */
+  listConversations(userId: string, workspaceId?: string): ConversationRow[] {
+    const conds = [eq(conversations.userId, userId)];
+    if (workspaceId) conds.push(eq(conversations.workspaceId, workspaceId));
+    return this.db
+      .select()
+      .from(conversations)
+      .where(and(...conds))
+      .orderBy(desc(conversations.updatedAt))
+      .all() as unknown as ConversationRow[];
   }
 
   appendMessage(p: { conversationId: string; role: string; content: string; attachments?: unknown }): number {

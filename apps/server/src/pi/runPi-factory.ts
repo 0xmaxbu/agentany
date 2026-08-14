@@ -41,6 +41,7 @@ export function makeRunPi(opts: MakeRunPiOpts): ConfiguredRunPi {
 export type ConfiguredRunPiStream = (call: {
   prompt: string;
   onDelta: (text: string) => void;
+  onBlock?: (b: import("../blocks").StreamBlock) => void; // #20：三帧流（thinking/tool_use/tool_result）
   timeoutMs?: number;
   signal?: AbortSignal;
   bridge?: BridgeChannel; // 每轮 bridge 通道（#11）
@@ -59,6 +60,7 @@ export function makeRunPiStream(opts: MakeRunPiStreamOpts): ConfiguredRunPiStrea
       timeoutMs: call.timeoutMs,
       signal: call.signal,
       onDelta: call.onDelta,
+      onBlock: call.onBlock,
       appendSystemPrompt: call.appendSystemPrompt,
       // #11：bridge 通道——per-turn nonce 经 env 注入 pi。bridge-core 只读 url(含端口)+nonce，
       // 故不单独注 PORT（曾注 AGENTANY_BRIDGE_PORT 无人读 → 死字段已删）；port 仍经 loopbackPorts 用于沙箱窄放行。

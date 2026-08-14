@@ -9,6 +9,8 @@ import { EventBus, type Frame } from "../chat/eventbus";
 import { TurnTrigger } from "../chat/turn-trigger";
 import { canAccessConversation, resolveRequestWorkspace } from "../workspaces/guard";
 import { userIdOf, principalOf, type AppEnv } from "../auth/middleware";
+import { dbMessagesToHistory, readConversationHistory } from "../pi-session/reader";
+import { resolveScopePaths, scopeOf } from "../scope";
 import { jsonBody } from "../http";
 
 const HEARTBEAT_MS = Number(process.env.CHAT_HEARTBEAT_MS ?? 15000);
@@ -51,10 +53,20 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     return c.json(conv);
   });
 
+  // 会话列表（#20/f2）：创建者私有，可选 workspaceId 过滤，updatedAt 倒序。
+  app.get("/conversations", (c) => {
+    const wsParam = c.req.query("workspaceId");
+    return c.json(deps.store.listConversations(userIdOf(c), wsParam || undefined));
+  });
+
+  // 历史（#20 双源）：pi session 优先（blocks 结构真相源）；无 session 文件（e2e stub/首轮前）兜底 DB 冗余文本。
   app.get("/conversations/:id/messages", (c) => {
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
-    return c.json(deps.store.listMessages(conv.id));
+    const sessionDir = resolveScopePaths(scopeOf(conv.workspaceId), conv.workspaceId).sessionDir;
+    const history = readConversationHistory(sessionDir, conv.id);
+    if (history) return c.json(history);
+    return c.json(dbMessagesToHistory(deps.store.listMessages(conv.id)));
   });
 
   // HITL 提问列表（ticket #16）：前端刷新恢复（pending 显卡 / answered 显答案）。
@@ -109,6 +121,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     if (typeof content !== "string" || content.length === 0) return c.json({ error: "content required" }, 400);
     if (!queues.wouldAcceptHttpTurn(id)) return c.json({ error: "conversation busy (queue full)" }, 429); // 同步 429 预检（不入队）
     const userMsgId = deps.store.appendMessage({ conversationId: id, role: "user", content }); // 立即落库
+    deps.store.touchConversation(id); // updatedAt = 列表排序锚（#20）
     eventBus.publish(id, { type: "user_message", id: userMsgId, content }); // 扇出：持久流显示用户消息 + TurnTrigger 起 turn
     return c.json({ accepted: true }, 202);
   });

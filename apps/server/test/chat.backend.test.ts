@@ -204,3 +204,40 @@ describe("chat 切片② · 队列上限 429", () => {
     await s.reader.cancel();
   });
 });
+
+// #20 block 三帧 + 历史双源（f1）。
+describe("#20 · block 三帧 + 历史双源", () => {
+  test("onBlock 三帧经 SSE 透出（与 delta 双发）；GET messages 兜底 DB 包 text block", async () => {
+    const factory = (): ConfiguredRunPiStream => async (call) => {
+      const emit = call.onBlock ?? (() => {});
+      emit({ op: "start", blockId: "b1", kind: "thinking" });
+      emit({ op: "delta", blockId: "b1", delta: "想一下" });
+      emit({ op: "end", blockId: "b1" });
+      emit({ op: "start", blockId: "b2", kind: "text" });
+      call.onDelta("你好");
+      emit({ op: "delta", blockId: "b2", delta: "你好" });
+      emit({ op: "end", blockId: "b2" });
+      return { text: "你好", messages: [], toolResults: [] };
+    };
+    const { app } = newApp(factory);
+    const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();
+    const s = await openStream(app, c.id);
+    await delay(15);
+
+    await postMsg(app, c.id, "hi");
+    await delayUntil(() => s.frames.some((f) => f.type === "done"));
+    await s.reader.cancel();
+
+    // 双发：block_* 与 legacy delta/done 并存
+    const bs = s.frames.filter((f) => f.type === "block_start").map((f) => `${f.blockId}:${f.kind}`);
+    expect(bs).toEqual(["b1:thinking", "b2:text"]);
+    expect(s.frames.filter((f) => f.type === "block_delta").map((f) => f.delta).join("")).toBe("想一下你好");
+    expect(s.frames.filter((f) => f.type === "block_end").length).toBe(2);
+    expect(s.frames.some((f) => f.type === "delta" && f.text === "你好")).toBe(true); // legacy 仍在
+
+    // 历史：无 session 文件（stub 不产 jsonl）→ DB 兜底包 blocks
+    const msgs = (await (await app.request(`/conversations/${c.id}/messages`)).json()) as { role: string; blocks: { kind: string; text?: string }[] }[];
+    expect(msgs.map((m) => [m.role, m.blocks[0].kind])).toEqual([["user", "text"], ["assistant", "text"]]);
+    expect(msgs[1].blocks[0]).toEqual({ kind: "text", text: "你好" });
+  });
+});

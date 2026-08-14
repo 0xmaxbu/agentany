@@ -9,6 +9,19 @@ import type { SandboxSpec, SpawnPlan } from "./sandbox";
 
 // Scheme 字符串字面量（路径来自 config，非用户输入；仍转义 " 与 \）。
 const q = (s: string): string => JSON.stringify(s);
+// REPO_ROOT 带尾斜杠（URL pathname 派生）——拼子路径须先去掉，否则 `a//b` 双斜杠 subpath 匹配不上。
+const repoRoot = REPO_ROOT.replace(/\/+$/, "");
+
+/** 各已放行目录在 repoRoot 内的祖先目录条目（含自身）→ literal 放行行（去重、稳定序）。 */
+function ancestorLiterals(root: string, dirs: string[]): string[] {
+  const out = new Set<string>([root]);
+  for (const d of dirs) {
+    if (!d.startsWith(root + "/")) continue;
+    const parts = d.slice(root.length + 1).split("/");
+    for (let i = 1; i <= parts.length; i++) out.add(root + "/" + parts.slice(0, i).join("/"));
+  }
+  return [...out].sort().map((p) => `(allow file-read* (literal ${q(p)}))`);
+}
 
 export function wrapSpawnSeatbelt(spec: SandboxSpec): SpawnPlan {
   const profile = seatbeltProfile(spec);
@@ -41,6 +54,21 @@ function seatbeltProfile(spec: SandboxSpec): string {
     `(allow file-read* (subpath ${q(repoSkillsDir())}))`,
     ...rw.map((p) => `(allow file-read* (subpath ${q(p)}))`),
     ...ro.map((p) => `(allow file-read* (subpath ${q(p)}))`),
+    // pi 本体装进 repo node_modules（#20 后 bun run 的 PATH 头部解析到本地 pi）——其加载链
+    // （dist/pi-ai/jiti…经 bun .bun 符号链接库）全在 REPO_ROOT 下，不放行则扩展加载崩
+    // （Cannot find module './bridge-core'）。只读放行 node_modules：公共包代码无密钥；
+    // .env 在 REPO_ROOT 根、db 在 DATA_DIR，仍被上面 deny 盖住。
+    `(allow file-read* (subpath ${q(repoRoot + "/node_modules")}))`,
+    `(allow file-read* (subpath ${q(repoRoot + "/apps/server/node_modules")}))`,
+    // realpath/lstat 要读路径上每个目录【条目本身】——deny subpath 连条目都盖住（EPERM lstat）。
+    // 对所有已放行目录补「repoRoot 内祖先链」的 literal 放行：只放目录名级元数据（可 readdir 见文件名），
+    // 目录下文件内容仍由上面 deny 盖（无 literal/subpath 命中）。
+    ...ancestorLiterals(repoRoot, [
+      repoRoot + "/node_modules",
+      repoRoot + "/apps/server/node_modules",
+      repoSkillsDir(),
+      ...ro,
+    ]),
   ];
 
   // home：**不广拒** ~——pi/node 装在 ~/.nvm 等处，广拒会让沙箱内 pi 起不来。
