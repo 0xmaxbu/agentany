@@ -1,11 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 // dev：proxy 到后端（同源、免 CORS）。prod 经反代或服务端托管。
 const BACKEND = process.env.AGENTANY_BACKEND ?? "http://127.0.0.1:3000";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     host: "127.0.0.1",
     port: 5173,
@@ -17,6 +18,10 @@ export default defineConfig({
       "/workflows": BACKEND,
       "/runs": BACKEND,
       "/feedback": BACKEND,
+      "/auth": BACKEND, // f2 登录（POST /auth/login / logout）
+      "/me": BACKEND, // f2 身份探测（GET /me——dev 阀未设时 200 匿名直进）
+      "/users": BACKEND, // f4 管理页预留
+      "/workspaces": BACKEND, // f2 会话列表按 ws 分组（GET /workspaces）
     },
   },
 });
