@@ -23,16 +23,18 @@
 
 ## M4 — 定时任务（待实现）
 
-- [ ] chat 说「每 4 小时去 xx 网站读新闻发摘要」→ LLM 任务卡（cron 人类可读 + 未来 3 次执行时间）→ 用户确认 → 入库
-- [ ] 频率下限强校验：LLM 错解成 <1h 间隔 → 服务端拒（任务卡前）
+- [ ] chat 说「每 4 小时去 xx 网站读新闻发摘要」→ LLM 任务卡（display_name + cron 人类可读 + 未来 3 次执行时间）→ 用户确认 → 入库
+- [ ] 频率下限强校验：LLM 错解成 <1h 间隔 → 服务端拒（bridge 层拦 + API 层 422 双保险）
 - [ ] member 自建自批：任务卡确认即建，无 admin 参与
 - [ ] CommandPolicy：deny 任务拒建；require_approval 任务发审批卡给 admin，批后入库
-- [ ] 到点执行（测试可控时钟）：产出出现在产出会话，含目标摘要
-- [ ] 产出会话挂任务同 ws；多次执行产出累积可回看
+- [ ] 到点执行（clock 注入假钟测试）：产出出现在产出会话（标题=display_name），含目标摘要
+- [ ] 任务执行走 runTurn 同构（enqueueEventTurn）；任务 pi 无 bridge（无交互工具）、tavily 保留
+- [ ] 产出文件：任务写了文件（tool_use 记录收集）→ 产出消息带下载链接 → 登录态浏览器可打开（auth 保护）
+- [ ] system 任务（蒸馏 seed）：无产出会话，执行日志在管理页看；未读数 badge（点开即清）
 - [ ] 对话改任务：「改成每 2 小时」→ LLM 定位旧任务 → 新任务卡确认 → 生效
 - [ ] member 在右侧面板看/停/删自己的任务；admin 管理页管全部任务
-- [ ] system 任务（蒸馏 seed）经 chat 删/停 → 硬拒；admin UI 可管
-- [ ] 手动调用：admin 页按钮 → 立即执行一次 → 历史出现记录
+- [ ] system 任务经 chat 删/停 → 硬拒；admin UI 可管
+- [ ] 手动调用：按钮 → 立即执行一次（trigger=manual，不推进 nextFireAt）→ 历史出现记录
 - [ ] missed：停机跨窗口 → 记 missed 行不补跑；数据留下次（蒸馏场景）
 - [ ] skipped_overrun：上轮未完 → 跳过记录
 - [ ] task_runs 历史：状态/耗时/产出引用，页面展开可见
