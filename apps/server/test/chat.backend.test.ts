@@ -52,16 +52,24 @@ function countingFactory(): { factory: () => ConfiguredRunPiStream; maxActive: (
     factory: () => async (call) => {
       active++; max = Math.max(max, active);
       try {
-        for (const t of (call.prompt.match(/.{1,3}/g) ?? [call.prompt])) {
-          call.onDelta(t);
-          await delay(10);
-        }
+        emitTextBlock(call, call.prompt, call.prompt.match(/.{1,3}/g) ?? [call.prompt]);
+        await delay(10);
         return { text: call.prompt, messages: [], toolResults: [] };
       } finally { active--; }
     },
     maxActive: () => max,
   };
 }
+
+
+// f3/ADR-0019：stub 统一发 block 三帧（legacy onDelta 已删）。流式逐 token 或一次性。
+const emitTextBlock = (call: { onBlock?: (b: import("../src/blocks").StreamBlock) => void }, text: string, tokens?: string[]): void => {
+  const emit = call.onBlock ?? (() => {});
+  const id = `b_${text.length}`;
+  emit({ op: "start", blockId: id, kind: "text" });
+  for (const t of tokens ?? [text]) emit({ op: "delta", blockId: id, delta: t });
+  emit({ op: "end", blockId: id });
+};
 
 function newApp(streamFactory: () => ConfiguredRunPiStream) {
   const store = new WorkflowStore(openDbMigrated(":memory:"));
@@ -101,7 +109,7 @@ describe("chat 切片② · 事件驱动（POST=202 + 持久流）", () => {
     expect(r.status).toBe(202);
 
     await delayUntil(() => s.frames.some((f) => f.type === "done"));
-    const deltas = s.frames.filter((f) => f.type === "delta").map((f) => f.text).join("");
+    const deltas = s.frames.filter((f) => f.type === "block_delta").map((f: any) => f.delta).join("");
     expect(deltas).toBe("HelloWorld");
     expect(s.frames.some((f) => f.type === "user_message" && f.content === "HelloWorld")).toBe(true);
     expect(s.frames.some((f) => f.type === "done")).toBe(true);
@@ -109,6 +117,24 @@ describe("chat 切片② · 事件驱动（POST=202 + 持久流）", () => {
 
     const msgs: any = await (await app.request(`/conversations/${c.id}/messages`)).json();
     expect(msgs.map((m: any) => [m.role, m.content])).toEqual([["user", "HelloWorld"], ["assistant", "HelloWorld"]]);
+  });
+
+  test("后端重启语义：旧会话 + 全新 app 实例（TurnTrigger attached 空）→ POST message 兜底 attach，turn 正常起", async () => {
+    // 复现实机 bug（2026-08-15）：turnTrigger.attach 只在建会话时调；attached 是内存 Set——
+    // 后端重启后旧会话永不重订阅 → user_message 无人响应 → turn 不跑（消息落 DB 但 pi session 无）。
+    // 模拟：app1 建会话（attach 发生）→ app2 = 同 store + 全新实例（attached 空）→ app2 POST 消息。
+    const store = new WorkflowStore(openDbMigrated(":memory:"));
+    const app1 = createApp(fullDeps(store, { runPiStreamFactory: countingFactory().factory }));
+    const c: any = await (await app1.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();
+    const app2 = createApp(fullDeps(store, { runPiStreamFactory: countingFactory().factory })); // 「重启」
+    const s = await openStream(app2, c.id);
+    await delay(15);
+    const r = await postMsg(app2, c.id, "after-restart");
+    expect(r.status).toBe(202);
+    await delayUntil(() => s.frames.some((f) => f.type === "done"), 5000);
+    const deltas = s.frames.filter((f: any) => f.type === "block_delta").map((f: any) => f.delta).join("");
+    expect(deltas).toBe("after-restart"); // turn 真的跑了（POST 路由兜底 attach——修前这里空串）
+    await s.reader.cancel();
   });
 
   test("空 content → 400", async () => {
@@ -129,8 +155,9 @@ describe("chat 切片② · per-conversation FIFO 串行", () => {
     await postMsg(app, c.id, "BBBB");
     await delayUntil(() => s.frames.filter((f) => f.type === "done").length >= 2);
     expect(cf.maxActive()).toBe(1); // 串行
-    const dones = s.frames.filter((f) => f.type === "done");
-    expect(dones.map((f) => f.text)).toEqual(["AAAA", "BBBB"]); // 各自完整、不交叉
+    // 各自完整、不交叉：done 前已收齐各自 block 流（legacy done.text 已删——按 block_delta 到齐判）
+    const texts = s.frames.filter((f: any) => f.type === "block_delta").map((f: any) => f.delta).join("");
+    expect(texts).toBe("AAAABBBB");
     await s.reader.cancel();
   });
 });
@@ -156,7 +183,7 @@ describe("chat 切片② · 跨会话并行", () => {
 describe("chat 切片② · abort", () => {
   test("abort 当前 turn → 流以 done.aborted 收尾、不写助手消息", async () => {
     const hangFactory = (): ConfiguredRunPiStream => async (call) => {
-      call.onDelta("partial-");
+      emitTextBlock(call, "partial-");
       if (call.signal) {
         await new Promise<void>((res) => {
           const t = setTimeout(res, 30000);
@@ -186,7 +213,7 @@ describe("chat 切片② · abort", () => {
 describe("chat 切片② · 队列上限 429", () => {
   test("同会话 pending > 5 → 第 6 条 429", async () => {
     const slowFactory = (): ConfiguredRunPiStream => async (call) => {
-      call.onDelta("x");
+      emitTextBlock(call, "x");
       await delay(50);
       return { text: "x", messages: [], toolResults: [] };
     };
@@ -214,7 +241,6 @@ describe("#20 · block 三帧 + 历史双源", () => {
       emit({ op: "delta", blockId: "b1", delta: "想一下" });
       emit({ op: "end", blockId: "b1" });
       emit({ op: "start", blockId: "b2", kind: "text" });
-      call.onDelta("你好");
       emit({ op: "delta", blockId: "b2", delta: "你好" });
       emit({ op: "end", blockId: "b2" });
       return { text: "你好", messages: [], toolResults: [] };
@@ -228,12 +254,11 @@ describe("#20 · block 三帧 + 历史双源", () => {
     await delayUntil(() => s.frames.some((f) => f.type === "done"));
     await s.reader.cancel();
 
-    // 双发：block_* 与 legacy delta/done 并存
+    // block_* 三帧（f3 后唯一增量通道）
     const bs = s.frames.filter((f) => f.type === "block_start").map((f) => `${f.blockId}:${f.kind}`);
     expect(bs).toEqual(["b1:thinking", "b2:text"]);
     expect(s.frames.filter((f) => f.type === "block_delta").map((f) => f.delta).join("")).toBe("想一下你好");
     expect(s.frames.filter((f) => f.type === "block_end").length).toBe(2);
-    expect(s.frames.some((f) => f.type === "delta" && f.text === "你好")).toBe(true); // legacy 仍在
 
     // 历史：无 session 文件（stub 不产 jsonl）→ DB 兜底包 blocks
     const msgs = (await (await app.request(`/conversations/${c.id}/messages`)).json()) as { role: string; blocks: { kind: string; text?: string }[] }[];

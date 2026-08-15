@@ -1,6 +1,6 @@
 // 后端 HTTP/SSE 封装（ticket #13 事件驱动）。dev 经 Vite proxy（同源）；prod 经反代。
 // f2：apiFetch 统一 token 注入 + 401 拦截（onUnauthorized 回调→auth store 注册，避免 api↔store 循环依赖）。
-import { parseSSEFrames, type SSEEvent } from "./sse";
+import { parseSSEFrames, type Block, type SSEEvent } from "./sse";
 import { getToken } from "./lib/token";
 
 // Vite 注入（VITE_DEV_TOKEN 来自 AGENTANY_DEV_TOKEN）；未设则 undefined（dev 放行）。
@@ -41,8 +41,13 @@ export interface ConversationRow {
 export interface Workspace {
   id: string; slug: string; name: string; allUsers: boolean; createdAt: string; updatedAt: string;
 }
+// GET /conversations/:id/messages（#20 双源：pi session 优先、DB 兜底）统一 HistoryMessage 形状
 export interface Message {
-  id: number; conversationId: string; role: "user" | "assistant"; content: string; createdAt: string;
+  id: number | string; // pi session entry id（string）或 DB 自增（兜底源）
+  role: "user" | "assistant";
+  content: string; // text blocks 拼接（冗余字段——前端不渲染，#20 比对用）
+  blocks: Block[];
+  createdAt: string;
 }
 
 // HITL 提问（ticket #16 ask_user + #18 审批门）：ask 卡（kind=ask）+ 审批卡（kind=approval）。

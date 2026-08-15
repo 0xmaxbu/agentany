@@ -40,8 +40,7 @@ export function makeRunPi(opts: MakeRunPiOpts): ConfiguredRunPi {
 // 每轮 prompt=仅新用户消息（pi session 持历史、不重喂）。call.signal 来自 per-conv 队列的 AbortController。
 export type ConfiguredRunPiStream = (call: {
   prompt: string;
-  onDelta: (text: string) => void;
-  onBlock?: (b: import("../blocks").StreamBlock) => void; // #20：三帧流（thinking/tool_use/tool_result）
+  onBlock?: (b: import("../blocks").StreamBlock) => void; // f3/ADR-0019：三帧流是唯一增量通道
   timeoutMs?: number;
   signal?: AbortSignal;
   bridge?: BridgeChannel; // 每轮 bridge 通道（#11）
@@ -59,7 +58,6 @@ export function makeRunPiStream(opts: MakeRunPiStreamOpts): ConfiguredRunPiStrea
       extensions: opts.extensions,
       timeoutMs: call.timeoutMs,
       signal: call.signal,
-      onDelta: call.onDelta,
       onBlock: call.onBlock,
       appendSystemPrompt: call.appendSystemPrompt,
       // #11：bridge 通道——per-turn nonce 经 env 注入 pi。bridge-core 只读 url(含端口)+nonce，

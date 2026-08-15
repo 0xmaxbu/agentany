@@ -35,12 +35,12 @@ export async function runTurn(
 ): Promise<void> {
   const conv = deps.store.getConversation(conversationId);
   if (!conv) { send({ type: "error", message: "conversation not found" }); return; }
+  if (process.env.AGENTANY_DEBUG_BLOCKS) console.error(`[dbg-turn] runTurn ${conversationId}: "${userContent.slice(0, 40)}"`);
 
   const makeStream = deps.runPiStreamFactory ?? makeRunPiStream;
   const runPiStream = makeStream({ workspaceId: conv.workspaceId, sessionId: `chat-${conv.id}`, extensions: CHAT_EXTENSIONS });
 
   const nonce = issueNonce(conv.id); // per-turn bridge 令牌（#11）；finally 吊销
-  let full = "";
   // 每轮注入（#15 角色 + #17 项目背景/工作流目录/挂起 run + #16 pending ask 判答）。
   // #18：只注入 kind='ask' 的提问——审批卡走 /approvals（人类点），不进 pi 判答。
   const cwd = resolveScopePaths(scopeOf(conv.workspaceId), conv.workspaceId).cwd;
@@ -52,12 +52,12 @@ export async function runTurn(
       runId: q.runId ?? "", prompt: q.prompt, options: (q.options as string[]) ?? [], resumeSchema: q.resumeSchema,
     })),
   });
+  let result;
   try {
-    await runPiStream({
+    result = await runPiStream({
       prompt: userContent, // pi session chat-<conversationId> 持历史，每轮只送新消息（事件 turn 时 = 事件 prompt）
       signal,
-      onDelta: (t) => { full += t; send({ type: "delta", text: t }); },
-      // #20：block 三帧（thinking/tool_use/tool_result）——与 legacy delta 双发，f3 前端切换后删 legacy
+      // f3/ADR-0019：block 三帧是唯一增量通道（legacy delta 已删）；done 不带全文（text 字段已删）
       onBlock: (b) => {
         if (b.op === "start") send({ type: "block_start", blockId: b.blockId, kind: b.kind, meta: b.meta });
         else if (b.op === "delta") send({ type: "block_delta", blockId: b.blockId, delta: b.delta });
@@ -68,6 +68,7 @@ export async function runTurn(
     });
   } catch (e) {
     // 真 pi：abort → 子进程被杀 → reject。stub：可能 resolve（下面 signal.aborted 兜底）。
+    if (process.env.AGENTANY_DEBUG_BLOCKS) console.error(`[dbg-turn] FAILED ${conversationId}:`, e);
     if (signal.aborted) { send({ type: "done", aborted: true }); return; }
     send({ type: "error", message: (e as Error)?.message ?? String(e) });
     return;
@@ -76,6 +77,7 @@ export async function runTurn(
   }
 
   if (signal.aborted) { send({ type: "done", aborted: true }); return; } // stub resolve 但已 abort
-  const msgId = deps.store.appendMessage({ conversationId: conv.id, role: "assistant", content: full });
-  send({ type: "done", messageId: msgId, text: full });
+  // 冗余落库（#20：messages 表保留供差异比对；pi session 才是历史真相源）
+  const msgId = deps.store.appendMessage({ conversationId: conv.id, role: "assistant", content: result.text });
+  send({ type: "done", messageId: msgId });
 }

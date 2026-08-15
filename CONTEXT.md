@@ -43,6 +43,8 @@
 | 资料 (Materials) | 用户在会话中上传的文件，落入该会话 workspace 的服务器工作区；可被 agent 当上下文读、喂给触发的「能力」、或用文档工具加工 |
 | 用户 (User) | 内部团队成员（设计师、客户经理等）。每人一个账号（用户名+密码），由管理员开通/注销；不接 SSO |
 | Pi 会话 (Pi session) | Pi 自己的跨轮记忆文件（`--session-id`+`--session-dir` 存盘），按 sessionId 定位。**不同于「会话(Conversation)」**——一个 Conversation 确定性派生一个 Pi session（`chat-<conversationId>`），但 Pi session 是技术物件、Conversation 是产品概念。工作流运行也各派生一个（`run-<runId>`）。 |
+| 块 (Block) | 消息内容的原子单位（ADR-0019）：一条消息 = blocks 序列，四件套 `text`/`thinking`/`tool_use`/`tool_result`。历史（pi session 读取）与实时（SSE 三帧）同构——同一 Block 形状、同一渲染组件。前端消息模型的单一真相（取代旧「纯文本 content」）。 |
+| 块三帧 (Block frames) | 实时块流的三种 SSE 帧（ADR-0019）：`block_start`（含 kind/meta）、`block_delta`（增量）、`block_end`（关块）。blockId 标识**块**；turn 边界仍由 `done` 帧表达（块边界 ≠ turn 边界）。legacy `delta` 帧已删（双发收口）。 |
 | chat 界面 (Chat surface) | agentany 的主产品面：用户在此对话、上传资料、触发能力。闲聊流式走 SSE（ADR-0003），单进程 Hono + React/Vite 托管。 |
 | 基础通用工具 (Basic universal tool) | 每个 chat turn 默认开启的工具扩展（如搜索 `tavily-search/web-search`），无需用户/工作流显式声明。其余工具型 skill 走自动发现、pi 按需用。 |
 | 自动发现 (Auto-discovery) | pi 的标准能力发现：每次运行自动扫全部 repo skills（ADR-0005），模型按需调用。工作流经**桥接工具**同样被 pi 自动发现、从 NL 触发（ADR-0009）。 |

@@ -113,7 +113,9 @@ describe("scope.路由建会话", () => {
 describe("scope.公司 ws 会话跑通 turn（事件驱动 / ticket #13）", () => {
   test("公司 ws 会话 POST message(202) → 持久流收 delta→done", async () => {
     const echo = (): ConfiguredRunPiStream => async (call) => {
-      call.onDelta(call.prompt);
+      call.onBlock?.({ op: "start", blockId: "b1", kind: "text" });
+      call.onBlock?.({ op: "delta", blockId: "b1", delta: call.prompt });
+      call.onBlock?.({ op: "end", blockId: "b1" });
       return { text: call.prompt, messages: [], toolResults: [] };
     };
     const store = new WorkflowStore(openDbMigrated(":memory:"));
@@ -155,7 +157,7 @@ describe("scope.公司 ws 会话跑通 turn（事件驱动 / ticket #13）", () 
       await new Promise<void>((res) => setTimeout(res, 15));
     }
     await reader.cancel();
-    expect(frames.filter((f) => f.type === "delta").map((f) => f.text).join("")).toBe("hi-general");
+    expect(frames.filter((f: any) => f.type === "block_delta").map((f: any) => f.delta).join("")).toBe("hi-general");
     expect(frames.at(-1)!.type).toBe("done");
   });
 });

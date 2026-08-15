@@ -20,6 +20,25 @@ const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // slice① 默认 token 序列（markdown）—— 非 workflow 场景的确定性回复。
 const TOKENS = ["# ", "你好", "，世界", "\n\n**", "测试", "**", "\n\n`", "code", "`"];
 
+// f3/ADR-0019：stub 全量改发 block 三帧（text block 流式 = start→逐 token delta→end）。
+// legacy onDelta 已删——e2e 文本断言经 block 流落进 .bubble.assistant，DOM 契约不变。
+const streamText = async (call: { onBlock?: (b: import("./blocks").StreamBlock) => void }, full: string, tokens: string[]) => {
+  const id = `b_${full.length}_${full.slice(0, 8)}`;
+  call.onBlock?.({ op: "start", blockId: id, kind: "text" });
+  for (const t of tokens) {
+    call.onBlock?.({ op: "delta", blockId: id, delta: t });
+    await delay(150); // 逐 token 节奏（chat.spec 增量断言「中间态 < 终态」依赖）
+  }
+  call.onBlock?.({ op: "end", blockId: id });
+};
+// 一次性完整文本（无流式必要——workflow 文案不在增量断言路径）
+const emitText = (call: { onBlock?: (b: import("./blocks").StreamBlock) => void }, text: string) => {
+  const id = `b_${text.length}`;
+  call.onBlock?.({ op: "start", blockId: id, kind: "text" });
+  call.onBlock?.({ op: "delta", blockId: id, delta: text });
+  call.onBlock?.({ op: "end", blockId: id });
+};
+
 // run 用 stub factory（synthetic 纯程序步不调 runPi；兜底，正常永不被调）。
 const stubRunPiFactory = (): ConfiguredRunPi => async () => ({ text: "", messages: [], toolResults: [] });
 
@@ -44,19 +63,33 @@ const scriptedStubFactory = (): ConfiguredRunPiStream => async (call): Promise<R
   };
 
   // 顺序敏感：先系统事件 turn（prompt 含事件标志），再用户 turn。
+  // f3 blocks.spec：完整四件套序列（thinking→tool_use→tool_result→text）驱动前端块渲染断言。
+  if (call.prompt.includes("看过程")) {
+    const b = call.onBlock ?? (() => {});
+    b({ op: "start", blockId: "k1", kind: "thinking" });
+    b({ op: "delta", blockId: "k1", delta: "先看文件再回答" });
+    b({ op: "end", blockId: "k1" });
+    b({ op: "start", blockId: "t1", kind: "tool_use", meta: { toolCallId: "t1", name: "read", arguments: { path: "src/app.ts" } } });
+    b({ op: "end", blockId: "t1" });
+    b({ op: "start", blockId: "r_t1", kind: "tool_result", meta: { toolCallId: "t1", toolName: "read", isError: false } });
+    b({ op: "delta", blockId: "r_t1", delta: "export const A = 1;" });
+    b({ op: "end", blockId: "r_t1" });
+    emitText(call, "看完了，一切正常。");
+    return { text: "看完了，一切正常。", messages: [], toolResults: [] };
+  }
   if (call.prompt.includes("挂起待决策")) {
     // run_suspended 事件 turn → 建提问卡（ask_user）
     const runId = runIdFrom(call.prompt) ?? runIdFrom(append);
-    call.onDelta("工作流挂起，需要你决策。");
+    emitText(call, "工作流挂起，需要你决策。");
     if (runId) await post("/ask_user", { runId, prompt: "选哪个？", options: ["accept", "redirect"] });
     return { text: "工作流挂起，需要你决策。", messages: [], toolResults: [] };
   }
   if (call.prompt.includes("已完成")) {
-    call.onDelta("工作流已完成，这是总结。");
+    emitText(call, "工作流已完成，这是总结。");
     return { text: "工作流已完成，这是总结。", messages: [], toolResults: [] };
   }
   if (call.prompt.includes("失败")) {
-    call.onDelta("工作流失败，已告知用户。");
+    emitText(call, "工作流失败，已告知用户。");
     return { text: "工作流失败，已告知用户。", messages: [], toolResults: [] };
   }
   // 用户 turn：回答待处理提问 → resume。用元素前缀过滤（CHAT_SYSTEM_PROMPT 含「[待处理提问]」指引文本，
@@ -64,22 +97,30 @@ const scriptedStubFactory = (): ConfiguredRunPiStream => async (call): Promise<R
   const pendingAskEl = (call.appendSystemPrompt ?? []).find((s) => s.startsWith("[待处理提问] 工作流"));
   if (pendingAskEl) {
     const runId = runIdFrom(pendingAskEl);
-    call.onDelta("好的，按你的选择续跑。");
+    emitText(call, "好的，按你的选择续跑。");
     if (runId) await post("/run/resume", { runId, resumeData: { decision: "accept" } });
     return { text: "好的，按你的选择续跑。", messages: [], toolResults: [] };
   }
   if (call.prompt.includes("合成") || call.prompt.includes("跑")) {
     // 用户要求跑工作流 → start_workflow（synthetic=allow 直跑）
-    call.onDelta("好的，启动合成三步工作流。");
+    emitText(call, "好的，启动合成三步工作流。");
     await post("/run/start", { workflowId: "synthetic-3step", input: {} });
     return { text: "好的，启动合成三步工作流。", messages: [], toolResults: [] };
   }
   // default：slice① TOKENS（保 chat/history/markdown spec 绿）
-  for (const t of TOKENS) { call.onDelta(t); await delay(150); }
+  await streamText(call, TOKENS.join(""), TOKENS);
   return { text: TOKENS.join(""), messages: [], toolResults: [] };
 };
 
 const db = openDbMigrated();
+// f2：seed dev 用户行并把 AGENTANY_DEV_USER 指到其 id——前端 bootstrap 调 GET /me 需真返 200
+// （dev 阀放行 identity 默认 id="dev-user"，users 表无此行则 /me 404 → 前端误判未登录挡住 e2e）。
+{
+  const us = new UserStore(db);
+  const existing = us.getUserByUsername("dev-user");
+  const u = existing ?? (await us.createUser({ username: "dev-user", password: "e2e-no-login", displayName: "E2E Dev" }));
+  process.env.AGENTANY_DEV_USER = u.id; // middleware 每请求读 env——identity 对齐 seed 行
+}
 const store = new WorkflowStore(db);
 const eventBus = new EventBus(); // 【硬条件·#19】共享：bridge run 事件 → TurnTrigger 自动 turn（不传则全链断）
 const runRegistry = new RunRegistry({ store, eventBus, runPiFactory: stubRunPiFactory });

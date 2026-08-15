@@ -12,9 +12,9 @@ describe("EventBus", () => {
     const b: unknown[] = [];
     bus.subscribe("c1", (f) => a.push(f));
     bus.subscribe("c1", (f) => b.push(f));
-    bus.publish("c1", { type: "delta", text: "1" });
-    expect(a).toEqual([{ type: "delta", text: "1" }]);
-    expect(b).toEqual([{ type: "delta", text: "1" }]);
+    bus.publish("c1", { type: "block_delta", blockId: "b1", delta: "1" });
+    expect(a).toEqual([{ type: "block_delta", blockId: "b1", delta: "1" }]);
+    expect(b).toEqual([{ type: "block_delta", blockId: "b1", delta: "1" }]);
   });
 
   test("取消订阅后不再收", () => {
@@ -22,7 +22,7 @@ describe("EventBus", () => {
     const a: unknown[] = [];
     const unsub = bus.subscribe("c1", (f) => a.push(f));
     unsub();
-    bus.publish("c1", { type: "delta", text: "x" });
+    bus.publish("c1", { type: "block_delta", blockId: "b1", delta: "x" });
     expect(a).toEqual([]);
   });
 
@@ -30,9 +30,9 @@ describe("EventBus", () => {
     const bus = new EventBus();
     const a: unknown[] = [];
     bus.subscribe("c1", (f) => a.push(f));
-    bus.publish("c2", { type: "delta", text: "x" }); // 别的会话
+    bus.publish("c2", { type: "block_delta", blockId: "b1", delta: "x" }); // 别的会话
     expect(a).toEqual([]);
-    expect(() => bus.publish("nope", { type: "delta", text: "x" })).not.toThrow(); // 无订阅者
+    expect(() => bus.publish("nope", { type: "block_delta", blockId: "b1", delta: "x" })).not.toThrow(); // 无订阅者
   });
 });
 

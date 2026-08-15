@@ -20,7 +20,9 @@ describe("TurnTrigger · EventBus 扇出驱动 turn（#13）", () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
     store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     const stubStream = (): ConfiguredRunPiStream => async (call) => {
-      call.onDelta("PONG");
+      call.onBlock?.({ op: "start", blockId: "b1", kind: "text" });
+        call.onBlock?.({ op: "delta", blockId: "b1", delta: "PONG" });
+        call.onBlock?.({ op: "end", blockId: "b1" });
       return { text: "PONG", messages: [], toolResults: [] };
     };
     const deps = fullDeps(store, { runPiStreamFactory: stubStream });
@@ -35,7 +37,7 @@ describe("TurnTrigger · EventBus 扇出驱动 turn（#13）", () => {
     eventBus.publish("c1", { type: "user_message", id: 1, content: "hi" }); // 投帧 → 应驱动 turn
     await delayUntil(() => frames.some((f) => f.type === "done"));
 
-    expect(frames.some((f) => f.type === "delta" && f.text === "PONG")).toBe(true);
+    expect(frames.some((f: any) => f.type === "block_delta" && f.delta === "PONG")).toBe(true);
     expect(frames.some((f) => f.type === "done")).toBe(true);
   });
 
@@ -82,7 +84,9 @@ describe("TurnTrigger · run_* 边界事件驱动自动 turn（#15）", () => {
     let turnCount = 0, lastPrompt = "", lastAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       turnCount++; lastPrompt = call.prompt; lastAppend = (call as any).appendSystemPrompt;
-      call.onDelta("OK");
+      call.onBlock?.({ op: "start", blockId: "b1", kind: "text" });
+        call.onBlock?.({ op: "delta", blockId: "b1", delta: "OK" });
+        call.onBlock?.({ op: "end", blockId: "b1" });
       return { text: "OK", messages: [], toolResults: [] };
     };
     const deps = fullDeps(store, { runPiStreamFactory: factory });
@@ -140,7 +144,9 @@ describe("TurnTrigger · pending 提问每轮注入（#16）", () => {
     let capturedAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt;
-      call.onDelta("x");
+      call.onBlock?.({ op: "start", blockId: "b1", kind: "text" });
+        call.onBlock?.({ op: "delta", blockId: "b1", delta: "x" });
+        call.onBlock?.({ op: "end", blockId: "b1" });
       return { text: "x", messages: [], toolResults: [] };
     };
     const deps = fullDeps(store, { runPiStreamFactory: factory });
@@ -165,7 +171,9 @@ describe("TurnTrigger · pending 提问每轮注入（#16）", () => {
     let capturedAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt;
-      call.onDelta("x");
+      call.onBlock?.({ op: "start", blockId: "b1", kind: "text" });
+        call.onBlock?.({ op: "delta", blockId: "b1", delta: "x" });
+        call.onBlock?.({ op: "end", blockId: "b1" });
       return { text: "x", messages: [], toolResults: [] };
     };
     const deps = fullDeps(store, { runPiStreamFactory: factory });
@@ -189,7 +197,9 @@ describe("TurnTrigger · pending 提问每轮注入（#16）", () => {
     let capturedAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt;
-      call.onDelta("x");
+      call.onBlock?.({ op: "start", blockId: "b1", kind: "text" });
+        call.onBlock?.({ op: "delta", blockId: "b1", delta: "x" });
+        call.onBlock?.({ op: "end", blockId: "b1" });
       return { text: "x", messages: [], toolResults: [] };
     };
     const deps = fullDeps(store, { runPiStreamFactory: factory });
@@ -218,7 +228,9 @@ describe("TurnTrigger · #17 每轮注入（项目背景 / 工作流目录 / 挂
     let capturedAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt;
-      call.onDelta("x");
+      call.onBlock?.({ op: "start", blockId: "b1", kind: "text" });
+        call.onBlock?.({ op: "delta", blockId: "b1", delta: "x" });
+        call.onBlock?.({ op: "end", blockId: "b1" });
       return { text: "x", messages: [], toolResults: [] };
     };
     const deps = fullDeps(store, { runPiStreamFactory: factory });
@@ -241,7 +253,9 @@ describe("TurnTrigger · #17 每轮注入（项目背景 / 工作流目录 / 挂
     let capturedAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt;
-      call.onDelta("x");
+      call.onBlock?.({ op: "start", blockId: "b1", kind: "text" });
+        call.onBlock?.({ op: "delta", blockId: "b1", delta: "x" });
+        call.onBlock?.({ op: "end", blockId: "b1" });
       return { text: "x", messages: [], toolResults: [] };
     };
     const deps = fullDeps(store, { runPiStreamFactory: factory });
@@ -264,7 +278,9 @@ describe("TurnTrigger · #17 每轮注入（项目背景 / 工作流目录 / 挂
     let capturedAppend: string[] | undefined;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt;
-      call.onDelta("x");
+      call.onBlock?.({ op: "start", blockId: "b1", kind: "text" });
+        call.onBlock?.({ op: "delta", blockId: "b1", delta: "x" });
+        call.onBlock?.({ op: "end", blockId: "b1" });
       return { text: "x", messages: [], toolResults: [] };
     };
     const deps = fullDeps(store, { runPiStreamFactory: factory });

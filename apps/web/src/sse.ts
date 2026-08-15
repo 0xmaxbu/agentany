@@ -1,10 +1,15 @@
 // SSE wire-format parser（ADR-0009 BE-Q4 / ticket #13 持久流）：单通道 JSON-`type`。纯函数、可单测。
 // 与「字节怎么到」（fetch+ReadableStream）解耦——本文件只管「块什么意思」。
+import { BLOCK_FRAME, type BlockKind } from "./lib/blocks";
+export { type Block, type BlockKind } from "./lib/blocks";
 
 export type SSEEvent =
   | { type: "user_message"; id: number; content: string }
-  | { type: "delta"; text: string }
-  | { type: "done"; messageId?: number; text?: string; aborted?: boolean }
+  // f3/ADR-0019 块三帧：blockId 标识块（非 turn）；turn 边界仍由 done 表达
+  | { type: typeof BLOCK_FRAME.start; blockId: string; kind: BlockKind; meta?: Record<string, unknown> }
+  | { type: typeof BLOCK_FRAME.delta; blockId: string; delta: string }
+  | { type: typeof BLOCK_FRAME.end; blockId: string }
+  | { type: "done"; messageId?: number; aborted?: boolean }
   | { type: "error"; message: string }
   // ticket #14：工作流 run 两级事件（持久流承载，前端做基础进度渲染）
   | { type: "run_started"; runId: string; workflowId: string }

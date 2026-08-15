@@ -23,10 +23,9 @@ export interface RunPiOptions {
   timeoutMs?: number;
 }
 
-// 流式版（chat 用，ADR-0009 Q3）：多一个 onDelta 回调；其余同 RunPiOptions。
+// 流式版（chat 用，ADR-0009 Q3 / f3 ADR-0019）：唯一增量回调 = onBlock 三帧（legacy onDelta 已删）。
 export interface RunPiStreamOptions extends RunPiOptions {
-  onDelta?: (text: string) => void;
-  onBlock?: (b: StreamBlock) => void; // #20：thinking/tool_use/tool_result 增量（三帧流；见 blocks.ts）
+  onBlock?: (b: StreamBlock) => void; // text/thinking/tool_use/tool_result 增量（见 blocks.ts）
 }
 
 function buildArgs(opts: RunPiOptions): string[] {
@@ -130,16 +129,13 @@ async function spawnPiCore(opts: RunPiStreamOptions): Promise<RunPiResult> {
       if (!line.trim()) return;
       let ev: any;
       try { ev = JSON.parse(line); } catch { return; }
-      // #20：block 三帧（text/thinking/tool_use/tool_result）——与 legacy onDelta 双发（f3 切换后删 legacy）
+      // f3/ADR-0019：block 三帧是唯一增量通道（legacy onDelta 已删）
+      if (process.env.AGENTANY_DEBUG_BLOCKS) console.error("[dbg-blocks] ev:", JSON.stringify(ev).slice(0, 300));
       if (opts.onBlock) for (const b of emitBlocks(ev)) opts.onBlock(b);
       switch (ev.type) {
         case "message_update": {
           const d = ev.assistantMessageEvent;
-          if (d && d.type === "text_delta") {
-            const piece = d.delta ?? "";
-            textBuf += piece;
-            opts.onDelta?.(piece); // 流式：边到边外吐（chat SSE）
-          }
+          if (d && d.type === "text_delta") textBuf += d.delta ?? ""; // 攒全文只供 RunPiResult.text（非流）
           break;
         }
         case "turn_end":

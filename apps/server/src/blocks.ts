@@ -76,24 +76,30 @@ export type BlockEmitter = (ev: any) => StreamBlock[];
 export const createBlockEmitter = (): BlockEmitter => {
   let n = 0;
   const bid = (): string => `b${++n}`;
-  let open: string | null = null; // 当前开放中的 text/thinking 块（pi 串行产出，同时至多一个）
+  // 按 contentIndex 跟踪开放块（真 pi 实测：text_start 可先于 thinking_end 到达——content 交错切换，
+  // 单一 open 指针会错关。key=contentIndex，delta/end 都带它，天然对位）。
+  const open = new Map<number, string>();
 
   return (ev) => {
     if (!ev || typeof ev !== "object") return [];
-    // assistant 消息内增量（text/thinking 交替；toolcall_end 自包含）
+    // assistant 消息内增量（text/thinking 交错；toolcall_end 自包含）
     if (ev.type === "message_update") {
       const d = ev.assistantMessageEvent;
       if (!d) return [];
-      if (d.type === "text_start") { open = bid(); return [{ op: "start", blockId: open, kind: "text" }]; }
-      if (d.type === "thinking_start") { open = bid(); return [{ op: "start", blockId: open, kind: "thinking" }]; }
+      const ci = typeof d.contentIndex === "number" ? d.contentIndex : -1;
+      if (d.type === "text_start" || d.type === "thinking_start") {
+        const id = bid();
+        open.set(ci, id);
+        return [{ op: "start", blockId: id, kind: d.type === "text_start" ? "text" : "thinking" }];
+      }
       if (d.type === "text_delta" || d.type === "thinking_delta") {
-        return open ? [{ op: "delta", blockId: open, delta: String(d.delta ?? "") }] : [];
+        const id = ci >= 0 ? open.get(ci) : [...open.values()].at(-1);
+        return id ? [{ op: "delta", blockId: id, delta: String(d.delta ?? "") }] : [];
       }
       if (d.type === "text_end" || d.type === "thinking_end") {
-        if (!open) return [];
-        const id = open;
-        open = null;
-        return [{ op: "end", blockId: id }];
+        const id = ci >= 0 ? open.get(ci) : [...open.values()].at(-1);
+        if (id && ci >= 0) open.delete(ci);
+        return id ? [{ op: "end", blockId: id }] : [];
       }
       if (d.type === "toolcall_end" && d.toolCall) {
         const tc = d.toolCall;
