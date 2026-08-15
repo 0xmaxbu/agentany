@@ -70,18 +70,18 @@ agentany 是设计公司的**内部 agent 执行面**：非技术成员（设计
 
 ### M4 — 定时任务
 
-**用户故事**：admin 配置每周经验蒸馏等周期性 LLM 任务，到点自动执行，无需人值守。
+**用户故事**：成员在 chat 里说「每 4 小时去 xx 网站读新闻发摘要」→ LLM 出任务卡确认 → 到点自动跑 → 产出出现在专属会话。
 
-- **边界（grill 敲定）**：cron **仅触发 LLM 可独立完成的任务**（无人值守、无 HITL 语义），**不触发工作流**（推翻早稿「自动跑品牌调研」设想）。
-- **任务形态（Q9 决议）**：定时任务 = 按计划跑一个**内部 skill**（如 `experience-distill`）——起 pi 子进程执行，复用沙箱/超时/审计，服务进程不直连 LLM API。
-- **两类 scope**：`system`（跨 workspace，挂系统实体——v1 落地，蒸馏即此类）/ `workspace`（挂单 workspace——**v1 只设计不实现**，chat 建 cron 自然属此类）。Skill 不属于任何 workspace，跨 ws 读写一律走**系统作用域**（见术语表），不建「SYSTEM WORKSPACE」实体（避免给 ADR-0018 无类型纯名单开类型洞）。
-- **创建双入口**：chat 对话（LLM 经工具建）/ admin UI——**服务端强制校验 admin 角色**，非 admin 工具调用返 403（注入面不区分，与 M2 审批门同一姿态）。
-- **专用系统工具**：系统作用域读写工具放**独立目录**（仿 `chat/extensions/` 先例，如 `system-skills/`），**只在 cron 触发的 pi 运行时注入**——注入面即权限面，普通 chat/工作流 run 的 pi 无此工具。
-- 实体：ScheduledTask（scope + cron 表达式 + 任务引用 + 输入模板）；触发=服务内调度器（单进程）。
-- **停机错过窗口**：统一只记 missed 不补跑；任务数据（如待蒸馏反馈）留到下次窗口一并处理。
-- **所有定时任务支持手动调用**（admin 管理页点跑）。
+- **边界（grill 敲定，ADR-0021）**：cron **仅触发 LLM 任务**（无人值守、无 HITL 语义），**不触发工作流**。
+- **任务本质=自由 prompt 任务**：LLM 解析用户需求 → cron 表达式 + 任务目标 prompt → **任务卡确认**（人类可读 cron 描述 + 未来 3 次执行时间 + 频率下限 ≥1h 强校验）→ 入库。到点=pi 以该 prompt 跑（同 chat 沙箱：ws cwd、skills ro、tavily）。
+- **权限（member 自建自批）**：任务卡用户自己确认即建；CommandPolicy 仍生效（deny→拒；require_approval→审批卡发 admin）。对话/右侧面板可改（新任务卡确认）可管自己的任务；admin 管理页管全部。
+- **产出会话**：建任务自动建专属会话挂同 ws，产出投递于此。
+- **system 任务**：经验蒸馏=seed DB 行（幂等）；**经 chat 删除/停用硬拒**（仅 admin UI）。
+- **执行历史**：新 `task_runs` 表（status: ok/failed/missed/skipped_overrun + 耗时 + 产出消息引用），ScheduledTasksPage 展开。
+- **调度器**：自写 setInterval 每分钟扫 `nextFireAt <= now`（cron-parser 仅解析）；严格 missed 不补跑；同任务在跑→跳过。
+- **系统作用域=服务端装配权**（蒸馏用）：服务端装配跨 ws 最小切片→蒸馏 pi 只读切片只写临时目录→服务端校验路径白名单写回+git commit。pi 无跨 ws 特权。
 
-出 v1：失败重试、补跑、多时区、workspace scope 任务、工作流触发。
+出 v1：失败重试、补跑、多时区。
 
 ### M5 — 学习闭环（ADR-0008）
 
