@@ -44,6 +44,7 @@ export const conversations = sqliteTable("conversations", {
   title: text("title"),
   createdAt: text("createdAt").notNull(),
   updatedAt: text("updatedAt").notNull(),
+  archivedAt: text("archivedAt"), // #21/ADR-0020：null=活跃；非空=归档（只读可恢复）。软态真相源
 });
 
 // 会话消息：user 进来即落库；assistant turn 干净结束一次性落库。

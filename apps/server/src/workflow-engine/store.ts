@@ -1,6 +1,6 @@
 // Drizzle 版 WorkflowStore（替 spike-b 裸 bun:sqlite；方法同 spike-b）。
 // 这是引擎里唯一耦合 db 的文件；runner 只接收本类实例、不 import db。
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, isNotNull, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { conversations, feedback, hitlQuestions, messages, workflowRunLog, workflowRuns } from "../db/schema";
 
@@ -56,6 +56,7 @@ export interface ConversationRow {
   title: string | null;
   createdAt: string;
   updatedAt: string;
+  archivedAt: string | null; // #21/ADR-0020：null=活跃；归档软态
 }
 
 export interface MessageRow {
@@ -231,7 +232,7 @@ export class WorkflowStore {
       .insert(conversations)
       .values({ id: p.id, workspaceId: p.workspaceId, userId: p.userId, title: p.title ?? null, createdAt: ts, updatedAt: ts })
       .run();
-    return { id: p.id, workspaceId: p.workspaceId, userId: p.userId, title: p.title ?? null, createdAt: ts, updatedAt: ts };
+    return { id: p.id, workspaceId: p.workspaceId, userId: p.userId, title: p.title ?? null, createdAt: ts, updatedAt: ts, archivedAt: null };
   }
 
   getConversation(id: string): ConversationRow | undefined {
@@ -244,16 +245,54 @@ export class WorkflowStore {
     this.db.update(conversations).set({ updatedAt: now() }).where(eq(conversations.id, id)).run();
   }
 
-  /** 创建者的会话列表（#20/f2：前端按 ws 分组）。updatedAt 倒序。 */
-  listConversations(userId: string, workspaceId?: string): ConversationRow[] {
+  /** 创建者的会话列表（#20/f2：前端按 ws 分组）。updatedAt 倒序。#21：默认只活跃，archived=true 反向。 */
+  listConversations(userId: string, workspaceId?: string, archived = false): ConversationRow[] {
     const conds = [eq(conversations.userId, userId)];
     if (workspaceId) conds.push(eq(conversations.workspaceId, workspaceId));
+    conds.push(archived ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt));
     return this.db
       .select()
       .from(conversations)
       .where(and(...conds))
       .orderBy(desc(conversations.updatedAt))
       .all() as unknown as ConversationRow[];
+  }
+
+  /** #21/ADR-0020 归档（幂等：已归档不动时间戳）。返回更新后行；不存在 undefined。 */
+  archiveConversation(id: string): ConversationRow | undefined {
+    const conv = this.getConversation(id);
+    if (!conv) return undefined;
+    if (conv.archivedAt) return conv;
+    const archivedAt = now();
+    this.db.update(conversations).set({ archivedAt }).where(eq(conversations.id, id)).run();
+    return { ...conv, archivedAt };
+  }
+
+  /** #21/ADR-0020 恢复（幂等：未归档 no-op）。返回更新后行；不存在 undefined。 */
+  restoreConversation(id: string): ConversationRow | undefined {
+    const conv = this.getConversation(id);
+    if (!conv) return undefined;
+    if (!conv.archivedAt) return conv;
+    this.db.update(conversations).set({ archivedAt: null }).where(eq(conversations.id, id)).run();
+    return { ...conv, archivedAt: null };
+  }
+
+  /**
+   * #21/ADR-0020 硬删（admin-only，全链清理，单事务）：
+   * conversations/messages/hitl_questions 行删；workflow_runs.conversationId 置空解绑
+   * （run 属 workspace 资产非会话子资产，ADR-0018；suspended run 无进程不杀）。
+   * pi session jsonl unlink 不在此（文件系统副作用——路由层做，DB 保持纯）。
+   */
+  deleteConversation(id: string): boolean {
+    const conv = this.getConversation(id);
+    if (!conv) return false;
+    this.db.transaction((tx) => {
+      tx.delete(conversations).where(eq(conversations.id, id)).run();
+      tx.delete(messages).where(eq(messages.conversationId, id)).run();
+      tx.delete(hitlQuestions).where(eq(hitlQuestions.conversationId, id)).run();
+      tx.update(workflowRuns).set({ conversationId: null }).where(eq(workflowRuns.conversationId, id)).run();
+    });
+    return true;
   }
 
   appendMessage(p: { conversationId: string; role: string; content: string; attachments?: unknown }): number {

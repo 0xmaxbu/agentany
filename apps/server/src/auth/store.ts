@@ -22,8 +22,10 @@ export async function timingSafeVerify(password: string, hash: string | null): P
   return hash ? valid : false; // 无用户/已停用：跑满耗时但恒 false
 }
 
-export type UserRole = "admin" | "member";
-export type UserStatus = "active" | "deactivated";
+export const ROLE = { admin: "admin", member: "member" } as const; // 角色字面量唯一源（判 === 统一引此，不落字面量）
+export type UserRole = keyof typeof ROLE;
+export const USER_STATUS = { active: "active", deactivated: "deactivated" } as const;
+export type UserStatus = keyof typeof USER_STATUS;
 
 export interface UserRow {
   id: string;

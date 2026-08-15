@@ -8,8 +8,10 @@ import { ConversationQueues } from "../chat/queue";
 import { EventBus, type Frame } from "../chat/eventbus";
 import { TurnTrigger } from "../chat/turn-trigger";
 import { canAccessConversation, resolveRequestWorkspace } from "../workspaces/guard";
-import { userIdOf, principalOf, type AppEnv } from "../auth/middleware";
+import { userIdOf, principalOf, userRoleOf, type AppEnv } from "../auth/middleware";
+import { ROLE } from "../auth/store";
 import { dbMessagesToHistory, readConversationHistory } from "../pi-session/reader";
+import { eraseConversationSessions } from "../pi-session/erase";
 import { resolveScopePaths, scopeOf } from "../scope";
 import { jsonBody } from "../http";
 
@@ -53,10 +55,11 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     return c.json(conv);
   });
 
-  // 会话列表（#20/f2）：创建者私有，可选 workspaceId 过滤，updatedAt 倒序。
+  // 会话列表（#20/f2）：创建者私有，可选 workspaceId 过滤，updatedAt 倒序。#21：?archived=1 反向取归档。
   app.get("/conversations", (c) => {
     const wsParam = c.req.query("workspaceId");
-    return c.json(deps.store.listConversations(userIdOf(c), wsParam || undefined));
+    const archived = c.req.query("archived") === "1";
+    return c.json(deps.store.listConversations(userIdOf(c), wsParam || undefined, archived));
   });
 
   // 历史（#20 双源）：pi session 优先（blocks 结构真相源）；无 session 文件（e2e stub/首轮前）兜底 DB 冗余文本。
@@ -116,6 +119,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
     const id = conv.id;
+    if (conv.archivedAt) return c.json({ error: "conversation archived (restore to continue)" }, 409); // #21：归档可看不可发（双保险——前端 composer 也禁用）
     const body = await jsonBody(c);
     const content: unknown = body.content;
     if (typeof content !== "string" || content.length === 0) return c.json({ error: "content required" }, 400);
@@ -133,5 +137,39 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const aborted = queues.abort(conv.id); // 杀当前在跑 turn（无论来源）
     const stopped = deps.runRegistry?.stopConversationRuns(conv.id) ?? 0; // #19：停该会话所有 running run（kill pi + 置 failed）
     return c.json({ aborted, stopped });
+  });
+
+  // ── #21/ADR-0020：归档 / 恢复 / 删除 ──
+  // 归档/恢复 = 创建者自己 + admin（loadIfVisible 天然达成：可见即创建者/admin）。
+  // 先杀后删（决策 6）：复用 /abort 同机制（杀在跑 turn + 停 running runs）再落软态。
+  app.patch("/conversations/:id/archive", (c) => {
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
+    if (!conv) return c.json({ error: "conversation not found" }, 404);
+    queues.abort(conv.id);
+    deps.runRegistry?.stopConversationRuns(conv.id);
+    const row = deps.store.archiveConversation(conv.id);
+    return row ? c.json(row) : c.json({ error: "conversation not found" }, 404);
+  });
+
+  app.patch("/conversations/:id/restore", (c) => {
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
+    if (!conv) return c.json({ error: "conversation not found" }, 404);
+    const row = deps.store.restoreConversation(conv.id);
+    return row ? c.json(row) : c.json({ error: "conversation not found" }, 404);
+  });
+
+  // 硬删 = admin-only（member 对自己会话也 403——不可逆操作收权）。全链清理：
+  // DB 三表删 + runs 解绑（store 事务）+ pi session jsonl unlink + 内存态（abort/停 run）。
+  app.delete("/conversations/:id", (c) => {
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
+    if (!conv) return c.json({ error: "conversation not found" }, 404);
+    if (userRoleOf(c) !== ROLE.admin) return c.json({ error: "admin only" }, 403);
+    queues.abort(conv.id); // 先杀后删：在跑 turn 杀 pi 子进程
+    const stopped = deps.runRegistry?.stopConversationRuns(conv.id) ?? 0; // running runs 停（suspended 无进程，仅解绑）
+    const sessionDir = resolveScopePaths(scopeOf(conv.workspaceId), conv.workspaceId).sessionDir;
+    const filesErased = eraseConversationSessions(sessionDir, conv.id);
+    const ok = deps.store.deleteConversation(conv.id);
+    if (!ok) return c.json({ error: "conversation not found" }, 404);
+    return c.json({ deleted: true, stopped, filesErased });
   });
 }
