@@ -23,12 +23,13 @@ export function wrapSpawnBwrap(spec: SandboxSpec): SpawnPlan {
 
   // 系统运行时（ro）。
   for (const d of SYSTEM_RO) if (existsSync(d)) args.push("--ro-bind", d, d);
-  // pi / node 安装目录（ro）——argv[0]（pi 二进制）所在目录。
-  args.push("--ro-bind", dirname(spec.argv[0]), dirname(spec.argv[0]));
+  // pi / node 安装目录（ro）——argv[0]（pi 二进制）所在目录。仅绝对路径（相对 argv[0] 如 "sh"
+  // 的 dirname 是 "."，`--ro-bind . .` 会破坏 bwrap 对后续 dest 的自动 mkdir——实测踩坑）。
+  if (spec.argv[0].startsWith("/")) args.push("--ro-bind", dirname(spec.argv[0]), dirname(spec.argv[0]));
   // skills（ro）。
   for (const p of ro) args.push("--ro-bind", p, p);
   // pi 运行时配置（ro：settings/models；**不挂 auth.json/sessions** → token/transcript 不可达）。
-  if (home) {
+  if (home && existsSync(`${home}/.pi/agent`)) {
     for (const f of ["/.pi/agent/settings.json", "/.pi/agent/models.json"])
       if (existsSync(home + f)) args.push("--ro-bind", home + f, home + f);
     // pi 运行时锁需要写 ~/.pi/agent → 给一个独立可写目录（只含锁，不含 auth.json/sessions）。

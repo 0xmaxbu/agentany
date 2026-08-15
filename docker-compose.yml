@@ -1,0 +1,18 @@
+# agentany prod 编排（PRD M3）。
+# 用法：docker compose up -d
+# 前置：.env 放服务器侧（GO_API_KEY/TAVILY_PROXY_API_KEY/AGENTANY_BOOTSTRAP_ADMIN_* 等，不进镜像）。
+services:
+  server:
+    build: .
+    image: agentany
+    ports:
+      - "3000:3000" # 主 app（auth 后暴露；无 auth 直发公网勿开）
+    volumes:
+      - agentany-data:/data # DB + workspaces + pi sessions + 运行时 git 仓（M5）
+      - ./.env:/app/.env:ro # 密钥经文件注入（.env 对 pi 沙箱不可达：bwrap 不挂 /app 之外的宿主路径）
+    security_opt:
+      - seccomp=unconfined # bwrap 需 clone(CLONE_NEWUSER)（默认 Docker seccomp 禁）
+    restart: unless-stopped
+
+volumes:
+  agentany-data:
