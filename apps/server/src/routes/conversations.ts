@@ -122,6 +122,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     if (!queues.wouldAcceptHttpTurn(id)) return c.json({ error: "conversation busy (queue full)" }, 429); // 同步 429 预检（不入队）
     const userMsgId = deps.store.appendMessage({ conversationId: id, role: "user", content }); // 立即落库
     deps.store.touchConversation(id); // updatedAt = 列表排序锚（#20）
+    turnTrigger.attach(id); // 幂等兜底：后端重启后旧会话的 attached 内存态丢失——不补则 user_message 无人响应（turn 永不起）
     eventBus.publish(id, { type: "user_message", id: userMsgId, content }); // 扇出：持久流显示用户消息 + TurnTrigger 起 turn
     return c.json({ accepted: true }, 202);
   });
