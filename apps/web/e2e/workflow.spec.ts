@@ -6,7 +6,7 @@ import { test, expect } from "@playwright/test";
 // 注：runs 是 SSE 瞬时态（无 GET /runs），刷新不恢复 run 卡——断 ask 卡（GET /hitl 持久）+ 消息历史。
 test("工作流全链：start → suspend → ask → resume → completed + 刷新恢复", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("header .conv")).toContainText("会话", { timeout: 10_000 });
+  await expect(page.locator("header .conv")).toBeVisible({ timeout: 10_000 }); // #命名：header 名可为主题名
 
   await page.locator("textarea").fill("跑合成三步");
   await page.locator("textarea").press("Enter");

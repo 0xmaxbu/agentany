@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 
 test("assistant 消息按 markdown 渲染（h1 / strong / code 真 DOM）", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("header .conv")).toContainText("会话", { timeout: 10_000 });
+  await expect(page.locator("header .conv")).toBeVisible({ timeout: 10_000 }); // #命名：header 名可为主题名
 
   await page.locator("textarea").fill("md");
   await page.locator("textarea").press("Enter");
@@ -22,7 +22,7 @@ test("assistant 消息按 markdown 渲染（h1 / strong / code 真 DOM）", asyn
 
 test("Stop 中断流 → 消息标 aborted、无残留 token", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("header .conv")).toContainText("会话", { timeout: 10_000 });
+  await expect(page.locator("header .conv")).toBeVisible({ timeout: 10_000 }); // #命名：header 名可为主题名
 
   await page.locator("textarea").fill("stop me");
   await page.locator("textarea").press("Enter");

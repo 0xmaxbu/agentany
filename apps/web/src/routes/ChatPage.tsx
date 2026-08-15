@@ -4,9 +4,20 @@
 import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router";
 import { useChat } from "../store/chat";
+import { useWorkspace } from "../store/workspace";
 import { ChatWindow } from "../components/ChatWindow";
 import { Composer } from "../components/Composer";
 import { useShellControls } from "./ShellLayout";
+
+/** #命名：header 会话名 = 列表内该会话 title（新会话兜底）；不在已加载列表（深页未拉）回尾码。 */
+const convTitle = (id: string | null): string => {
+  if (!id) return "准备中…";
+  for (const g of Object.values(useWorkspace.getState().groups)) {
+    const hit = g.items.find((c) => c.id === id);
+    if (hit) return hit.title || "新会话";
+  }
+  return `会话 ${id.slice(-6)}`;
+};
 
 export function ChatPage() {
   const conversationId = useChat((s) => s.conversationId);
@@ -35,7 +46,7 @@ export function ChatPage() {
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <h1 className="text-base font-semibold">agentany</h1>
         <div className="flex items-center gap-3">
-          <span className="conv text-xs text-muted-foreground">{conversationId ? `会话 ${conversationId.slice(-6)}` : "准备中…"}</span>
+          <span className="conv text-xs text-muted-foreground">{convTitle(conversationId)}</span>
           {controls}
         </div>
       </header>

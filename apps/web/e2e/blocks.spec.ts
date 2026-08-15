@@ -4,7 +4,7 @@ import { test, expect } from "@playwright/test";
 // stub（e2e-entry「看过程」分支）：thinking→tool_use(read)→tool_result→text 完整序列。
 test("blocks：thinking 折叠可展开 + tool_use 卡 + tool_result 折进卡", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("header .conv")).toContainText("会话", { timeout: 10_000 });
+  await expect(page.locator("header .conv")).toBeVisible({ timeout: 10_000 }); // #命名：header 名可为主题名
 
   await page.locator("textarea").fill("看过程");
   await page.locator("textarea").press("Enter");

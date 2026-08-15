@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 // run 级停止（stopConversationRuns）的确定性由后端单测覆盖（store/registry/route）；chat turn Stop 由 markdown.spec 覆盖。
 test("abort：跑工作流后 Stop → 发送态结束、UI 可继续发消息", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("header .conv")).toContainText("会话", { timeout: 10_000 });
+  await expect(page.locator("header .conv")).toBeVisible({ timeout: 10_000 }); // #命名：header 名可为主题名
 
   await page.locator("textarea").fill("跑合成三步");
   await page.locator("textarea").press("Enter");

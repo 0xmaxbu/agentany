@@ -29,6 +29,8 @@ interface WorkspaceState {
   refreshArchived: () => Promise<void>; // 归档区展开时按需拉
   /** 建会话后本地 prepend（乐观——目标组顶部 + ws 活跃度更新）。 */
   prependConversation: (c: ConversationRow) => void;
+  /** #命名：SSE title 帧 → 已加载列表内即时换名（title 落库在后端，此处只改本地视图）。 */
+  applyTitle: (conversationId: string, title: string) => void;
   /** #21 归档：本地即时下架 + 落库（失败回滚）。 */
   archive: (id: string) => Promise<void>;
   /** #21 恢复：本地即时移出归档区 + 已展开组刷新（失败回滚）。 */
@@ -141,6 +143,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // ws 活跃度 = 新会话 updatedAt（置顶候选）
       const workspaces = sortWorkspaces(s.workspaces.map((w) => (w.id === c.workspaceId ? { ...w, lastActiveAt: c.updatedAt } : w)));
       return { groups, workspaces };
+    });
+  },
+
+  applyTitle: (conversationId, title) => {
+    set((s) => {
+      const retag = (list: ConversationRow[]) => list.map((c) => (c.id === conversationId ? { ...c, title } : c));
+      const groups = Object.fromEntries(Object.entries(s.groups).map(([wsId, g]) => [wsId, { ...g, items: retag(g.items) }]));
+      return { groups, searchAll: s.searchAll ? retag(s.searchAll) : s.searchAll, archivedConversations: retag(s.archivedConversations) };
     });
   },
 

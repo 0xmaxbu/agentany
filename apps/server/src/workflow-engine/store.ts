@@ -252,6 +252,11 @@ export class WorkflowStore {
     this.db.update(conversations).set({ updatedAt: now() }).where(eq(conversations.id, id)).run();
   }
 
+  /** #命名：改 title（只改这一列——重命名不动排序锚 updatedAt）。不存在 no-op。 */
+  renameConversation(id: string, title: string): void {
+    this.db.update(conversations).set({ title }).where(eq(conversations.id, id)).run();
+  }
+
   /** 创建者的会话列表（#20/f2：前端按 ws 分组）。updatedAt 倒序（id 破并列——分页翻页稳定）。
    * #21：默认只活跃，archived=true 反向。#手风琴：limit/offset 分页（无参全量）。 */
   listConversations(userId: string, workspaceId?: string, archived = false, limit?: number, offset?: number): ConversationRow[] {

@@ -6,7 +6,7 @@ import { test, expect } from "@playwright/test";
 
 test("f4 用户管理：建→停用→恢复 + 搜索 + Sidebar 双态", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("header .conv")).toContainText("会话", { timeout: 10_000 });
+  await expect(page.locator("header .conv")).toBeVisible({ timeout: 10_000 }); // #命名：header 名可为主题名
 
   // 底部用户行 hover 弹菜单 →「管理」→ /admin/users
   await page.locator("[data-testid=user-footer]").hover();

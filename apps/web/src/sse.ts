@@ -11,6 +11,8 @@ export type SSEEvent =
   | { type: typeof BLOCK_FRAME.end; blockId: string }
   | { type: "done"; messageId?: number; aborted?: boolean }
   | { type: "error"; message: string }
+  // #命名：首轮 turn 后 LLM 提取主题 → 后端落库并推此帧（侧栏实时换名）
+  | { type: "title"; title: string }
   // ticket #14：工作流 run 两级事件（持久流承载，前端做基础进度渲染）
   | { type: "run_started"; runId: string; workflowId: string }
   | { type: "run_resumed"; runId: string }

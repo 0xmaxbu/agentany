@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 test("发消息 → token 增量 → done 落定", async ({ page }) => {
   await page.goto("/");
   // 会话就绪（init 建会话）
-  await expect(page.locator("header .conv")).toContainText("会话", { timeout: 10_000 });
+  await expect(page.locator("header .conv")).toBeVisible({ timeout: 10_000 }); // #命名：header 名可为主题名
 
   await page.locator("textarea").fill("hi");
   await page.locator("textarea").press("Enter");

@@ -12,6 +12,8 @@ export type Frame =
   | { type: "block_delta"; blockId: string; delta: string }
   | { type: "block_end"; blockId: string }
   | { type: "error"; message: string }
+  // #命名：首轮 turn 后 LLM 提取主题 → 落库 + 推此帧（前端侧栏实时换名）。
+  | { type: "title"; title: string }
   | { type: "run_started"; runId: string; workflowId: string }
   | { type: "run_resumed"; runId: string }
   | { type: "run_completed"; runId: string }

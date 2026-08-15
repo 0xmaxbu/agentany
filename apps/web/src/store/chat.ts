@@ -187,6 +187,9 @@ export const useChat = create<ChatState>((set, get) => {
       }
     } else if (e.type === "error") {
       set({ messages: rollback(msgs, e.message), sending: false });
+    } else if (e.type === "title") {
+      const convId = get().conversationId;
+      if (convId) useWorkspace.getState().applyTitle(convId, e.title); // #命名：侧栏即时换名
     } else if (e.type === "run_started") {
       // 幂等：resume 会经 run() 再发一次 run_started（runner.ts:97+200）——runId 已在则更新状态、不新增卡。
       set((s) => {

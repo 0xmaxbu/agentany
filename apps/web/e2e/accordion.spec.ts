@@ -2,10 +2,11 @@ import { test, expect } from "@playwright/test";
 
 // #手风琴：侧栏 ws 手风琴全链。组序（公司置顶）+ 默认只展开公司 + 组内 5 条 + 全部会话弹窗（无限滚动）+ 搜索。
 // 分页依赖 >5 条会话——通过 API 直建（UI 建一条要一轮 turn，太慢）。
+// #命名：无 title 显示「新会话」——搜索用「新会话」作命中词（API 建的会话均未命名）。
 
 test("手风琴：公司置顶默认展开、组内 5 条、全部会话弹窗、搜索", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("header .conv")).toContainText("会话", { timeout: 10_000 });
+  await expect(page.locator("header .conv")).toBeVisible({ timeout: 10_000 });
 
   // API 建 12 条会话（公司 ws）——分页素材；API 建不动前端 store，reload 重载
   for (let i = 0; i < 12; i++) {
@@ -31,7 +32,7 @@ test("手风琴：公司置顶默认展开、组内 5 条、全部会话弹窗�
   // 弹窗内点会话 → 关弹窗进会话
   await scroll.locator(".item").first().click();
   await expect(page.locator("[data-testid=browse-backdrop]")).toBeHidden({ timeout: 5_000 });
-  await expect(page.locator("header .conv")).toContainText("会话");
+  await expect(page.locator("header .conv")).toBeVisible();
 
   // 折叠公司组 → 会话项消失；再展开恢复
   await page.locator("[data-testid=ws-toggle-company]").click();
@@ -42,10 +43,10 @@ test("手风琴：公司置顶默认展开、组内 5 条、全部会话弹窗�
   // 组头 + 按钮：在公司 ws 建会话（hover 显 +）
   await page.locator("[data-testid=ws-toggle-company]").hover();
   await page.locator("[data-testid=ws-new-company]").click();
-  await expect(page.locator("header .conv")).toContainText("会话", { timeout: 5_000 }); // 新会话打开
+  await expect(page.locator("header .conv")).toBeVisible({ timeout: 5_000 }); // 新会话打开
 
-  // 搜索：命中所有含「会话」的（全量兜底 > 5 条——验证搜索绕过分页）
-  await page.locator("[data-testid=conv-search]").fill("会话");
+  // 搜索：命中所有「新会话」（API 建的均未命名——全量兜底 > 5 条，验证搜索绕过分页）
+  await page.locator("[data-testid=conv-search]").fill("新会话");
   await expect(page.locator(".conv-list .item").first()).toBeVisible({ timeout: 5_000 });
   const searchCount = await page.locator(".conv-list .item").count();
   expect(searchCount).toBeGreaterThan(5); // 分页态只有 5——搜索态全量

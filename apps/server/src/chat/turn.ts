@@ -80,4 +80,41 @@ export async function runTurn(
   // 冗余落库（#20：messages 表保留供差异比对；pi session 才是历史真相源）
   const msgId = deps.store.appendMessage({ conversationId: conv.id, role: "assistant", content: result.text });
   send({ type: "done", messageId: msgId });
+  maybeAutoTitle(deps, conversationId, userContent, makeStream, send); // #命名：fire-and-forget（不阻塞 done 后续）
+}
+
+// ── #命名：首轮对话后 LLM 提取主题作会话名 ──
+// fire-and-forget：done 已发，命名晚到/失败都不影响主流程；落库只改 title（排序锚 updatedAt 不动）。
+
+// #命名-长度约束：标题 8~24 字（用户定）——太短重名（「新会话」撞名事故），太长失去摘要感。
+const TITLE_MIN = 8;
+const TITLE_MAX = 24;
+const TITLE_INSTRUCTION = "提取主题"; // 命名调用的 prompt 特征（测试识别用；指令正文见 TITLE_PROMPT）
+const TITLE_PROMPT = `从下面这段用户提问中${TITLE_INSTRUCTION}，输出一个会话标题：长度至少 ${TITLE_MIN} 个字、最多 ${TITLE_MAX} 个字。
+只输出标题本身，不要任何前缀、引号或解释。`;
+
+/** turn 完成后按需命名：title 为 null 时才触发（幂等——rename 后不再进）。失败兜底：user 消息前缀截断。 */
+async function maybeAutoTitle(
+  deps: RunDeps,
+  conversationId: string,
+  userContent: string,
+  makeStream: typeof makeRunPiStream,
+  send: TurnSend,
+): Promise<void> {
+  const conv = deps.store.getConversation(conversationId);
+  if (!conv || conv.title != null) return;
+  const fallback = userContent.trim().slice(0, TITLE_MAX);
+  let title = fallback;
+  try {
+    // 一次性命名调用：独立 session（headless，不污染会话本身的 pi session 历史），无工具无 bridge。
+    const oneShot = makeStream({ workspaceId: conv.workspaceId, sessionId: `title-${conversationId}` });
+    const r = await oneShot({ prompt: `${TITLE_PROMPT}\n\n用户提问：${userContent.slice(0, 500)}`, timeoutMs: 30_000 });
+    const got = r.text.trim().replace(/^["'「『]|["'」』]$/g, "").slice(0, TITLE_MAX);
+    if (got.length >= TITLE_MIN) title = got; // 太短（违反下限）→ 弃用走兜底（重名防线）
+  } catch {
+    // LLM 失败 → 兜底前缀（保持「新会话」态没意义——首轮素材已够）
+  }
+  if (deps.store.getConversation(conversationId)?.title != null) return; // 并发竞态：他者已命名则弃
+  deps.store.renameConversation(conversationId, title);
+  send({ type: "title", title }); // 走 turn 的 send——与 done 同一 EventBus（deps.eventBus 可能未注入）
 }

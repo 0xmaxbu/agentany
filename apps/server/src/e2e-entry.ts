@@ -107,6 +107,13 @@ const scriptedStubFactory = (): ConfiguredRunPiStream => async (call): Promise<R
     await post("/run/start", { workflowId: "synthetic-3step", input: {} });
     return { text: "好的，启动合成三步工作流。", messages: [], toolResults: [] };
   }
+  // #命名：一次性命名调用（独立 title- session）→ 回用户消息前 16 字（≥8 字下限；e2e 里标题即唯一定位锚）
+  if (call.prompt.includes("提取主题")) {
+    const src = call.prompt.split("用户提问：")[1] ?? "自动生成的会话标题";
+    const title = src.slice(0, 16).trim() || "自动生成的会话标题";
+    emitText(call, title);
+    return { text: title, messages: [], toolResults: [] };
+  }
   // default：slice① TOKENS（保 chat/history/markdown spec 绿）
   await streamText(call, TOKENS.join(""), TOKENS);
   return { text: TOKENS.join(""), messages: [], toolResults: [] };

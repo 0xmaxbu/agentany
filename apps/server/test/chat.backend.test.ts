@@ -148,7 +148,7 @@ describe("chat 切片② · per-conversation FIFO 串行", () => {
   test("同会话并发两条 turn → maxActive===1；两条各自完整不污染", async () => {
     const cf = countingFactory();
     const { app } = newApp(cf.factory);
-    const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();
+    const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({ title: "t" }) })).json(); // #命名：已有 title → 不起命名调用（不干扰并发计数）
     const s = await openStream(app, c.id);
     await delay(15);
     await postMsg(app, c.id, "AAAA");

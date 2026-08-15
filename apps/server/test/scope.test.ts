@@ -131,6 +131,7 @@ describe("scope.公司 ws 会话跑通 turn（事件驱动 / ticket #13）", () 
     const frames: any[] = [];
     const dec = new TextDecoder();
     let buf = "";
+    // #命名：done 后有异步 title 帧跟随——结尾断言收窄为「最后一个非 title 帧」
     (async () => {
       while (true) {
         const { done, value } = await reader.read();
@@ -158,6 +159,6 @@ describe("scope.公司 ws 会话跑通 turn（事件驱动 / ticket #13）", () 
     }
     await reader.cancel();
     expect(frames.filter((f: any) => f.type === "block_delta").map((f: any) => f.delta).join("")).toBe("hi-general");
-    expect(frames.at(-1)!.type).toBe("done");
+    expect(frames.filter((f: any) => f.type !== "title").at(-1)!.type).toBe("done");
   });
 });

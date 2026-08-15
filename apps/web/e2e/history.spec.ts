@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 
 test("切换会话、刷新看历史、出错回滚", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("header .conv")).toContainText("会话", { timeout: 10_000 });
+  await expect(page.locator("header .conv")).toBeVisible({ timeout: 10_000 }); // #命名：header 名可为主题名
 
   // 会话 A：发消息
   await page.locator("textarea").fill("msgA");

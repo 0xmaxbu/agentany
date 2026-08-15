@@ -16,6 +16,9 @@ const ADMIN_MENU = [
   { path: "/admin/workspaces", label: "Workspace" },
 ] as const;
 
+/** #命名：title=null 的显示兜底（首轮对话后 LLM 自动命名替换）。 */
+const UNTITLED = "新会话";
+
 /**
  * 侧栏底部用户行（Kimi 式）：头像圈 + 昵称，hover/点击弹出向上菜单（管理/登出收入菜单）。
  * 顶部不再放用户操作——单行身份 + 弹菜单，主列表空间还给会话。
@@ -165,7 +168,7 @@ function ArchiveSection() {
                 onClick={() => navigate(`/c/${c.id}`)}
                 title={c.title ?? c.id}
               >
-                {c.title || `会话 ${c.id.slice(-6)}`}
+                {c.title || UNTITLED}
               </button>
               <span className="flex shrink-0 items-center gap-0.5">
                 <button title="恢复" className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => void restore(c.id)}>
@@ -289,7 +292,7 @@ function ConvAccordion({ isAdmin, current, loaded, fallbackNav }: {
   const searchHits = useMemo(() => {
     if (!searching || !searchAll) return null;
     const q = query.toLowerCase();
-    return searchAll.filter((c) => (c.title ?? `会话 ${c.id.slice(-6)}`).toLowerCase().includes(q) || c.id.toLowerCase().includes(q));
+    return searchAll.filter((c) => (c.title ?? UNTITLED).toLowerCase().includes(q) || c.id.toLowerCase().includes(q));
   }, [searching, searchAll, query]);
 
   return (
@@ -388,9 +391,10 @@ function ConvItem({ c, current, isAdmin, fallbackNav, showTime = false }: { c: C
       <button
         className={`item min-w-0 flex-1 truncate rounded-md px-3 py-1.5 text-left text-sm ${c.id === current ? "active" : "text-foreground hover:bg-accent"}`}
         onClick={() => navigate(`/c/${c.id}`)}
+        data-testid={`conv-item-${c.id}`} // #命名：显示名不再含 id——e2e 唯一定位锚
         title={c.title ?? c.id}
       >
-        {c.title || `会话 ${c.id.slice(-6)}`}
+        {c.title || UNTITLED}
       </button>
       {showTime && <span className="mr-2 shrink-0 self-center text-[10px] text-muted-foreground">{relativeTime(c.updatedAt)}</span>}
       <span className="absolute right-1 hidden group-hover/item:flex">
