@@ -26,6 +26,8 @@
   --input: oklch(0.92 0.004 286.32);
   --ring: oklch(0.546 0.245 262.881);
   --radius: 0.5rem;
+  --scrollbar-thumb: oklch(0.82 0.004 286.32); /* 浅模：zinc-330 一档，hover 加深 */
+  --scrollbar-thumb-hover: oklch(0.7 0.005 286.32);
 }
 .dark {
   --background: oklch(0.141 0.005 285.823);
@@ -47,6 +49,8 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.623 0.214 259.815);
+  --scrollbar-thumb: oklch(1 0 0 / 18%); /* 深模：半透白，hover 提亮 */
+  --scrollbar-thumb-hover: oklch(1 0 0 / 32%);
 }
 
 @theme inline {
@@ -237,4 +241,30 @@ body {
   50% {
     opacity: 0;
   }
+}
+
+/* ── 滚动条美化（#手风琴-2）：深浅双模自适应，替默认样式。细轨道 + 圆角拇指 + hover 加深。 ── */
+* {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+  border: 2px solid transparent; /* 内缩视觉——thumb 不贴满轨道 */
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }

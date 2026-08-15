@@ -61,7 +61,7 @@ interface ChatState {
   /** 持久流帧 → 状态（导出供单测直推帧；openStream 内部用同一函数）。 */
   onFrame: (e: SSEEvent) => void;
   stop: () => Promise<void>;
-  newConversation: () => Promise<string | null>; // 返新会话 id（ChatPage navigate 用）
+  newConversation: (workspaceId?: string) => Promise<string | null>; // 返新会话 id（ChatPage navigate 用；#手风琴：可指定 ws）
   switchConversation: (id: string) => Promise<void>; // 幂等（同 id return）
   closeStream: () => void; // 断持久流（登出/forceLogout 时 auth store 调）
   decideApproval: (questionId: number, decision: "approve" | "deny") => Promise<void>; // #18 审批门
@@ -235,12 +235,12 @@ export const useChat = create<ChatState>((set, get) => {
 
     onFrame,
 
-    newConversation: async () => {
+    newConversation: async (workspaceId?: string) => {
       // StrictMode dev 双触发（ChatPage index effect 双跑）去重：进行中的建会话复用同一 promise
       if (creatingInflight) return creatingInflight;
       creatingInflight = (async () => {
         try {
-          const conv: Conversation = await createConversation();
+          const conv: Conversation = await createConversation(undefined, workspaceId); // #手风琴：缺省公司 ws
           useWorkspace.getState().prependConversation({ ...conv, updatedAt: new Date().toISOString() }); // 乐观 prepend（refresh 兜底校正）
           set({ conversationId: conv.id, messages: [], runs: [], questions: [] });
           openStreamFor(conv.id);

@@ -41,6 +41,9 @@ export interface ConversationRow {
 // Workspace（GET /workspaces 形状——toWorkspace；member=allUsers∪名单，admin=全部）
 export interface Workspace {
   id: string; slug: string; name: string; allUsers: boolean; createdAt: string; updatedAt: string;
+  archivedAt?: string | null; // #手风琴：管理页 switch 状态（默认列表已滤掉归档）
+  lastActiveAt?: string | null; // #手风琴：侧栏排序锚（我的会话 max updatedAt；无会话 null→用 updatedAt 兜底）
+  conversationCount?: number; // #手风琴：我的活跃会话数
 }
 // GET /conversations/:id/messages（#20 双源：pi session 优先、DB 兜底）统一 HistoryMessage 形状
 export interface Message {
@@ -62,8 +65,9 @@ export interface Question {
 
 const jsonHeaders = { "Content-Type": "application/json" };
 
-export async function createConversation(title?: string): Promise<Conversation> {
-  const r = await apiFetch("/conversations", { method: "POST", headers: jsonHeaders, body: JSON.stringify({ title }) }); // 缺省 workspaceId=公司 ws（ADR-0018）
+export async function createConversation(title?: string, workspaceId?: string): Promise<Conversation> {
+  // workspaceId 缺省=公司 ws（ADR-0018）；#手风琴：组头 + 按钮传目标 ws
+  const r = await apiFetch("/conversations", { method: "POST", headers: jsonHeaders, body: JSON.stringify({ title, workspaceId }) });
   if (!r.ok) throw new Error(`createConversation: ${r.status}`);
   return r.json();
 }
@@ -76,8 +80,15 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
 
 // 会话列表（f1 端点）：创建者私有，updatedAt 倒序。可选 workspaceId 过滤（f2 前端全量取+本地分组）。
 // #21：archived=true 取归档列表（默认活跃）。
-export async function listConversations(archived = false): Promise<ConversationRow[]> {
-  const r = await apiFetch(`/conversations${archived ? "?archived=1" : ""}`);
+// #手风琴：opts.limit/opts.workspaceId 分页拉取（侧栏每组懒加载）；无参全量（搜索兜底）。
+export async function listConversations(archived = false, opts?: { workspaceId?: string; limit?: number; offset?: number }): Promise<ConversationRow[]> {
+  const q = new URLSearchParams();
+  if (archived) q.set("archived", "1");
+  if (opts?.workspaceId) q.set("workspaceId", opts.workspaceId);
+  if (opts?.limit !== undefined) q.set("limit", String(opts.limit));
+  if (opts?.offset !== undefined) q.set("offset", String(opts.offset));
+  const qs = q.toString();
+  const r = await apiFetch(`/conversations${qs ? `?${qs}` : ""}`);
   if (!r.ok) throw new Error(`listConversations: ${r.status}`);
   return r.json();
 }

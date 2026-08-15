@@ -14,7 +14,8 @@ test("切换会话、刷新看历史、出错回滚", async ({ page }) => {
   await expect(page.locator("button.stop")).toHaveCount(0, { timeout: 5_000 }); // 等 msgA 流完
 
   // 新会话 B
-  await page.locator(".conv-list .new").click();
+  await page.locator("[data-testid=ws-toggle-company]").hover(); // 组头 hover 显 +
+await page.locator("[data-testid=ws-new-company]").click();
   await expect(page.locator(".bubble")).toHaveCount(0, { timeout: 3_000 }); // B 初始空
   await page.locator("textarea").fill("msgB");
   await page.locator("textarea").press("Enter");

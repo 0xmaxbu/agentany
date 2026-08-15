@@ -61,11 +61,14 @@ test("归档当前会话且还有剩余会话 → 补位跳到剩余第一条（
   await expect(page.locator("header .conv")).toContainText("会话", { timeout: 10_000 });
 
   // 造两个会话：A（先建）+ B（后建，当前所在）。串行共享 dev-user——列表可能有前序 test 残留，全程相对断言。
+  // 分页首屏异步（公司组 limit 10）——等首条 .item 出现再计数。
+  await expect(page.locator(".conv-list .item").first()).toBeVisible({ timeout: 5_000 });
   const preCount = await page.locator(".conv-list .item").count(); // 含前序残留 + goto 自动新建的 1 条
   await page.locator("textarea").fill("convA");
   await page.locator("textarea").press("Enter");
   await expect(page.locator("button.stop")).toHaveCount(0, { timeout: 5_000 }); // 等 A 流完
-  await page.locator(".conv-list .new").click();
+  await page.locator("[data-testid=ws-toggle-company]").hover(); // 组头 hover 显 +
+await page.locator("[data-testid=ws-new-company]").click();
   await expect(page.locator(".conv-list .item")).toHaveCount(preCount + 1, { timeout: 3_000 }); // B 建成
 
   const bTail = (await page.locator(".conv-list .item").first().textContent())!.replace(/.*会话\s*/, "").trim();

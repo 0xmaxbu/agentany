@@ -1,5 +1,6 @@
-// 路由表（f2：react-router v7 声明式库模式）。
-// / = ProtectedRoute > ShellLayout（三区）；/login；/admin（f4 占位）。
+// 路由表（f2：react-router v7 声明式库模式；f4：admin 嵌入 shell）。
+// / = ProtectedRoute > ShellLayout（三区）；/login。admin 子页渲染在 shell 中区
+// （Sidebar 复用不卸载——切页只刷中区，f4 用户决定）；URL 沿 f2 的 /admin/* 不变。
 import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { useAuth } from "./store/auth";
@@ -8,9 +9,12 @@ import { LoginPage } from "./routes/LoginPage";
 import { ShellLayout } from "./routes/ShellLayout";
 import { ChatPage } from "./routes/ChatPage";
 
-// admin 懒加载（f4 才有内容——不进首屏 bundle）
-const AdminPage = lazy(() =>
-  import("./routes/AdminPage").then((m) => ({ default: m.AdminPage })),
+// admin 懒加载（member 不进管理页——不进首屏 bundle）
+const AdminUsersPage = lazy(() =>
+  import("./routes/admin/UsersPage").then((m) => ({ default: m.AdminUsersPage })),
+);
+const AdminWorkspacesPage = lazy(() =>
+  import("./routes/admin/WorkspacesPage").then((m) => ({ default: m.AdminWorkspacesPage })),
 );
 
 export function App() {
@@ -27,15 +31,24 @@ export function App() {
           <Route path="/" element={<ShellLayout />}>
             <Route index element={<ChatPage />} />
             <Route path="c/:conversationId" element={<ChatPage />} />
+            <Route path="admin" element={<Navigate to="/admin/users" replace />} />
+            <Route
+              path="admin/users"
+              element={
+                <Suspense fallback={null}>
+                  <AdminUsersPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="admin/workspaces"
+              element={
+                <Suspense fallback={null}>
+                  <AdminWorkspacesPage />
+                </Suspense>
+              }
+            />
           </Route>
-          <Route
-            path="/admin/*"
-            element={
-              <Suspense fallback={null}>
-                <AdminPage />
-              </Suspense>
-            }
-          />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

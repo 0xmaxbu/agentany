@@ -2,7 +2,7 @@
 // 右 ContextPanel（可折叠，默认收起）。header 在中区内由 ChatPage 渲染（契约 header .conv，
 // 主题切换 + 右栏折叠钮也在 header 右侧——经 context 下传）。
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { Outlet } from "react-router";
+import { Outlet, useLocation } from "react-router";
 import { Sidebar } from "../components/Sidebar";
 import { ContextPanel } from "../components/ContextPanel";
 import { useWorkspace } from "../store/workspace";
@@ -19,6 +19,7 @@ export function ShellLayout() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [theme, setTheme] = useTheme();
   const load = useWorkspace((s) => s.load);
+  const adminMode = useLocation().pathname.startsWith("/admin"); // Sidebar/右栏按此切态（f4）
 
   useEffect(() => {
     void load();
@@ -51,7 +52,8 @@ export function ShellLayout() {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <Outlet />
         </div>
-        {panelOpen && <ContextPanel />}
+        {/* admin 态强制隐藏右栏（chat 上下文与管理语境无关）；panelOpen 状态保留，回 chat 恢复 */}
+        {!adminMode && panelOpen && <ContextPanel />}
       </div>
     </ShellControlsContext.Provider>
   );
