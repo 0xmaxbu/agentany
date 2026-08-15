@@ -66,8 +66,20 @@ ADR-0011/spec 原定 **"v1 全禁出站"**（理由：chat 纯文本无需网络
 
 `pi/sandbox-bwrap.ts` 已实现并接入 `wrapSpawn` 的 linux 分支（复用 #2 接口/接线/测试骨架）。**containment 验证延后至 Linux 环境**（本机 macOS 跑不了 bwrap）。要点与不对称：
 - FS 隔离同 Seatbelt 姿态（默认 nothing；只挂系统运行时/skills ro/workspace+sessions rw/pi 配置；不挂 .env/DB/repo 源码/家目录凭证/其它项目 → symlink 指过去也解析不到）。
-- ⚠ **网络**：bwrap 网络全有/全无——`--unshare-net` 断 provider（pi 挂，除非 A4）；默认主机网络 = pi 能连 provider，但 **Linux loopback SSRF 未堵**（Seatbelt/Mac 禁了 loopback）。loopback 隔离要等 A4（`--unshare-net` + 服务端代理）。
-- 残留简化项（Linux 验证期收窄）：`~/.pi/agent` 暂整目录可写（含锁；auth.json/sessions 未单独屏蔽）。
+- ⚠ **网络 = 当前最大残留威胁**：bwrap 网络全有/全无——`--unshare-net` 断 provider（pi 挂，除非 A4）；默认主机网络 = pi 能连 provider，但 Linux 上两缺口【未堵】（Seatbelt/Mac 均已堵 loopback）：① **loopback SSRF**（沙箱内进程可 curl 127.0.0.1:3000 自驱动本服务，防线仅剩 bridge nonce + 真 auth）；② **出站外泄**（workspace 可读内容可 POST 到任意外网——Seatbelt 同样出站全开，非 Linux 独有，但 Mac 至少禁 loopback）。正解 = A4（服务端代理 LLM → `--unshare-net` 全禁）；网络面见 #22。
+
+### `~/.pi/agent` 挂载收窄（安全修复，取代「暂整目录可写」简化）
+
+**背景**：初版 bwrap 适配器为让 pi 写运行时锁（`settings.json.lock`），把 `~/.pi/agent` **整目录 `--bind` rw** 挂进沙箱。该目录含 `auth.json`（provider token）与 `sessions/`（全部会话 transcript）——整目录 rw = **token 可读可改、transcript 可读**，与 Seatbelt 侧（显式 deny 读写 `auth.json`/`sessions`，macOS 真 pi 实证可跑）直接不对等，也使文件头「不挂 auth.json/sessions」的声明失效。
+
+**方案**：`--tmpfs ~/.pi/agent`（遮蔽）+ 配置文件级 `--ro-bind` 放回（`settings.json`/`models.json`/`models-store.json`/`extensions`，按存在性）。
+
+**原因**（为什么是 tmpfs 遮蔽而非其它选项）：
+- **bwrap 的隔离原语是「不挂载即不存在」**（default-nothing，非 deny-list）。deny-list 模型（Seatbelt）的规则顺序/most-specific 语义可能被写错绕过；不挂载则攻击者根本无路径可达——symlink 指过去也解析不到。tmpfs 挂在 `~/.pi/agent` 上后，真目录内容在沙箱内不存在，比任何 deny 规则都强。
+- **pi 写锁的功能风险用 tmpfs 吸收**：macOS 侧 Seatbelt 允许写 `~/.pi/agent`（`allow file-write* subpath`），说明 pi 确会写此目录（锁文件）。直接完全不挂有「Linux 上 pi 起不来」的功能回归风险（无法在 macOS 预验证）。tmpfs 提供同形的可写目录——锁写进 tmpfs，进程死即消失，无害；读配置命中 ro-bind 的文件。**可写性与泄漏解耦**：能写 ≠ 能碰到真数据。
+- **不放 `~/.pi/agent/skills` 等其余内容**：repo skills 走 `allow.ro` 挂载，pi 用户级 skills 未实证为运行前提——少挂一个就少一个泄漏面，Linux 验证期若实证需要再放（ro）。
+
+**验证**：`test/sandbox-bwrap-argv.test.ts`（平台无关单元）断言 argv 形状——无整目录 `--bind ~/.pi/agent`、含 tmpfs + 配置 ro-bind、任何参数不含 auth.json/sessions；mutation 验证（退回 `--bind` → 断言红）。真机 containment 断言仍延后 Linux（`test/sandbox-bwrap.test.ts`，linux 门控）。
 
 ## 关联
 ADR-0011（A1 路线）、0005/0006/0009、`SECURITY.md`、ticket #2（Seatbelt，本 ADR）、#3（bwrap，代码已接、验证延后）、`learnings/pi-provider-key-resolver-cwd.md`（pi 能从工作区 cwd 跑起来的前提）。

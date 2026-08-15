@@ -4,9 +4,11 @@
 // 根本【不挂载】（bwrap 默认 nothing；不像 Seatbelt 的 deny-list）。symlink 逃逸由 bind 拓扑兜住
 // （没挂载的路径，symlink 指过去也解析不到）。
 //
-// ⚠【网络不对称】bwrap 网络是全有/全无：--unshare-net 会断 provider（pi 挂，除非 A4 服务端代理）；
-// 不 unshare 则主机网络——loopback SSRF 在 Linux 上【未堵】（Seatbelt/Mac 禁了 loopback）。
-// 故默认主机网络（pi 能连 provider），代价 = Linux loopback 隔离要等 A4。详见 ADR-0012 / SECURITY.md。
+// ⚠【网络不对称 = 当前最大残留威胁】bwrap 网络全有/全无：--unshare-net 会断 provider（pi 挂，除非
+// A4 服务端代理）；不 unshare 则主机网络。当前默认主机网络 → Linux 上两缺口【未堵】（Seatbelt/Mac 均已堵）：
+// ① loopback SSRF——沙箱内进程可 curl 127.0.0.1:3000 自驱动本服务（防线仅剩 bridge nonce + 真 auth）；
+// ② 出站外泄——workspace 内可读内容可 POST 到任意外网（Seatbelt 同样出站全开，非 Linux 独有，但 Mac 至少禁 loopback）。
+// 正解 = A4（服务端代理 LLM → --unshare-net 全禁）；文件面（本文件）已收窄，网络面见 #22 / ADR-0012。
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { SandboxSpec, SpawnPlan } from "./sandbox";
@@ -28,12 +30,15 @@ export function wrapSpawnBwrap(spec: SandboxSpec): SpawnPlan {
   if (spec.argv[0].startsWith("/")) args.push("--ro-bind", dirname(spec.argv[0]), dirname(spec.argv[0]));
   // skills（ro）。
   for (const p of ro) args.push("--ro-bind", p, p);
-  // pi 运行时配置（ro：settings/models；**不挂 auth.json/sessions** → token/transcript 不可达）。
+  // pi 运行时目录 ~/.pi/agent：tmpfs 遮蔽 + 配置文件级 ro-bind（安全修复，ADR-0012 #3 小节）。
+  // · tmpfs 挂在 ~/.pi/agent 上 → 真目录（含 auth.json token、sessions transcript）在沙箱内**不存在**
+  //   （bwrap 不挂即不存在，symlink 指过去也解析不到）；pi 写运行时锁（settings.json.lock）落 tmpfs，易失无害。
+  // · 配置按存在性 ro-bind 放回（settings/models 是 pi 起来的前提；extensions 只读）。
+  // 旧方案（整目录 --bind rw）曾让 auth.json/sessions 可读写——与 Seatbelt（deny 读写两者）不对等，已废。
   if (home && existsSync(`${home}/.pi/agent`)) {
-    for (const f of ["/.pi/agent/settings.json", "/.pi/agent/models.json"])
-      if (existsSync(home + f)) args.push("--ro-bind", home + f, home + f);
-    // pi 运行时锁需要写 ~/.pi/agent → 给一个独立可写目录（只含锁，不含 auth.json/sessions）。
-    args.push("--bind", `${home}/.pi/agent`, `${home}/.pi/agent`); // ⚠ 简化：暂整目录可写；Linux 验证期可收窄
+    args.push("--tmpfs", `${home}/.pi/agent`);
+    for (const f of ["/settings.json", "/models.json", "/models-store.json", "/extensions"])
+      if (existsSync(home + "/.pi/agent" + f)) args.push("--ro-bind", home + "/.pi/agent" + f, home + "/.pi/agent" + f);
   }
   // 工作区 + sessions（rw）。
   for (const p of rw) args.push("--bind", p, p);
