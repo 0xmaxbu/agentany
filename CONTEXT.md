@@ -54,4 +54,5 @@
 | 交互工具 (Interaction tool) | chat 界面提供给 pi、用于与用户交互的工具（v1：`ask_user` 单/多选；后期加更多）。pi 用它把 HITL 挂起/澄清等结构化提问渲染成 chat 里的选择 UI（ADR-0009）。 |
 | 项目记忆 (Project memory) | workspace 工作区的 `AGENTS.md`（L2）——pi 每轮自动加载，承载 engagement/品牌背景与关键决策，给 pi 稳定的**workspace 级持久记忆**、抗会话压缩丢失。不同于会话 transcript（L1，会话内）与 skill 经验（L3，repo 级）。 |
 | 系统 (System) | 承载**全局、跨项目配置**（安全姿态 `SECURITY_POSTURE`、运行参数、全局开关等）的实体；对所有项目/会话生效，与「项目级」配置对立。是独立实体、非范围限定词（ADR-0013）。 |
-| 定时任务 (Scheduled Task) | 用户配置的 **cron 触发器**：按计划自动启动指定工作流，**归属 workspace**（ADR-0018；原文「归属项目」已废）；区别于系统自身的内部调度任务（ADR-0013）。 |
+| 系统作用域 (System scope) | **不属于任何 workspace 的读写范围**（专用系统目录，如经验蒸馏要写的 skill 文件）。所有用户不可见；读写经**专用系统工具**、只在 cron 任务执行的 pi 运行时注入（注入面即权限面）。不是 workspace——无名单/权限语义，是正交的全局维度。系统作用域的定时任务挂「系统」实体下。 |
+| 定时任务 (Scheduled Task) | 用户配置的 **cron 触发器**，**仅触发 LLM 可独立完成的任务**（如经验蒸馏）——**不触发工作流**（工作流含 HITL/审批语义，cron 无人值守不适用）。两类 scope：**system**（跨 workspace，挂系统实体，如蒸馏）/ **workspace**（挂单 workspace，v1 未实现）；**仅 admin 可建**（chat 里经 LLM 建或 admin 经 UI 建，服务端强制校验角色）。所有定时任务支持**手动调用**；停机错过窗口只记 missed 不补跑（数据留待下次一并处理）。区别于系统自身的内部调度任务（ADR-0013）。 |
