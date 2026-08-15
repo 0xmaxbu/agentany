@@ -125,6 +125,15 @@ export function registerUserRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
     return c.json({ ok: true });
   });
 
+  // 恢复账号（f4，admin）：deactivate 逆。token 已在停用时吊销——恢复后用户重新登录。
+  app.post("/users/:id/activate", (c) => {
+    const f = requireAdmin(c);
+    if (f) return f;
+    const ok = us.activateUser(c.req.param("id"));
+    if (!ok) return c.json({ error: "user not found" }, 404);
+    return c.json({ ok: true });
+  });
+
   // 重置密码（admin）：不需旧密码 → 设新 hash → 吊销该用户全部 token → 断 SSE（强制用新密码重登）。
   app.post("/users/:id/reset-password", async (c) => {
     const f = requireAdmin(c);

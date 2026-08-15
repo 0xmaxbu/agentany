@@ -89,7 +89,14 @@ export interface QuestionRow {
 
 const J = (v: unknown): string | null => (v === undefined ? null : JSON.stringify(v));
 const P = (s: string | null): unknown => (s != null ? JSON.parse(s) : null);
-const now = () => new Date().toISOString();
+// 单调递增时间戳：同毫秒连续操作（测试/批量建会话）保持严格先后——updatedAt 倒序锚
+// 不退化成插入序，touch「排最前」语义毫秒内也成立。
+let lastTs = 0;
+const now = (): string => {
+  const t = Date.now();
+  lastTs = t > lastTs ? t : lastTs + 1;
+  return new Date(lastTs).toISOString();
+};
 
 export class WorkflowStore {
   // store 只做泛化查询、不依赖 schema 的具体类型；<any> 绕开 BunSQLiteDatabase 泛型不协变。
@@ -245,17 +252,19 @@ export class WorkflowStore {
     this.db.update(conversations).set({ updatedAt: now() }).where(eq(conversations.id, id)).run();
   }
 
-  /** 创建者的会话列表（#20/f2：前端按 ws 分组）。updatedAt 倒序。#21：默认只活跃，archived=true 反向。 */
-  listConversations(userId: string, workspaceId?: string, archived = false): ConversationRow[] {
+  /** 创建者的会话列表（#20/f2：前端按 ws 分组）。updatedAt 倒序（id 破并列——分页翻页稳定）。
+   * #21：默认只活跃，archived=true 反向。#手风琴：limit/offset 分页（无参全量）。 */
+  listConversations(userId: string, workspaceId?: string, archived = false, limit?: number, offset?: number): ConversationRow[] {
     const conds = [eq(conversations.userId, userId)];
     if (workspaceId) conds.push(eq(conversations.workspaceId, workspaceId));
     conds.push(archived ? isNotNull(conversations.archivedAt) : isNull(conversations.archivedAt));
-    return this.db
+    const q = this.db
       .select()
       .from(conversations)
       .where(and(...conds))
-      .orderBy(desc(conversations.updatedAt))
-      .all() as unknown as ConversationRow[];
+      .orderBy(desc(conversations.updatedAt), desc(conversations.id));
+    const rows = (limit !== undefined ? q.limit(limit).offset(offset ?? 0) : q).all();
+    return rows as unknown as ConversationRow[];
   }
 
   /** #21/ADR-0020 归档（幂等：已归档不动时间戳）。返回更新后行；不存在 undefined。 */

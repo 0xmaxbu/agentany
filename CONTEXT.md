@@ -46,6 +46,7 @@
 | 块 (Block) | 消息内容的原子单位（ADR-0019）：一条消息 = blocks 序列，四件套 `text`/`thinking`/`tool_use`/`tool_result`。历史（pi session 读取）与实时（SSE 三帧）同构——同一 Block 形状、同一渲染组件。前端消息模型的单一真相（取代旧「纯文本 content」）。 |
 | 块三帧 (Block frames) | 实时块流的三种 SSE 帧（ADR-0019）：`block_start`（含 kind/meta）、`block_delta`（增量）、`block_end`（关块）。blockId 标识**块**；turn 边界仍由 `done` 帧表达（块边界 ≠ turn 边界）。legacy `delta` 帧已删（双发收口）。 |
 | 归档会话 (Archived conversation) | 从主列表移除但**可查可恢复**的会话（ADR-0020，archivedAt 软态）：历史只读、禁止发消息；创建者可归档/恢复，删除（不可逆全链清理）仅 admin。区别于「删除」——归档是整理，删除是清除。 |
+| 归档 Workspace (Archived workspace) | admin 的整理动作（#手风琴）：workspace 从所有用户侧栏隐藏，但**其会话可看可发**（非封禁——区别于归档会话的只读）；admin 可恢复；公司 workspace 不可归档。 |
 | chat 界面 (Chat surface) | agentany 的主产品面：用户在此对话、上传资料、触发能力。闲聊流式走 SSE（ADR-0003），单进程 Hono + React/Vite 托管。 |
 | 基础通用工具 (Basic universal tool) | 每个 chat turn 默认开启的工具扩展（如搜索 `tavily-search/web-search`），无需用户/工作流显式声明。其余工具型 skill 走自动发现、pi 按需用。 |
 | 自动发现 (Auto-discovery) | pi 的标准能力发现：每次运行自动扫全部 repo skills（ADR-0005），模型按需调用。工作流经**桥接工具**同样被 pi 自动发现、从 NL 触发（ADR-0009）。 |

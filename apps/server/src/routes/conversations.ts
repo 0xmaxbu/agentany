@@ -56,10 +56,17 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
   });
 
   // 会话列表（#20/f2）：创建者私有，可选 workspaceId 过滤，updatedAt 倒序。#21：?archived=1 反向取归档。
+  // #手风琴：limit/offset 分页（侧栏每组懒加载 10 条）；无参全量（搜索兜底）。offset 续页稳定性靠
+  // updatedAt 倒序 + id 破并列（store 内 orderBy），同秒新建的会话翻页不会重/漏。
   app.get("/conversations", (c) => {
     const wsParam = c.req.query("workspaceId");
     const archived = c.req.query("archived") === "1";
-    return c.json(deps.store.listConversations(userIdOf(c), wsParam || undefined, archived));
+    const limitRaw = Number(c.req.query("limit"));
+    const offsetRaw = Number(c.req.query("offset"));
+    const validNum = (n: number) => Number.isInteger(n) && n >= 0;
+    const limit = validNum(limitRaw) ? limitRaw : undefined;
+    const offset = validNum(offsetRaw) ? offsetRaw : undefined;
+    return c.json(deps.store.listConversations(userIdOf(c), wsParam || undefined, archived, limit, offset));
   });
 
   // 历史（#20 双源）：pi session 优先（blocks 结构真相源）；无 session 文件（e2e stub/首轮前）兜底 DB 冗余文本。

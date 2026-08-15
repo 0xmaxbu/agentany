@@ -123,6 +123,12 @@ export class UserStore {
     return changed > 0;
   }
 
+  /** f4：恢复（deactivate 逆）。幂等（active 再 activate no-op 仍 true）；token 已在停用时吊销——恢复后重新登录。 */
+  activateUser(userId: string): boolean {
+    const r = this.db.update(users).set({ status: "active" }).where(eq(users.id, userId)).run();
+    return ((r as any).changes ?? 0) > 0;
+  }
+
   /** 签发：生成明文 token，落 sha256；返回明文（仅给客户端一次）。 */
   async issueToken(userId: string): Promise<string> {
     const token = newToken();

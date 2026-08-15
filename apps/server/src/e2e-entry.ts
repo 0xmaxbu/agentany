@@ -120,6 +120,8 @@ const db = openDbMigrated();
   const existing = us.getUserByUsername("dev-user");
   const u = existing ?? (await us.createUser({ username: "dev-user", password: "e2e-no-login", displayName: "E2E Dev" }));
   process.env.AGENTANY_DEV_USER = u.id; // middleware 每请求读 env——identity 对齐 seed 行
+  // f4 e2e：member 账号（管理页无权限段用——dev-user 是 admin 角色走不了 403 路径）
+  if (!us.getUserByUsername("member-e2e")) await us.createUser({ username: "member-e2e", password: "member-e2e-pw-1", displayName: "E2E Member", role: "member" });
 }
 const store = new WorkflowStore(db);
 const eventBus = new EventBus(); // 【硬条件·#19】共享：bridge run 事件 → TurnTrigger 自动 turn（不传则全链断）

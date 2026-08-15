@@ -1,5 +1,5 @@
 // Drizzle schema：对齐 Spike B 的 append-only 执行日志两表（ADR-0004/0007）。
-import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const workflowRuns = sqliteTable("workflow_runs", {
   runId: text("runId").primaryKey(),
@@ -37,15 +37,22 @@ export const feedback = sqliteTable("feedback", {
 });
 
 // chat 切片①（ADR-0009）：会话 = 一条持久 Pi session（chat-<conversationId>）。
-export const conversations = sqliteTable("conversations", {
-  id: text("id").primaryKey(),
-  workspaceId: text("workspaceId").notNull().default("ws_company"), // ADR-0018：会话挂 workspace；缺省公司 ws
-  userId: text("userId").notNull(), // 创建者（会话一律创建者私有，ADR-0018）
-  title: text("title"),
-  createdAt: text("createdAt").notNull(),
-  updatedAt: text("updatedAt").notNull(),
-  archivedAt: text("archivedAt"), // #21/ADR-0020：null=活跃；非空=归档（只读可恢复）。软态真相源
-});
+export const conversations = sqliteTable(
+  "conversations",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspaceId").notNull().default("ws_company"), // ADR-0018：会话挂 workspace；缺省公司 ws
+    userId: text("userId").notNull(), // 创建者（会话一律创建者私有，ADR-0018）
+    title: text("title"),
+    createdAt: text("createdAt").notNull(),
+    updatedAt: text("updatedAt").notNull(),
+    archivedAt: text("archivedAt"), // #21/ADR-0020：null=活跃；非空=归档（只读可恢复）。软态真相源
+  },
+  (t) => ({
+    // #手风琴：ws 活跃度聚合（WHERE userId+archivedAt → GROUP BY workspaceId → max(updatedAt)）覆盖索引，免全表扫
+    userWsActive: index("conversations_user_ws_active_idx").on(t.userId, t.archivedAt, t.workspaceId, t.updatedAt),
+  }),
+);
 
 // 会话消息：user 进来即落库；assistant turn 干净结束一次性落库。
 export const messages = sqliteTable("messages", {
@@ -106,6 +113,7 @@ export const workspaces = sqliteTable("workspaces", {
   status: text("status").notNull().default("active"),
   createdAt: text("createdAt").notNull(),
   updatedAt: text("updatedAt").notNull(),
+  archivedAt: text("archivedAt"), // #手风琴：null=活跃；admin 可归档（侧栏隐藏，会话可看可发）
 });
 
 // 工作空间可访问名单（ADR-0018）。读时 join users 过滤 active（注销用户悬空行留作审计，不清理）。
