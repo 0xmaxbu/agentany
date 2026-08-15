@@ -31,7 +31,7 @@ export function ChatPage() {
   const controls = useShellControls();
 
   return (
-    <div className="main flex min-w-0 flex-1 flex-col">
+    <div className="main flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <h1 className="text-base font-semibold">agentany</h1>
         <div className="flex items-center gap-3">

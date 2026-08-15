@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
+    "dev:local": "DATA_DIR=../../data PORT=3001 BRIDGE_PORT=3299 bun run --watch src/index.ts",
     "test": "bun test",
     "db:generate": "drizzle-kit generate"
   },

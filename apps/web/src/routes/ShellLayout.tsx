@@ -47,7 +47,8 @@ export function ShellLayout() {
     <ShellControlsContext.Provider value={controls}>
       <div className="flex h-dvh w-full bg-background text-foreground">
         <Sidebar />
-        <div className="flex min-w-0 flex-1 flex-col">
+        {/* min-h-0：flex 子项默认 min-height:auto 会随内容撑高——必须显式放开才能让中区内部滚动 */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <Outlet />
         </div>
         {panelOpen && <ContextPanel />}

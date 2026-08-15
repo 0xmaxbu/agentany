@@ -1,10 +1,11 @@
 import { defineConfig } from "@playwright/test";
 
 // E2E：Playwright webServer 起 ① backend（E2E 专用入口，stub runPi）+ ② vite dev（proxy）。
-// baseURL = vite dev :5173 → proxy → backend :3000。仅 CLI（@playwright/test），无 MCP。
+// 端口与 dev:local（3001/3299/5173）完全隔离——并行互不干扰（dev:local vite 占 5173，e2e 用 5174）。
+// baseURL = e2e vite :5174 → proxy → e2e backend :3000。仅 CLI（@playwright/test），无 MCP。
 // webServer.cwd 相对本 config 文件解析（= apps/web）。
 const BACKEND_PORT = 3000;
-const WEB_PORT = 5173;
+const WEB_PORT = 5174;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -28,8 +29,8 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      command: "bun run dev",
-      cwd: ".", // apps/web
+      command: `bun run dev -- --port ${WEB_PORT} --strictPort`,
+      cwd: ".", // apps/web（--strictPort：5174 被占即报错，不静默漂移端口）
       url: `http://127.0.0.1:${WEB_PORT}/`,
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,

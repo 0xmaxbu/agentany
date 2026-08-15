@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:local": "AGENTANY_BACKEND=http://127.0.0.1:3001 vite",
     "build": "vite build",
     "preview": "vite preview",
     "test": "bun test",
@@ -11,6 +12,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "clsx": "^2.1.1",
     "cmdk": "^1",
     "react": "^18.3.1",
@@ -18,6 +20,7 @@
     "react-markdown": "^9",
     "react-router": "^7",
     "remark-gfm": "^4",
+    "shiki": "^4.4.3",
     "sonner": "^2",
     "tailwind-merge": "^3.6.0",
     "zustand": "^4.5.5"
