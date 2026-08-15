@@ -80,7 +80,7 @@ export async function runTurn(
   // 冗余落库（#20：messages 表保留供差异比对；pi session 才是历史真相源）
   const msgId = deps.store.appendMessage({ conversationId: conv.id, role: "assistant", content: result.text });
   send({ type: "done", messageId: msgId });
-  maybeAutoTitle(deps, conversationId, userContent, makeStream, send); // #命名：fire-and-forget（不阻塞 done 后续）
+  maybeAutoTitle(deps, conversationId, makeStream, send); // #命名：fire-and-forget（不阻塞 done 后续）
 }
 
 // ── #命名：首轮对话后 LLM 提取主题作会话名 ──
@@ -93,26 +93,34 @@ const TITLE_INSTRUCTION = "提取主题"; // 命名调用的 prompt 特征（测
 const TITLE_PROMPT = `从下面这段用户提问中${TITLE_INSTRUCTION}，输出一个会话标题：长度至少 ${TITLE_MIN} 个字、最多 ${TITLE_MAX} 个字。
 只输出标题本身，不要任何前缀、引号或解释。`;
 
-/** turn 完成后按需命名：title 为 null 时才触发（幂等——rename 后不再进）。失败兜底：user 消息前缀截断。 */
+/** turn 完成后按需命名：title=null 且素材够（累计 user 消息 ≥TITLE_MIN 字）才触发。
+ * 素材不足/LLM 失败/输出违规 → 一律跳过（title 保持 null 显示「新会话」），下一轮 turn 自然重试——
+ * 信息不足就不硬造名字（用户定：等第二次对话再提取，以此类推）。幂等：rename 后不再进。 */
 async function maybeAutoTitle(
   deps: RunDeps,
   conversationId: string,
-  userContent: string,
   makeStream: typeof makeRunPiStream,
   send: TurnSend,
 ): Promise<void> {
   const conv = deps.store.getConversation(conversationId);
   if (!conv || conv.title != null) return;
-  const fallback = userContent.trim().slice(0, TITLE_MAX);
-  let title = fallback;
+  // 素材 = 累计全部 user 消息（DB messages 表每轮落库，可靠累计源）——首轮太短时第二轮补足即触发。
+  const material = deps.store
+    .listMessages(conversationId)
+    .filter((m) => m.role === "user")
+    .map((m) => m.content)
+    .join("\n");
+  if (material.trim().length < TITLE_MIN) return; // 素材不足 → 本轮跳过，title 保持 null
+  let title: string;
   try {
     // 一次性命名调用：独立 session（headless，不污染会话本身的 pi session 历史），无工具无 bridge。
     const oneShot = makeStream({ workspaceId: conv.workspaceId, sessionId: `title-${conversationId}` });
-    const r = await oneShot({ prompt: `${TITLE_PROMPT}\n\n用户提问：${userContent.slice(0, 500)}`, timeoutMs: 30_000 });
+    const r = await oneShot({ prompt: `${TITLE_PROMPT}\n\n用户提问：${material.slice(0, 500)}`, timeoutMs: 30_000 });
     const got = r.text.trim().replace(/^["'「『]|["'」』]$/g, "").slice(0, TITLE_MAX);
-    if (got.length >= TITLE_MIN) title = got; // 太短（违反下限）→ 弃用走兜底（重名防线）
+    if (got.length < TITLE_MIN) return; // 输出违规（太短）→ 跳过不硬造，下轮再试
+    title = got;
   } catch {
-    // LLM 失败 → 兜底前缀（保持「新会话」态没意义——首轮素材已够）
+    return; // LLM 失败 → 跳过（不命名），下轮重试
   }
   if (deps.store.getConversation(conversationId)?.title != null) return; // 并发竞态：他者已命名则弃
   deps.store.renameConversation(conversationId, title);

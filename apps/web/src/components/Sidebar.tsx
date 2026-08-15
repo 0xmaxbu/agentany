@@ -5,19 +5,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArchiveIcon, ArrowUUpLeftIcon, CaretDownIcon, CaretRightIcon, GearSixIcon, MagnifyingGlassIcon, PlusIcon, SignOutIcon, TrashIcon, XIcon } from "@phosphor-icons/react";
-import { COMPANY_WORKSPACE_ID, useWorkspace } from "../store/workspace";
+import { COMPANY_WORKSPACE_ID, PAGE_SIZE, UNTITLED, useWorkspace } from "../store/workspace";
 import { useChat } from "../store/chat";
 import { useAuth, ROLE } from "../store/auth";
 import { listConversations, type ConversationRow, type Workspace } from "../api";
 
 /** 管理菜单（f4）：「所有 admin 管理项目」可扩展列表——M4 定时任务、M5 人审后续挂这。 */
+/** 管理菜单（f4）：「所有 admin 管理项目」可扩展列表——M4 定时任务、M5 人审后续挂这。 */
 const ADMIN_MENU = [
   { path: "/admin/users", label: "用户" },
   { path: "/admin/workspaces", label: "Workspace" },
 ] as const;
-
-/** #命名：title=null 的显示兜底（首轮对话后 LLM 自动命名替换）。 */
-const UNTITLED = "新会话";
 
 /**
  * 侧栏底部用户行（Kimi 式）：头像圈 + 昵称，hover/点击弹出向上菜单（管理/登出收入菜单）。
@@ -348,12 +346,12 @@ function ConvAccordion({ isAdmin, current, loaded, fallbackNav }: {
                       <ConvItem key={c.id} c={c} current={current} isAdmin={isAdmin} fallbackNav={fallbackNav} />
                     ))}
                     {/* #手风琴-2：>5 条时「全部会话」弹窗入口（组内固定 5 条直显） */}
-                    {g && g.items.length >= 5 && (
+                    {g && g.items.length >= PAGE_SIZE && (
                       <button className="px-3 py-1 text-left text-xs text-muted-foreground hover:text-foreground" onClick={() => setBrowseFor(w)} data-testid={`ws-all-${w.slug}`}>
                         全部会话
                       </button>
                     )}
-                    {g && g.items.length < 5 && g.items.length === 0 && <div className="px-3 py-1 text-xs text-muted-foreground">暂无会话</div>}
+                    {g && g.items.length < PAGE_SIZE && g.items.length === 0 && <div className="px-3 py-1 text-xs text-muted-foreground">暂无会话</div>}
                     {!g && <div className="px-3 py-1 text-xs text-muted-foreground">加载中…</div>}
                   </>
                 )}

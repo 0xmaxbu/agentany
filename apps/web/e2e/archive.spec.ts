@@ -70,7 +70,8 @@ test("归档当前会话且还有剩余会话 → 补位跳到剩余第一条（
   // 分页首屏异步（公司组 limit 10）——等首条 .item 出现再计数。
   await expect(page.locator(".conv-list .item").first()).toBeVisible({ timeout: 5_000 });
   const preCount = await page.locator(".conv-list .item").count(); // 含前序残留 + goto 自动新建的 1 条
-  await page.locator("textarea").fill("convA");
+  // A 首条消息 ≥8 字（#命名素材门槛）→ A 获得主题名，与 B 的「新会话」可区分（补位断言依赖 header 名切换）
+  await page.locator("textarea").fill("convA 的第一条足够长的消息");
   await page.locator("textarea").press("Enter");
   await expect(page.locator("button.stop")).toHaveCount(0, { timeout: 5_000 }); // 等 A 流完
   await page.locator("[data-testid=ws-toggle-company]").hover(); // 组头 hover 显 +

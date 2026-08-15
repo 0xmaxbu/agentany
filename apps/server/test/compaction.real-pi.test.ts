@@ -75,8 +75,10 @@ describe.skipIf(!HAS_KEY)("compaction 实测 · 真 pi 长对话 jsonl（#19）"
     // 此处 dataDir 已在 import 前设进 process.env，generalSessionDir 读 process.env.DATA_DIR 吗？否——DATA_DIR 是 const。
     // 改用直接拼路径。）
     const sessDir = join(DATA_DIR, "general", "pi-sessions");
-    const files = readdirSync(sessDir).filter((f) => f.endsWith(".jsonl"));
-    expect(files.length, `期望 session jsonl 落盘，实际 files: ${files.join(",")}`).toBeGreaterThan(0);
+    // #命名 后每会话有两个 session 文件：chat-<cid>（本测 transcript）+ title-<cid>（一次性命名，
+    // 仅 2 行 message）——按会话 id 精确锁定 chat- 文件，不再字典序取尾（会捡到 title-）。
+    const files = readdirSync(sessDir).filter((f) => f.endsWith(".jsonl") && f.includes(`chat-${cid}`));
+    expect(files.length, `期望本会话 session jsonl 落盘，实际 files: ${files.join(",")}`).toBeGreaterThan(0);
     const jl = readFileSync(join(sessDir, files[files.length - 1]), "utf8");
     const lines = jl.split("\n").filter(Boolean);
     const BASE_TYPES = new Set(["session", "model_change", "thinking_level_change", "message"]);

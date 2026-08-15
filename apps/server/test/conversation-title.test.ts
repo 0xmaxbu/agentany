@@ -117,26 +117,31 @@ describe("会话自动命名（#命名）", () => {
     await s.reader.cancel();
   });
 
-  test("命名调用失败 → 兜底：user 消息前 12 字为 title，不影响主流程", async () => {
-    const TITLE_MAX = 24; // 与 src/chat/turn.ts 同值
-    const longMsg = "这是一条很长很长很长的用户消息用于兜底截断";
-    const factory = () =>
-      (async (call) => {
-        if (call.prompt.includes(TITLE_MARK)) throw new Error("llm down");
-        emitText(call, "ok");
-        return { text: "ok", messages: [], toolResults: [] };
-      }) as ConfiguredRunPiStream;
-    const { app, store } = newApp(factory);
+  test("素材不足（累计 user 消息 <8 字）→ 本轮跳过不命名；第二轮素材够了才命名", async () => {
+    const n = namingFactory();
+    const { app, store } = newApp(n.factory);
     const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();
     const s = await openStream(app, c.id);
     await delay(15);
-    await postMsg(app, c.id, longMsg);
-    await delayUntil(() => store.getConversation(c.id)?.title != null);
-    expect(store.getConversation(c.id)!.title).toBe(longMsg.slice(0, TITLE_MAX));
+
+    // 第一轮：仅「你好」（2 字 <8）→ 不起命名调用，title 保持 null（显示「新会话」）
+    await postMsg(app, c.id, "你好");
+    await delayUntil(() => s.frames.some((f) => f.type === "done"));
+    await delay(100);
+    expect(store.getConversation(c.id)!.title).toBeNull();
+    expect(n.prompts().some((p) => p.includes(TITLE_MARK))).toBe(false);
+
+    // 第二轮：补充实质内容（累计 ≥8 字）→ 命名触发，素材含两轮消息
+    await postMsg(app, c.id, "帮我想几个品牌名，要中文的");
+    await delayUntil(() => s.frames.some((f) => f.type === "title"));
+    const namingPrompt = n.prompts().find((p) => p.includes(TITLE_MARK))!;
+    expect(namingPrompt).toContain("你好"); // 素材 = 累计 user 消息（非仅本轮）
+    expect(namingPrompt).toContain("帮我想几个品牌名");
+    expect(store.getConversation(c.id)!.title).toBe(LLM_TITLE);
     await s.reader.cancel();
   });
 
-  test("LLM 输出短于下限（<8 字）→ 弃用走兜底（重名防线）", async () => {
+  test("LLM 输出短于下限（<8 字）→ 跳过不落库（下轮再试），不硬造名字", async () => {
     const factory = () =>
       (async (call) => {
         if (call.prompt.includes(TITLE_MARK)) {
@@ -150,10 +155,29 @@ describe("会话自动命名（#命名）", () => {
     const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();
     const s = await openStream(app, c.id);
     await delay(15);
-    const msg = "帮我想几个品牌名，要中文的";
-    await postMsg(app, c.id, msg);
-    await delayUntil(() => store.getConversation(c.id)?.title != null);
-    expect(store.getConversation(c.id)!.title).toBe(msg.slice(0, 24)); // 兜底 = 消息前缀，非 LLM 短输出
+    await postMsg(app, c.id, "帮我想几个品牌名，要中文的");
+    await delayUntil(() => s.frames.some((f) => f.type === "done"));
+    await delay(100); // 命名若落库也该已完成
+    expect(store.getConversation(c.id)!.title).toBeNull(); // 不命名 = 保持「新会话」
+    expect(s.frames.some((f: any) => f.type === "title")).toBe(false); // 也不发帧
+    await s.reader.cancel();
+  });
+
+  test("LLM 调用失败 → 同样跳过（不命名），主流程无感", async () => {
+    const factory = () =>
+      (async (call) => {
+        if (call.prompt.includes(TITLE_MARK)) throw new Error("llm down");
+        emitText(call, "ok");
+        return { text: "ok", messages: [], toolResults: [] };
+      }) as ConfiguredRunPiStream;
+    const { app, store } = newApp(factory);
+    const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();
+    const s = await openStream(app, c.id);
+    await delay(15);
+    await postMsg(app, c.id, "这是一条足够长的用户消息用于触发命名");
+    await delayUntil(() => s.frames.some((f) => f.type === "done"));
+    await delay(100);
+    expect(store.getConversation(c.id)!.title).toBeNull(); // 失败 = 不命名，等下轮重试
     await s.reader.cancel();
   });
 
@@ -163,7 +187,7 @@ describe("会话自动命名（#命名）", () => {
     const c: any = await (await app.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();
     const s = await openStream(app, c.id);
     await delay(15);
-    await postMsg(app, c.id, "第一轮");
+    await postMsg(app, c.id, "第一轮的素材足够长"); // ≥8 字（素材门槛）
     await delayUntil(() => s.frames.some((f) => f.type === "title"));
     await postMsg(app, c.id, "第二轮");
     await delayUntil(() => s.frames.filter((f) => f.type === "done").length >= 2);

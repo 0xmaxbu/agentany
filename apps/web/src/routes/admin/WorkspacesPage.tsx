@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { apiFetch } from "../../api";
 import { useAuth, ROLE } from "../../store/auth";
+import { COMPANY_WORKSPACE_ID } from "../../store/workspace"; // 域常量唯一源（本地不重定义）
 import { useTheme } from "../../lib/theme";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { Button } from "../../components/ui/button";
@@ -36,8 +37,6 @@ const restoreWs = async (id: string) => {
   const r = await apiFetch(`/workspaces/${id}/restore`, { method: "PATCH" });
   if (!r.ok) throw new Error(`restoreWs: ${r.status}`);
 };
-// 公司 ws 固定 id（后端 workspaces/store.ts 同源）
-const COMPANY_WORKSPACE_ID = "ws_company";
 const getWorkspace = async (id: string): Promise<AdminWorkspaceRow & { members: WsMember[] }> => {
   const r = await apiFetch(`/workspaces/${id}`);
   if (!r.ok) throw new Error(`getWorkspace: ${r.status}`);

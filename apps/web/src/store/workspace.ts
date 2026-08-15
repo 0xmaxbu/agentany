@@ -7,6 +7,9 @@ import { archiveConversation, deleteConversation, listConversations, listWorkspa
 
 export const PAGE_SIZE = 5; // 组内直显条数（#手风琴-2；全部会话走弹窗）
 
+/** #命名：title=null 的显示兜底（素材不足/LLM 未成功时保持此名）。域常量——Sidebar/ChatPage 共用。 */
+export const UNTITLED = "新会话";
+
 /** 每 ws 组的会话分页态（#手风琴）。items=已加载（updatedAt 倒序）；exhausted=加载更多隐藏。 */
 interface GroupState {
   items: ConversationRow[];

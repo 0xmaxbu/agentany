@@ -4,7 +4,7 @@
 import { useEffect } from "react";
 import { useNavigate, useParams } from "react-router";
 import { useChat } from "../store/chat";
-import { useWorkspace } from "../store/workspace";
+import { UNTITLED, useWorkspace } from "../store/workspace";
 import { ChatWindow } from "../components/ChatWindow";
 import { Composer } from "../components/Composer";
 import { useShellControls } from "./ShellLayout";
@@ -14,7 +14,7 @@ const convTitle = (id: string | null): string => {
   if (!id) return "准备中…";
   for (const g of Object.values(useWorkspace.getState().groups)) {
     const hit = g.items.find((c) => c.id === id);
-    if (hit) return hit.title || "新会话";
+    if (hit) return hit.title || UNTITLED;
   }
   return `会话 ${id.slice(-6)}`;
 };
