@@ -34,8 +34,9 @@ export interface Conversation {
 }
 // ConversationRow（GET /conversations 列表形状，含 updatedAt——f1 端点）。
 // userId 可选：乐观 prepend（createConversation 响应无此字段，refresh 兜底补真值）。
+// #21：archivedAt 可选（旧后端无此列；null/缺省=活跃）。
 export interface ConversationRow {
-  id: string; workspaceId: string; userId?: string; title: string | null; createdAt: string; updatedAt: string;
+  id: string; workspaceId: string; userId?: string; title: string | null; createdAt: string; updatedAt: string; archivedAt?: string | null;
 }
 // Workspace（GET /workspaces 形状——toWorkspace；member=allUsers∪名单，admin=全部）
 export interface Workspace {
@@ -74,10 +75,29 @@ export async function getMessages(conversationId: string): Promise<Message[]> {
 }
 
 // 会话列表（f1 端点）：创建者私有，updatedAt 倒序。可选 workspaceId 过滤（f2 前端全量取+本地分组）。
-export async function listConversations(): Promise<ConversationRow[]> {
-  const r = await apiFetch("/conversations");
+// #21：archived=true 取归档列表（默认活跃）。
+export async function listConversations(archived = false): Promise<ConversationRow[]> {
+  const r = await apiFetch(`/conversations${archived ? "?archived=1" : ""}`);
   if (!r.ok) throw new Error(`listConversations: ${r.status}`);
   return r.json();
+}
+
+// #21/ADR-0020：归档（可逆软态）/恢复。删除 admin-only 见 deleteConversation。
+export async function archiveConversation(id: string): Promise<ConversationRow> {
+  const r = await apiFetch(`/conversations/${id}/archive`, { method: "PATCH" });
+  if (!r.ok) throw new Error(`archiveConversation: ${r.status}`);
+  return r.json();
+}
+
+export async function restoreConversation(id: string): Promise<ConversationRow> {
+  const r = await apiFetch(`/conversations/${id}/restore`, { method: "PATCH" });
+  if (!r.ok) throw new Error(`restoreConversation: ${r.status}`);
+  return r.json();
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  const r = await apiFetch(`/conversations/${id}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`deleteConversation: ${r.status}`);
 }
 
 // 我的 workspace 列表（allUsers∪名单；admin=全部）。

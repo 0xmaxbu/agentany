@@ -142,7 +142,6 @@ body {
     flex-direction: column;
     min-width: 0;
     min-height: 0; /* flex 子项默认 min-height:auto 会随内容撑高——放开才能让 .chat 内部滚 */
-    max-width: 760px;
   }
   header {
     display: flex;

@@ -5,11 +5,15 @@ import { apiFetch, setOnUnauthorized } from "../api";
 import { clearToken, getToken, setToken } from "../lib/token";
 import { useChat } from "./chat";
 
+// 角色（#21：判 === 统一引常量，不落字面量；与后端 auth/store.ts ROLE 同形）。
+export const ROLE = { admin: "admin", member: "member" } as const;
+export type Role = keyof typeof ROLE;
+
 export interface User {
   id: string;
   username: string;
   displayName: string | null;
-  role: "admin" | "member";
+  role: Role;
   status: string;
   createdAt: string;
 }
