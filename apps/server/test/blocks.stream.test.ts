@@ -60,6 +60,42 @@ describe("blocks.createBlockEmitter", () => {
     expect(a[0].blockId).toBe("b1");
     expect(b[0].blockId).toBe("b2"); // 新开块，旧 b1 的 end 由 pi 事件顺序保证（实测交替）
   });
+
+  // 真 pi 实测（2026-08-15 实机调试抓包）：text_start 可先于 thinking_end 到达（content 交错）。
+  // 单 open 指针会把迟到的 thinking_end 错关到 text 块——thinking 永不收尾（UI 卡「思考中…」）。
+  test("交错序：thinking_delta → text_start → text_delta → thinking_end → text_end（按 contentIndex 对位）", () => {
+    const em = createBlockEmitter();
+    const out = [
+      ...em(upd({ type: "thinking_start", contentIndex: 0 })),
+      ...em(upd({ type: "thinking_delta", contentIndex: 0, delta: "想想" })),
+      ...em(upd({ type: "text_start", contentIndex: 1 })), // 交错：thinking 未 end
+      ...em(upd({ type: "text_delta", contentIndex: 1, delta: "答" })),
+      ...em(upd({ type: "thinking_end", contentIndex: 0, content: "想想" })), // 迟到
+      ...em(upd({ type: "text_end", contentIndex: 1, content: "答" })),
+    ];
+    expect(out).toEqual([
+      { op: "start", blockId: "b1", kind: "thinking" },
+      { op: "delta", blockId: "b1", delta: "想想" },
+      { op: "start", blockId: "b2", kind: "text" },
+      { op: "delta", blockId: "b2", delta: "答" },
+      { op: "end", blockId: "b1" }, // 关的是 thinking（b1）不是 text
+      { op: "end", blockId: "b2" },
+    ]);
+  });
+
+  test("无 contentIndex 的事件（防御旧形状）→ 回退最近开放块", () => {
+    const em = createBlockEmitter();
+    const out = [
+      ...em(upd({ type: "text_start" })),
+      ...em(upd({ type: "text_delta", delta: "旧形状" })),
+      ...em(upd({ type: "text_end" })),
+    ];
+    expect(out).toEqual([
+      { op: "start", blockId: "b1", kind: "text" },
+      { op: "delta", blockId: "b1", delta: "旧形状" },
+      { op: "end", blockId: "b1" },
+    ]);
+  });
 });
 
 describe("blocks.flattenText", () => {

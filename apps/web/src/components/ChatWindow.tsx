@@ -1,12 +1,14 @@
-// 消息窗（f2-4）：assistant 气泡 react-markdown+remark-gfm（删手搓 markdown.ts，无 dangerouslySetInnerHTML）；
-// run/HITL 卡换 ui 组件 + Tailwind（暗色适配——旧 inline 硬编码色双主题下是错的）。
+// 消息窗（f3-2）：assistant 气泡 = MessageBlocks（text/thinking/tool_use 同构渲染，ADR-0019）。
+// run/HITL 卡 ui 组件 + Tailwind；UI 禁 emoji（Phosphor 图标，strokeWidth 1.5）。
 // 契约类（e2e）：.chat/.empty/.bubble.{user,assistant,error,aborted}/.content/.cursor/.run/.hitl 不改。
 import { useEffect, useRef } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ChatCircleDotsIcon, CheckIcon, PlayIcon, WarningIcon } from "@phosphor-icons/react";
 import { useChat } from "../store/chat";
+import { MessageBlocks } from "./MessageBlock";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+
+const IW = 1.5; // 图标线宽全局统一
 
 // step 状态色（语义变量驱动，双主题自适应）
 const stepClass = (status: string): string =>
@@ -36,10 +38,10 @@ export function ChatWindow() {
         <div key={i} className={`bubble ${m.role} ${m.status}`}>
           {m.role === "assistant" ? (
             <div className="content md">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+              <MessageBlocks blocks={m.blocks} />
             </div>
           ) : (
-            <span className="content">{m.content}</span>
+            <span className="content">{m.blocks.filter((b) => b.kind === "text").map((b) => (b as { text: string }).text).join("")}</span>
           )}
           {m.status === "streaming" && <span className="cursor">▍</span>}
         </div>
@@ -47,8 +49,11 @@ export function ChatWindow() {
       {runs.map((r) => (
         <Card key={r.runId} className={`run run-${r.status} my-2 border-border bg-secondary/60 font-mono text-[13px]`}>
           <CardHeader>
-            <CardTitle className="opacity-80">
-              ⚙️ {r.workflowId ?? r.runId.slice(0, 10)} · <b>{r.status}</b>
+            <CardTitle className="flex items-center gap-1.5 opacity-80">
+              <PlayIcon size={13} weight="light" strokeWidth={IW} />
+              <span className="truncate">
+                {r.workflowId ?? r.runId.slice(0, 10)} · <b>{r.status}</b>
+              </span>
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -73,8 +78,12 @@ export function ChatWindow() {
             }`}
           >
             <CardHeader>
-              <CardTitle className="flex items-start gap-1 opacity-85">
-                <span>{isApproval ? "⚠️" : "❓"}</span>
+              <CardTitle className="flex items-start gap-1.5 opacity-85">
+                {isApproval ? (
+                  <WarningIcon size={15} weight="light" strokeWidth={IW} className="mt-0.5 shrink-0 text-destructive" />
+                ) : (
+                  <ChatCircleDotsIcon size={15} weight="light" strokeWidth={IW} className="mt-0.5 shrink-0" />
+                )}
                 <span>
                   {isApproval ? `需审批 · ${q.workflowId ?? ""}` : ""} {q.prompt}
                 </span>
@@ -105,8 +114,11 @@ export function ChatWindow() {
               </CardContent>
             ) : (
               <CardContent>
-                <div className="mt-1 text-emerald-600 dark:text-emerald-400">
-                  ✓ {isApproval ? "已审批" : "已回答"}：{JSON.stringify(q.answer)}
+                <div className="mt-1 flex items-start gap-1 text-emerald-600 dark:text-emerald-400">
+                  <CheckIcon size={14} weight="light" strokeWidth={IW} className="mt-0.5 shrink-0" />
+                  <span>
+                    {isApproval ? "已审批" : "已回答"}：{JSON.stringify(q.answer)}
+                  </span>
                 </div>
               </CardContent>
             )}
