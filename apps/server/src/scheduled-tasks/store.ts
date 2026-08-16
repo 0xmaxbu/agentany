@@ -33,6 +33,7 @@ export interface TaskRunRow {
   startedAt: string | null;
   finishedAt: string | null;
   outputMessageId: string | null;
+  note: string | null; // #32 headless 日志（失败详情；workspace 任务失败原因冗余）
   viewedAt: string | null;
 }
 
@@ -171,15 +172,15 @@ export class ScheduledTaskStore {
   recordRun(p: { taskId: string; trigger: TaskRunTrigger; status: TaskRunStatus; startedAt?: string | null }): number {
     const r = this.db.insert(taskRuns).values({
       taskId: p.taskId, trigger: p.trigger, status: p.status,
-      startedAt: p.startedAt ?? null, finishedAt: null, outputMessageId: null, viewedAt: null,
+      startedAt: p.startedAt ?? null, finishedAt: null, outputMessageId: null, note: null, viewedAt: null,
     }).returning({ id: taskRuns.id }).get();
     if (!r) throw new Error("recordRun: insert returned no row");
     return r.id;
   }
 
-  finishRun(id: number, p: { status: "ok" | "failed"; outputMessageId?: string | null }): void {
+  finishRun(id: number, p: { status: "ok" | "failed"; outputMessageId?: string | null; note?: string | null }): void {
     this.db.update(taskRuns)
-      .set({ status: p.status, finishedAt: now(), outputMessageId: p.outputMessageId ?? null })
+      .set({ status: p.status, finishedAt: now(), outputMessageId: p.outputMessageId ?? null, note: p.note ?? null })
       .where(eq(taskRuns.id, id)).run();
   }
 

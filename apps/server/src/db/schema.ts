@@ -164,7 +164,8 @@ export const taskRuns = sqliteTable(
     status: text("status").notNull(), // ok | failed | missed | skipped_overrun
     startedAt: text("startedAt"), // missed/skipped 无实际开始
     finishedAt: text("finishedAt"),
-    outputMessageId: text("outputMessageId"), // 产出消息引用（可悬空——消息表自增 id）
+    outputMessageId: text("outputMessageId"), // 产出消息引用（可悬空——消息表自增 id）；headless（#32）恒 null
+    note: text("note"), // #32 headless 日志：失败详情（管理页执行历史可读；workspace 任务沿用会话内说明，此处冗余失败原因）
     viewedAt: text("viewedAt"), // null=未读
   },
   (t) => ({

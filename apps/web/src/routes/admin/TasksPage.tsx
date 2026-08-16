@@ -240,20 +240,24 @@ function TaskRow({
             ) : (
               <ul className="flex flex-col" data-testid="task-runs">
                 {runs.slice(-8).reverse().map((r) => (
-                  <li key={r.id} className="flex items-center gap-2 border-b border-border/30 py-1 last:border-0 font-mono text-[11px] text-muted-foreground">
-                    <span
-                      className={
-                        r.status === "ok"
-                          ? "text-emerald-600 dark:text-emerald-400"
-                          : r.status === "failed"
-                            ? "text-destructive"
-                            : "text-muted-foreground"
-                      }
-                    >
-                      {runStatusText[r.status]}
+                  <li key={r.id} className="border-b border-border/30 py-1 last:border-0 font-mono text-[11px] text-muted-foreground">
+                    <span className="flex items-center gap-2">
+                      <span
+                        className={
+                          r.status === "ok"
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : r.status === "failed"
+                              ? "text-destructive"
+                              : "text-muted-foreground"
+                        }
+                      >
+                        {runStatusText[r.status]}
+                      </span>
+                      <span>{r.trigger === "manual" ? "手动" : "定时"}</span>
+                      <span>{fmtTime(r.startedAt ?? r.finishedAt)}</span>
                     </span>
-                    <span>{r.trigger === "manual" ? "手动" : "定时"}</span>
-                    <span>{fmtTime(r.startedAt ?? r.finishedAt)}</span>
+                    {/* #32 headless 日志：失败详情（管理页执行历史可读——system 任务产出即此） */}
+                    {r.note && <span className="block truncate text-destructive/90" title={r.note}>{r.note}</span>}
                   </li>
                 ))}
               </ul>

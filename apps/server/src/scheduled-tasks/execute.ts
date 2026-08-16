@@ -4,8 +4,11 @@
 // （system 注入/block 三帧/SSE/turn 管理全免费）。
 // 差异点（ADR-0021 修订版）：任务 pi **无 bridge**——TASK_EXTENSIONS 仅 tavily（无人值守
 // 不能 start_workflow/ask_user，loopback 无端口）；错误转为产出会话内的可读说明。
-// system 任务 headless 分支（无产出会话）属 #32——本文件对 scope=system 直接 failed。
-import { repoExtensionPath } from "../config";import { runTurn, type TurnSend } from "../chat/turn";
+// system 任务（#32/M4-5）走 headless：无产出会话，pi 一次性跑（makeRunPi 路径，
+// 同 taskId 固定 session 跨执行连续），产出=task_runs 日志（note 记失败详情，管理页可读）。
+import { repoExtensionPath } from "../config";
+import { makeRunPi } from "../pi/runPi-factory";
+import { runTurn, type TurnSend } from "../chat/turn";
 import type { ConversationQueues } from "../chat/queue";
 import type { EventBus, Frame } from "../chat/eventbus";
 import { resolveScopePaths, scopeOf } from "../scope";
@@ -40,11 +43,28 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
   const { deps, queues, eventBus } = ctx;
   return async (task, trigger, runIdProvided) => {
     const own = runIdProvided === undefined;
-    // system 任务（蒸馏 seed）无产出会话——headless 执行链属 #32；现阶段直接收 failed。
-    if (task.scope === "system" || !task.outputConversationId) {
+    // ── #32 headless 分支：system 任务（蒸馏 seed）无产出会话 ──
+    // pi 一次性跑（缓冲版 runPi）：cwd=公司 ws（scopeOf null→显式 general），session 按 taskId 固定
+    // （蒸馏跨执行积累上下文）。产出=task_runs 日志：note 记失败详情，无 outputMessageId。
+    if (task.scope === "system") {
+      const runId = own ? deps.taskStore!.recordRun({ taskId: task.id, trigger, status: "ok", startedAt: new Date().toISOString() }) : runIdProvided!;
+      try {
+        const runPi = (deps.runPiFactory ?? makeRunPi)({
+          extensions: TASK_EXTENSIONS, scope: "general", workspaceId: null, sessionId: `task-${task.id}`,
+        });
+        await runPi({ prompt: task.prompt });
+        deps.taskStore!.finishRun(runId, { status: "ok" });
+      } catch (e) {
+        const note = (e as Error)?.message ?? String(e);
+        deps.taskStore!.finishRun(runId, { status: "failed", note });
+      }
+      return;
+    }
+    // workspace 任务无产出会话（悬空/异常数据）：failed 收口（不进 headless——那是 system 专属语义）
+    if (!task.outputConversationId) {
       const rid = own ? deps.taskStore!.recordRun({ taskId: task.id, trigger, status: "failed" }) : runIdProvided!;
       if (!own) deps.taskStore!.finishRun(rid, { status: "failed" });
-      console.error(`[task] no output conversation (scope=${task.scope}) — headless chain is #32: ${task.id}`);
+      console.error(`[task] workspace task without output conversation: ${task.id}`);
       return;
     }
     const convId = task.outputConversationId;

@@ -99,6 +99,13 @@
       "when": 1786842579994,
       "tag": "0013_condemned_molten_man",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1786862395787,
+      "tag": "0014_orange_white_tiger",
+      "breakpoints": true
     }
   ]
 }

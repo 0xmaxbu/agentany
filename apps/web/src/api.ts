@@ -164,6 +164,7 @@ export interface TaskRun {
   startedAt: string | null;
   finishedAt: string | null;
   outputMessageId: string | null;
+  note: string | null; // #32 headless 日志（失败详情）
   viewedAt: string | null;
 }
 
