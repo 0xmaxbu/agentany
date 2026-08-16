@@ -80,7 +80,42 @@ const DISTILL_PROMPT_HEAD = `你是 agentany 的经验蒸馏器。以下是本�
 规则：
 - target=global/member 的 op=revise：给出该文件合并后的完整新内容（合并同类、淘汰过时，优先精简而非新增；禁止包含可识别具体成员/客户/品牌/价格的信息）
 - target=skill:* 的 op=append：只给追加条目（append-only，不重写既有内容）
-- 无人交互的纯机械过程没有经验价值——只从含用户信号（提问方式/纠偏/反馈/选择）的记录中提取`;
+- 无人交互的纯机械过程没有经验价值——只从含用户信号（提问方式/纠偏/反馈/选择）的记录中提取\n- 经验文档保持精炼（每个文件 ≤80 行）——合并淘汰优先于新增，宁缺毋滥`;
+
+
+
+/** LLM 手写 JSON 容错①：字符串内裸控制字符（\n/\r/\t）转义后重建——状态机感知字符串边界。 */
+function escapeRawControls(raw: string): string {
+  let out = "", inStr = false, esc = false;
+  for (const ch of raw) {
+    if (esc) { out += ch; esc = false; continue; }
+    if (ch === "\\") { if (inStr) { out += ch; esc = true; } else out += ch; continue; }
+    if (ch === '"') { inStr = !inStr; out += ch; continue; }
+    if (inStr && (ch === "\n" || ch === "\r" || ch === "\t")) { out += ch === "\n" ? "\\n" : ch === "\r" ? "\\r" : "\\t"; continue; }
+    out += ch;
+  }
+  return out;
+}
+
+/** 首个 { 起的括号平衡截断（跳过字符串字面量）——免疫 LLM 尾部多余 } 与围栏/尾注。 */
+function balancedJsonPrefix(raw: string): string | null {
+  const start = raw.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i];
+    if (esc) { esc = false; continue; }
+    if (ch === "\\") { if (inStr) esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === "{" || ch === "[") depth++;
+    else if (ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0) return raw.slice(start, i + 1);
+    }
+  }
+  return null;
+}
 
 function gitOut(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -158,10 +193,16 @@ export async function runDistill(
   // 5) 解析 JSON（容 markdown 围栏）
   let parsed: { actions?: DistillAction[]; commitMessage?: string };
   try {
-    const m = raw.match(/\{[\s\S]*\}/);
-    parsed = JSON.parse(m ? m[0] : raw);
-  } catch {
-    return { ok: false, note: `distill bad JSON (len=${raw.length}): ${raw.slice(0, 120)}` };
+    // LLM 手写长 JSON 容错：裸控制字符转义（实测高频）→ 平衡截断（免疫尾注/多余括号）→ parse
+    const fixed = escapeRawControls(raw);
+    const m = balancedJsonPrefix(fixed);
+    parsed = JSON.parse(m ?? fixed);
+  } catch (e) {
+    // 事后检查素材：LLM 原文落 knowledge repo 外层（不进 git——诊断用）；note 尾部+头部可诊断
+    try {
+      writeFileSync(join(process.env.DATA_DIR ?? DATA_DIR, "distill-last-raw.txt"), raw, "utf8");
+    } catch { /* 诊断落盘失败不掩盖原错误 */ }
+    return { ok: false, note: `distill bad JSON (len=${raw.length}): ${(e as Error).message} | head=${raw.slice(0, 150)} | tail=${raw.slice(-150)}` };
   }
 
   // 6) 白名单校验 + 写回（拒动作剔除留痕）

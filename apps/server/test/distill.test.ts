@@ -188,6 +188,28 @@ describe("runDistill（#36 蒸馏全链）", () => {
     expect(readState().processedFiles).toEqual([]);
   });
 
+  test("字符串内裸换行（实测高频）→ 转义容错可解析", async () => {
+    ensureKnowledgeRepo();
+    const { deps } = setup();
+    seedSession("2026-08-10T00-00-00-000Z_chat-c1");
+    // content 里是真实裸换行（LLM 不转义的高频错法）
+    const raw = '{"actions":[{"target":"global","op":"revise","content":"# 经验\n（此处为裸换行）\n## 第一条\n- 内容"}],"commitMessage":"m"}'.replace(/\\n/g, "\n");
+    const llm = stubLlm({ raw });
+    const res = await runDistill(deps, llm.factory as any);
+    expect(res.ok).toBe(true);
+    expect(readFileSync(join(knowledgeRoot(), "experience/global.md"), "utf8")).toContain("第一条");
+  });
+
+  test("LLM 尾部多余 }（实测冒烟样本）→ 平衡截断可解析", async () => {
+    ensureKnowledgeRepo();
+    const { deps } = setup();
+    seedSession("2026-08-10T00-00-00-000Z_chat-c1");
+    const llm = stubLlm({ raw: '{"actions":[{"target":"global","op":"revise","content":"x"}],"commitMessage":"m"}}\n（以上为蒸馏结果）' });
+    const res = await runDistill(deps, llm.factory as any);
+    expect(res.ok).toBe(true); // 尾部 }+尾注被平衡截断剥掉
+    expect(readFileSync(join(knowledgeRoot(), "experience/global.md"), "utf8")).toContain("x");
+  });
+
   test("坏 JSON → 无 commit、水位不动", async () => {
     ensureKnowledgeRepo();
     const { deps } = setup();

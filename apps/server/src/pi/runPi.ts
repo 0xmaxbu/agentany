@@ -41,9 +41,14 @@ function buildArgs(opts: RunPiOptions): string[] {
   for (const s of repoSkillPaths()) args.push("--skill", s); // 自动发现全部 repo skills（ADR-0005）
   for (const e of opts.extensions ?? []) args.push("-e", e);
   for (const a of opts.appendSystemPrompt ?? []) args.push("--append-system-prompt", a); // pi --help 实证（可多次）
+  // #37：超长 prompt 走 stdin（pi 实测支持；蒸馏语料可至 MB 级，argv 会 E2BIG）
+  if (opts.prompt.length > PROMPT_STDIN_THRESHOLD) return args;
   args.push(opts.prompt); // 位置参数（pi --help 实证：pi -p "…"）
   return args;
 }
+
+/** argv prompt 上限（超出走 stdin）。ARG_MAX 含 env ~1MB，512k 留裕量。 */
+export const PROMPT_STDIN_THRESHOLD = 512_000;
 
 // h3：pi 子进程 env 白名单——只放行 pi/tavily/系统必需，排除未来 TURN_SECRET/DB 凭据等。
 // 注：密钥仍在 pi env 内（pi 需用它鉴权 provider）；彻底不让 pi 见密钥靠 A1 沙箱 + A4 LLM-经服务端代理。
@@ -103,12 +108,15 @@ async function spawnPiCore(opts: RunPiStreamOptions): Promise<RunPiResult> {
   });
   const proc = spawn(plan.argv[0], plan.argv.slice(1), {
     cwd: plan.cwd,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"], // #37 stdin 通道：超长 prompt 写入（短 prompt 仍走 argv，立即 end）
     env: plan.env,
   });
   const stdout = proc.stdout;
   const stderr = proc.stderr;
   if (!stdout || !stderr) throw new Error("spawn failed: no stdio");
+  // #37 超长 prompt 走 stdin（buildArgs 已不进 argv）；写完即 end——pi 读 EOF 后当 prompt 处理
+  if (opts.prompt.length > PROMPT_STDIN_THRESHOLD) proc.stdin.write(opts.prompt);
+  proc.stdin.end();
 
   return new Promise<RunPiResult>((resolveP, reject) => {
     const timeoutMs = opts.timeoutMs ?? 120_000;

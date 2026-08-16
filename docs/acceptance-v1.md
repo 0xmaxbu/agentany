@@ -38,10 +38,15 @@
 - [x] 手动调用：POST /:id/run 立即执行（trigger=manual、不推进 nextFireAt）、在跑 409
 - [x] task_runs 历史：状态/trigger/起止/产出引用（GET /:id/runs；页面展开属切片 4）
 
-## M5 — 学习闭环（待实现）
+## M5 — 学习闭环（2026-08-16 全链落地）
 
-- [ ] run 级反馈：批注+评分提交
-- [ ] 消息级反馈：👍/👎+可选备注
-- [ ] 蒸馏（每周 seed 任务）：读当周反馈+pi session 切片 → 蒸馏 → 服务端白名单校验写回 experience.md + learnings/ + git 自动 commit
-- [ ] 事后检查：git diff 可见每次蒸馏变更；revert 一条命令
-- [ ] 只蒸馏有反馈关联的执行（无反馈不进）
+- [x] run 级反馈：批注+1-5 评分提交+回显（run 卡内；#34）
+- [x] 消息级反馈：👍/👎+可选备注，点击即落库（rating 5/1）+刷新回显高亮（#34；反馈锚=align-db-ids 双源对齐回填的 DB id——pi entry id 与 DB id 两套标识对齐）
+- [x] 权限：两粒度反馈按会话可见性（member 只见自己、admin 全通、不可见一律 404）；POST 放宽 text/rating 至少其一（#34）
+- [x] knowledge repo：运行时独立 git 仓（DATA_DIR/knowledge；experience/global+members、skills 种子、learnings/、distill-state.json）；首启自动 init+首 commit（#35）
+- [x] 注入通道：global 经验进每个 chat turn + 任务 turn（D1：任务不吃 member 级）；member 经验按会话归属注入 chat turn；member 文件无任何下载路由（#35）
+- [x] 蒸馏链（#36）：语料前缀白名单 {chat-,run-}（排 title-/task-/distill- 防自指）；水位=已处理文件名集合+lastFeedbackId（pi 每 turn 一文件、mtime 不可靠——实测）；新 feedback 重入队关联会话文件；蒸馏 pi zero-extension 无 bridge；写回白名单（拒动作剔除留痕水位照推）；水位与写回同一 commit 原子；push best-effort；task_runs note 带 commit hash
+- [x] 蒸馏 seed 启用：迁移 0015 enabled=1，周日 04:00；executeTask 按 t_seed_distill 特判走 runDistill（#37）
+- [x] LLM 手写长 JSON 容错：字符串内裸控制字符转义+括号平衡截断（实测高频错法）；超长语料 prompt 走 stdin（argv E2BIG 实测）；坏输出原文落 DATA_DIR/distill-last-raw.txt 供诊断（#37）
+- [x] 真实闭环冒烟（#37，真 LLM 全链）：👍+备注（feedback id=1）→ 手动蒸馏 run5 ok → git commit e8802a9（message=LLM 产）→ global.md 25 行经验落盘 + 水位 148 文件推进 → 新 turn 正常 → admin 任务页 note 可读 hash
+- [x] 事后检查：git revert e8802a9 一条命令 → 水位随 revert 回退（148→0）、global.md 移除 → 下轮 run6 重蒸馏 ok（revert 语义=重读该批素材，人工可控）
