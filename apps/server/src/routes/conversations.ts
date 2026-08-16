@@ -80,6 +80,14 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     return c.json(dbMessagesToHistory(deps.store.listMessages(conv.id)));
   });
 
+  // 产出文件列表（#30）：按 run 分组、outputMessageId 锚到产出消息尾（前端文件管理器式列表卡）。
+  app.get("/conversations/:id/files", (c) => {
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
+    if (!conv) return c.json({ error: "conversation not found" }, 404);
+    if (!deps.taskStore) return c.json({ error: "task store not wired" }, 500);
+    return c.json(deps.taskStore.filesForConversation(conv.id));
+  });
+
   // HITL 提问列表（ticket #16）：前端刷新恢复（pending 显卡 / answered 显答案）。
   app.get("/conversations/:id/hitl", (c) => {
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));

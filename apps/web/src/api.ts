@@ -124,6 +124,23 @@ export async function getHitlQuestions(conversationId: string): Promise<Question
   return r.json();
 }
 
+// #30 产出文件：按 run 分组（outputMessageId 锚到产出消息尾）。
+export interface TaskFileGroup {
+  runId: number;
+  outputMessageId: string | null;
+  files: { id: number; path: string; name: string; createdAt: string }[];
+}
+export async function getConversationFiles(conversationId: string): Promise<TaskFileGroup[]> {
+  const r = await apiFetch(`/conversations/${conversationId}/files`);
+  if (!r.ok) throw new Error(`getConversationFiles: ${r.status}`);
+  return r.json();
+}
+
+/** 文件本体（fetch+blob 保 Bearer——<a href> 带不上 Authorization）。download 控制 Content-Disposition。 */
+export async function fetchFile(workspaceId: string, path: string, download = false): Promise<Response> {
+  return apiFetch(`/files/${encodeURIComponent(workspaceId)}/${path.split("/").map(encodeURIComponent).join("/")}${download ? "?download=1" : ""}`);
+}
+
 export async function abortConversation(conversationId: string): Promise<void> {
   await apiFetch(`/conversations/${conversationId}/abort`, { method: "POST" });
 }

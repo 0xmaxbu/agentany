@@ -5,12 +5,13 @@
 // 差异点（ADR-0021 修订版）：任务 pi **无 bridge**——TASK_EXTENSIONS 仅 tavily（无人值守
 // 不能 start_workflow/ask_user，loopback 无端口）；错误转为产出会话内的可读说明。
 // system 任务 headless 分支（无产出会话）属 #32——本文件对 scope=system 直接 failed。
-import { repoExtensionPath } from "../config";
-import { runTurn, type TurnSend } from "../chat/turn";
+import { repoExtensionPath } from "../config";import { runTurn, type TurnSend } from "../chat/turn";
 import type { ConversationQueues } from "../chat/queue";
 import type { EventBus, Frame } from "../chat/eventbus";
+import { resolveScopePaths, scopeOf } from "../scope";
 import type { RunDeps } from "../runs";
 import type { ScheduledTaskRow, TaskRunTrigger } from "./store";
+import { WRITE_TOOLS, wsRelativePath } from "./files";
 
 // 任务 pi 的 extension 集：仅基础网络（tavily）——无 chat-bridge（chat/extensions.ts 对照）。
 export const TASK_EXTENSIONS: string[] = [
@@ -56,6 +57,20 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
     const send: TurnSend = (frame: Frame) => eventBus.publish(convId, frame);
     const runId = own ? deps.taskStore!.recordRun({ taskId: task.id, trigger, status: "ok", startedAt: new Date().toISOString() }) : runIdProvided!;
 
+    // #30 产出文件收集：钩 block_start(tool_use) 的 write/edit 路径 → run 收口时登记 task_files。
+    const convRow = deps.store.getConversation(convId)!;
+    const wsCwd = resolveScopePaths(scopeOf(convRow.workspaceId), convRow.workspaceId).cwd;
+    const written = new Set<string>();
+    const collectFile = (f: Frame): void => {
+      if (f.type !== "block_start" || f.kind !== "tool_use" || !f.meta) return;
+      const name = String(f.meta.name ?? "");
+      if (!WRITE_TOOLS.has(name)) return;
+      const raw = (f.meta.arguments as Record<string, unknown> | undefined)?.path;
+      if (typeof raw !== "string") return;
+      const rel = wsRelativePath(wsCwd, raw);
+      if (rel !== undefined) written.add(rel); // 归一后去重（write+edit 同文件只一行）
+    };
+
     // 任务 prompt 先落 user 消息（历史可读：产出会话里每次执行的目标原文）+ 推流
     const userMsgId = deps.store.appendMessage({ conversationId: convId, role: "user", content: task.prompt });
     deps.store.touchConversation(convId);
@@ -66,6 +81,7 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
     const ok = queues.enqueueEventTurn(convId, async (signal) => {
       // runTurn 自己写 assistant 消息并发 done（messageId）——钩帧取 outputMessageId。
       await runTurn(deps, convId, task.prompt, (f) => {
+        collectFile(f);
         if (f.type === "done" && f.messageId !== undefined) outputMessageId = String(f.messageId);
         if (f.type === "error") failure = f.message;
         send(f);
@@ -73,6 +89,15 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
     });
     if (!ok) failure = "conversation busy (event queue full)";
     if (ok) await queues.drained(convId); // 等本 turn 真跑完（FIFO 快照）再收口——finishRun 太早会丢 outputMessageId/错误
+
+    // #30：登记产出文件（run 已收口前；taskRunId 是 text 列）。失败不阻塞 run 收口（文件列表少行可接受）。
+    for (const rel of written) {
+      try {
+        deps.taskStore!.addTaskFile({ taskRunId: String(runId), path: rel, name: rel.split("/").pop() ?? rel });
+      } catch (e) {
+        console.warn(`[task] addTaskFile failed (${task.id}/${rel}):`, e);
+      }
+    }
 
     if (failure) {
       // 可读错误说明落会话（runTurn 出错只发 error 帧不写消息——历史里会凭空消失，补一条系统说明）

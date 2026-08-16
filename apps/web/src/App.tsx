@@ -8,6 +8,7 @@ import { ProtectedRoute } from "./routes/ProtectedRoute";
 import { LoginPage } from "./routes/LoginPage";
 import { ShellLayout } from "./routes/ShellLayout";
 import { ChatPage } from "./routes/ChatPage";
+import { FilePreviewPage } from "./routes/FilePreviewPage";
 
 // admin 懒加载（member 不进管理页——不进首屏 bundle）
 const AdminUsersPage = lazy(() =>
@@ -31,6 +32,7 @@ export function App() {
           <Route path="/" element={<ShellLayout />}>
             <Route index element={<ChatPage />} />
             <Route path="c/:conversationId" element={<ChatPage />} />
+            <Route path="files/:workspaceId/*" element={<FilePreviewPage />} /> {/* #30 产出文件预览 */}
             <Route path="admin" element={<Navigate to="/admin/users" replace />} />
             <Route
               path="admin/users"

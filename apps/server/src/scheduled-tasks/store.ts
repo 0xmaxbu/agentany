@@ -226,4 +226,35 @@ export class ScheduledTaskStore {
   listTaskFiles(taskRunId: string): { id: number; taskRunId: string; path: string; name: string; createdAt: string }[] {
     return this.db.select().from(taskFiles).where(eq(taskFiles.taskRunId, taskRunId)).all() as any;
   }
+
+  /** #30：产出会话的文件列表（GET /conversations/:id/files 数据源）——按 run 分组、run 序，
+   * 组内文件登记序。join task_files→task_runs→scheduled_tasks（outputConversationId 锚）。 */
+  filesForConversation(conversationId: string): { runId: number; outputMessageId: string | null; files: { id: number; path: string; name: string; createdAt: string }[] }[] {
+    const rows = this.db
+      .select({
+        runId: taskRuns.id,
+        outputMessageId: taskRuns.outputMessageId,
+        fileId: taskFiles.id,
+        path: taskFiles.path,
+        name: taskFiles.name,
+        createdAt: taskFiles.createdAt,
+      })
+      .from(taskFiles)
+      .innerJoin(taskRuns, eq(taskFiles.taskRunId, taskRuns.id))
+      .innerJoin(scheduledTasks, eq(taskRuns.taskId, scheduledTasks.id))
+      .where(eq(scheduledTasks.outputConversationId, conversationId))
+      .orderBy(taskRuns.id, taskFiles.id)
+      .all() as { runId: number; outputMessageId: string | null; fileId: number; path: string; name: string; createdAt: string }[];
+    // 按 run 分组（一 run 多文件；一文件一组的多余行由分组吸收）
+    const out: { runId: number; outputMessageId: string | null; files: { id: number; path: string; name: string; createdAt: string }[] }[] = [];
+    for (const r of rows) {
+      let g = out.find((x) => x.runId === r.runId);
+      if (!g) {
+        g = { runId: r.runId, outputMessageId: r.outputMessageId, files: [] };
+        out.push(g);
+      }
+      g.files.push({ id: r.fileId, path: r.path, name: r.name, createdAt: r.createdAt });
+    }
+    return out;
+  }
 }

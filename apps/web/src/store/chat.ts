@@ -3,8 +3,8 @@
 // f2-3：会话列表职责迁 workspace store（服务端真相，弃 localStorage）；URL /c/:id 为当前会话锚
 //（ChatPage effect 唯一驱动 switchConversation/newConversation——init 已废）。
 import { create } from "zustand";
-import { abortConversation, createConversation, getHitlQuestions, getMessages, openStream, postMessage, type Conversation, type Question } from "../api";
-import { useWorkspace } from "./workspace";
+import { abortConversation, createConversation, getConversationFiles, getHitlQuestions, getMessages, openStream, postMessage, type Conversation, type Question, type TaskFileGroup } from "../api";
+import { useWorkspace, COMPANY_WORKSPACE_ID } from "./workspace";
 import type { SSEEvent } from "../sse";
 import type { Block } from "../sse";
 import { BLOCK_FRAME, BLOCK_KIND, findToolUse, parseToolResultMeta, parseToolUseMeta } from "../lib/blocks";
@@ -52,11 +52,13 @@ export interface UIQuestion {
 
 interface ChatState {
   conversationId: string | null;
+  workspaceId: string | null; // 当前会话挂的 ws（#30 文件预览路由锚）
   messages: UIMessage[];
   sending: boolean;
   streamCtrl: AbortController | null; // 持久流生命周期（切会话/卸载时 abort）
   runs: UIRun[]; // 工作流 run 进度（持久流 run_*/step_* 驱动）
   questions: UIQuestion[]; // HITL 提问（持久流 hitl_* 驱动；刷新从 GET /hitl 恢复）
+  fileGroups: TaskFileGroup[]; // #30 产出文件（按 run 分组；outputMessageId 锚到产出消息尾；done 帧后重拉）
   send: (content: string) => Promise<void>;
   /** 持久流帧 → 状态（导出供单测直推帧；openStream 内部用同一函数）。 */
   onFrame: (e: SSEEvent) => void;
@@ -65,6 +67,7 @@ interface ChatState {
   switchConversation: (id: string) => Promise<void>; // 幂等（同 id return）
   closeStream: () => void; // 断持久流（登出/forceLogout 时 auth store 调）
   sendCardAnswer: (questionId: number, content: string) => Promise<void>; // 统一卡应答（消息绑定 questionId；task/approval/ask 三卡同路）
+  refreshFiles: (conversationId: string) => Promise<void>; // #30：拉产出文件分组（进会话/任务 turn done 后调；无文件静默空）
 }
 
 const errMsg = (message: string): UIMessage => ({ id: null, role: "assistant", blocks: [{ kind: "text", text: message }], status: "error" });
@@ -185,6 +188,9 @@ export const useChat = create<ChatState>((set, get) => {
       } else {
         set({ sending: false });
       }
+      // #30：任务 turn 收口后产出文件才登记完（executeTask 在 drained 后写 task_files）——重拉分组
+      const convId = get().conversationId;
+      if (convId) void refreshFiles(convId);
     } else if (e.type === "error") {
       set({ messages: rollback(msgs, e.message), sending: false });
     } else if (e.type === "title") {
@@ -228,13 +234,25 @@ export const useChat = create<ChatState>((set, get) => {
     });
   };
 
+  // #30 产出文件：拉分组（产出会话才有数据；普通会话 200 空数组——静默）。
+  const refreshFiles = async (convId: string) => {
+    try {
+      const groups = await getConversationFiles(convId);
+      if (get().conversationId === convId) set({ fileGroups: groups }); // 竞态守卫：切走了不写
+    } catch {
+      /* 静默：文件列表失败不阻塞对话（列表卡空态即可） */
+    }
+  };
+
   return {
     conversationId: null,
+    workspaceId: null,
     messages: [],
     sending: false,
     streamCtrl: null,
     runs: [],
     questions: [],
+    fileGroups: [],
 
     onFrame,
 
@@ -245,7 +263,7 @@ export const useChat = create<ChatState>((set, get) => {
         try {
           const conv: Conversation = await createConversation(undefined, workspaceId); // #手风琴：缺省公司 ws
           useWorkspace.getState().prependConversation({ ...conv, updatedAt: new Date().toISOString() }); // 乐观 prepend（refresh 兜底校正）
-          set({ conversationId: conv.id, messages: [], runs: [], questions: [] });
+          set({ conversationId: conv.id, workspaceId: conv.workspaceId, messages: [], runs: [], questions: [], fileGroups: [] });
           openStreamFor(conv.id);
           void useWorkspace.getState().refreshConversations();
           return conv.id;
@@ -261,7 +279,11 @@ export const useChat = create<ChatState>((set, get) => {
 
     switchConversation: async (id) => {
       if (get().sending || id === get().conversationId) return;
-      set({ conversationId: id, messages: [], runs: [], questions: [] });
+      // #30：从会话列表反查该会话的 ws（挂任务同 ws——文件预览路由锚）；查不到兜底公司 ws
+      const wsId = Object.values(useWorkspace.getState().groups)
+        .flatMap((g) => g.items)
+        .find((c) => c.id === id)?.workspaceId ?? COMPANY_WORKSPACE_ID;
+      set({ conversationId: id, workspaceId: wsId, messages: [], runs: [], questions: [], fileGroups: [] });
       try {
         set({
           messages: (await getMessages(id)).map(toUIMessage),
@@ -270,10 +292,13 @@ export const useChat = create<ChatState>((set, get) => {
       } catch (e) {
         set({ messages: [errMsg(msg(e))] });
       }
+      void refreshFiles(id); // #30：产出会话历史文件（非阻塞——历史先出）
       openStreamFor(id);
     },
 
     closeStream,
+
+    refreshFiles,
 
     send: async (content) => {
       const convId = get().conversationId;

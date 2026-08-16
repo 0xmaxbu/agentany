@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { ChatCircleDotsIcon, CheckIcon, PlayIcon, WarningIcon } from "@phosphor-icons/react";
 import { useChat } from "../store/chat";
 import { MessageBlocks } from "./MessageBlock";
+import { FileListCard, groupForMessage } from "./FileListCard";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 
@@ -22,6 +23,8 @@ export function ChatWindow() {
   const messages = useChat((s) => s.messages);
   const runs = useChat((s) => s.runs);
   const questions = useChat((s) => s.questions);
+  const fileGroups = useChat((s) => s.fileGroups);
+  const workspaceId = useChat((s) => s.workspaceId);
   const sendCardAnswer = useChat((s) => s.sendCardAnswer);
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -33,18 +36,29 @@ export function ChatWindow() {
       {messages.length === 0 && runs.length === 0 && questions.length === 0 && (
         <div className="empty">发条消息开始对话</div>
       )}
-      {messages.map((m, i) => (
-        <div key={i} className={`bubble ${m.role} ${m.status}`}>
-          {m.role === "assistant" ? (
-            <div className="content md">
-              <MessageBlocks blocks={m.blocks} />
+      {messages.map((m, i) => {
+        // #30 产出文件列表卡：锚在对应产出消息（outputMessageId）尾——文件管理器式列表
+        const fileGroup = groupForMessage(fileGroups, m.id);
+        return (
+          <div key={i}>
+            <div className={`bubble ${m.role} ${m.status}`}>
+              {m.role === "assistant" ? (
+                <div className="content md">
+                  <MessageBlocks blocks={m.blocks} />
+                </div>
+              ) : (
+                <span className="content">{m.blocks.filter((b) => b.kind === "text").map((b) => (b as { text: string }).text).join("")}</span>
+              )}
+              {m.status === "streaming" && <span className="cursor">▍</span>}
             </div>
-          ) : (
-            <span className="content">{m.blocks.filter((b) => b.kind === "text").map((b) => (b as { text: string }).text).join("")}</span>
-          )}
-          {m.status === "streaming" && <span className="cursor">▍</span>}
-        </div>
-      ))}
+            {fileGroup && workspaceId && (
+              <div className="bubble assistant">
+                <FileListCard group={fileGroup} workspaceId={workspaceId} />
+              </div>
+            )}
+          </div>
+        );
+      })}
       {runs.map((r) => (
         <Card key={r.runId} className={`run run-${r.status} my-2 border-border bg-secondary/60 font-mono text-[13px]`}>
           <CardHeader>
