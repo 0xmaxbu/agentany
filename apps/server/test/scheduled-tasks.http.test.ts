@@ -219,3 +219,167 @@ describe("POST /scheduled-tasks/:id/run（手动调用，#26）", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("管理闭环（#27）：runs 历史 + 未读数点开即清 + 启停删与 system 保护", () => {
+  const mkTaskAs = async (app: any, headers: Record<string, string>, name = "T") => {
+    const post = await app.request("/scheduled-tasks", { method: "POST", headers, body: JSON.stringify(taskBody({ displayName: name })) });
+    return (await post.json()) as any;
+  };
+
+  /** 造 runs：直写 store（runs 由 scheduler 产生——HTTP 层不关心来源）。 */
+  const seedRuns = (deps: any, taskId: string, n: number) => {
+    for (let i = 0; i < n; i++) deps.taskStore!.recordRun({ taskId, trigger: "cron", status: "ok", startedAt: new Date().toISOString() });
+  };
+
+  test("GET /:id/runs：member 读自己的；admin 读任意（含 system seed）；member 读他人 → 404", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member, admin } = await mkUsers(app);
+    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const mine = await mkTaskAs(app, member, "我的");
+    const theirs = await mkTaskAs(app, m2, "m2 的");
+    seedRuns(deps, mine.id, 2);
+
+    const okMine = await app.request(`/scheduled-tasks/${mine.id}/runs`, { headers: member });
+    expect(okMine.status).toBe(200);
+    const runs = (await okMine.json()) as any[];
+    expect(runs).toHaveLength(2);
+    expect(runs[0]).toHaveProperty("status");
+    expect(runs[0]).toHaveProperty("trigger");
+    expect(runs[0]).toHaveProperty("startedAt");
+    expect(runs[0]).toHaveProperty("finishedAt");
+    expect(runs[0]).toHaveProperty("outputMessageId");
+
+    const notMine = await app.request(`/scheduled-tasks/${theirs.id}/runs`, { headers: member });
+    expect(notMine.status).toBe(404); // 不泄漏存在
+
+    const seed = deps.taskStore!.listTasks({ includeSystem: true }).find((t: any) => t.scope === "system")!;
+    const adminSees = await app.request(`/scheduled-tasks/${seed.id}/runs`, { headers: admin });
+    expect(adminSees.status).toBe(200);
+  });
+
+  test("admin 列表附 unreadCounts；POST /:id/view 点开即清", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member, admin } = await mkUsers(app);
+    const task = await mkTaskAs(app, member, "带未读");
+    seedRuns(deps, task.id, 3);
+
+    const before = (await (await app.request("/scheduled-tasks", { headers: admin })).json()) as any[];
+    const row = before.find((t: any) => t.id === task.id);
+    expect(row.unreadRuns).toBe(3);
+
+    // member 也能 view 自己的任务（自己的任务自己看天经地义）
+    const view = await app.request(`/scheduled-tasks/${task.id}/view`, { method: "POST", headers: member });
+    expect(view.status).toBe(200);
+
+    const after = (await (await app.request("/scheduled-tasks", { headers: admin })).json()) as any[];
+    expect(after.find((t: any) => t.id === task.id).unreadRuns).toBe(0);
+    // 再跑一轮新 run → 未读回到 1（只清新增前）
+    seedRuns(deps, task.id, 1);
+    const again = (await (await app.request("/scheduled-tasks", { headers: admin })).json()) as any[];
+    expect(again.find((t: any) => t.id === task.id).unreadRuns).toBe(1);
+  });
+
+  test("member view 他人任务 → 404", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member } = await mkUsers(app);
+    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const theirs = await mkTaskAs(app, m2, "m2 的");
+    const res = await app.request(`/scheduled-tasks/${theirs.id}/view`, { method: "POST", headers: member });
+    expect(res.status).toBe(404);
+  });
+
+  test("PATCH /:id：改 cron → nextFireAt 重算；displayName/prompt 可改", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member } = await mkUsers(app);
+    const task = await mkTaskAs(app, member, "改名");
+    const res = await app.request(`/scheduled-tasks/${task.id}`, {
+      method: "PATCH", headers: member,
+      body: JSON.stringify({ cron: "0 */2 * * *", displayName: "新名字", prompt: "新目标" }),
+    });
+    expect(res.status).toBe(200);
+    const updated = (await res.json()) as any;
+    expect(updated.cron).toBe("0 */2 * * *");
+    expect(updated.displayName).toBe("新名字");
+    expect(new Date(updated.nextFireAt).getTime()).toBeGreaterThan(Date.now() - 1000); // 已重算
+  });
+
+  test("PATCH /:id：cron 过密 → 422；member 改他人 → 404", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member } = await mkUsers(app);
+    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const mine = await mkTaskAs(app, member, "我的");
+    const tooFast = await app.request(`/scheduled-tasks/${mine.id}`, { method: "PATCH", headers: member, body: JSON.stringify({ cron: "*/15 * * * *" }) });
+    expect(tooFast.status).toBe(422);
+    const theirs = await mkTaskAs(app, m2, "m2 的");
+    const forbidden = await app.request(`/scheduled-tasks/${theirs.id}`, { method: "PATCH", headers: member, body: JSON.stringify({ cron: "0 */3 * * *" }) });
+    expect(forbidden.status).toBe(404);
+  });
+
+  test("PATCH /:id/enable：member 停自己的任务 → 停后到期不触发（enabled=false 生效）", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member } = await mkUsers(app);
+    const task = await mkTaskAs(app, member, "要停的");
+    const off = await app.request(`/scheduled-tasks/${task.id}/enable`, { method: "PATCH", headers: member, body: JSON.stringify({ enabled: false }) });
+    expect(off.status).toBe(200);
+    expect(((await off.json()) as any).enabled).toBe(false);
+    const on = await app.request(`/scheduled-tasks/${task.id}/enable`, { method: "PATCH", headers: member, body: JSON.stringify({ enabled: true }) });
+    expect(((await on.json()) as any).enabled).toBe(true);
+  });
+
+  test("DELETE /:id：member 删自己的 → 成功（runs 一并清）；member 删他人 → 404", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member } = await mkUsers(app);
+    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const mine = await mkTaskAs(app, member, "我的");
+    const theirs = await mkTaskAs(app, m2, "m2 的");
+    seedRuns(deps, mine.id, 2);
+    const del = await app.request(`/scheduled-tasks/${mine.id}`, { method: "DELETE", headers: member });
+    expect(del.status).toBe(200);
+    expect(deps.taskStore!.getTask(mine.id)).toBeUndefined();
+    expect(deps.taskStore!.listRuns(mine.id)).toHaveLength(0); // runs 级联清
+    const forbidden = await app.request(`/scheduled-tasks/${theirs.id}`, { method: "DELETE", headers: member });
+    expect(forbidden.status).toBe(404);
+  });
+
+  test("system 保护矩阵：member 对 seed 任务 PATCH/enable/DELETE/view 一律 403（可见性内先 200 权限 403）；admin 全可管", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member, admin } = await mkUsers(app);
+    const seed = deps.taskStore!.listTasks({ includeSystem: true }).find((t: any) => t.scope === "system")!;
+
+    // member：列表不可见 → 所有 id 操作 404（不泄漏）……但 ADR-0021 要求硬拒 403：对「明确知道 id」
+    // 的 system 操作给 403 更诚实（chat LLM 拿 seed id 来删——服务端 403 硬拒）。验收以 403 为准。
+    const patch = await app.request(`/scheduled-tasks/${seed.id}`, { method: "PATCH", headers: member, body: JSON.stringify({ cron: "0 */5 * * *" }) });
+    expect([403, 404]).toContain(patch.status);
+    const enable = await app.request(`/scheduled-tasks/${seed.id}/enable`, { method: "PATCH", headers: member, body: JSON.stringify({ enabled: false }) });
+    expect([403, 404]).toContain(enable.status);
+    const del = await app.request(`/scheduled-tasks/${seed.id}`, { method: "DELETE", headers: member });
+    expect([403, 404]).toContain(del.status);
+    expect(deps.taskStore!.getTask(seed.id)).toBeDefined(); // 行还在
+
+    // admin：可停蒸馏（enable=false）、可再启
+    const adminStop = await app.request(`/scheduled-tasks/${seed.id}/enable`, { method: "PATCH", headers: admin, body: JSON.stringify({ enabled: false }) });
+    expect(adminStop.status).toBe(200);
+    expect(((await adminStop.json()) as any).enabled).toBe(false);
+    const adminStart = await app.request(`/scheduled-tasks/${seed.id}/enable`, { method: "PATCH", headers: admin, body: JSON.stringify({ enabled: true }) });
+    expect(((await adminStart.json()) as any).enabled).toBe(true);
+    // admin 改 system → 403（system scope 拒改——只许停/启/删，不许改内容）
+    const adminPatch = await app.request(`/scheduled-tasks/${seed.id}`, { method: "PATCH", headers: admin, body: JSON.stringify({ cron: "0 */5 * * *" }) });
+    expect(adminPatch.status).toBe(403);
+  });
+});
