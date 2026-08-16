@@ -59,6 +59,12 @@ export class ConversationQueues {
     this.tails.set(conversationId, tail.catch(() => {}));
   }
 
+  /** 当前链尾 promise（#29 定时任务用）：resolve = 已入队的 turn 全部跑完。空链立即 resolve。
+   *  拿的是快照——之后新入队的 turn 不含在内（executeTask 的 finishRun 等快照即可）。 */
+  drained(conversationId: string): Promise<void> {
+    return this.tails.get(conversationId) ?? Promise.resolve();
+  }
+
   /** abort 当前在跑 turn（无论 HTTP/事件来源）。无在跑 → false。 */
   abort(conversationId: string): boolean {
     const ac = this.active.get(conversationId);

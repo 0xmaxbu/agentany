@@ -7,12 +7,12 @@
 //   - 手动调用不经 tick（路由直调 runManual）：trigger=manual、不推进 nextFireAt
 // DB 为真相：running Set 仅内存标记，重启即空（重启恢复 = 新实例按 nextFireAt 继续）。
 import { nextFireAfter } from "./cron";
-import type { ScheduledTaskRow, ScheduledTaskStore } from "./store";
+import type { ScheduledTaskRow, ScheduledTaskStore, TaskRunTrigger } from "./store";
 
 export interface SchedulerDeps {
   store: ScheduledTaskStore;
-  /** 切片 3 替换：真实现=runTurn 同构 spawn（任务 pi 无 bridge、blocks 流收集产出）。 */
-  executeTask: (task: ScheduledTaskRow, trigger: "cron" | "manual") => Promise<void>;
+  /** #29 真实现=makeExecuteTask（runTurn 同构、任务 pi 无 bridge）。runId 传入=收口责任移交。 */
+  executeTask: (task: ScheduledTaskRow, trigger: TaskRunTrigger, runId?: number) => Promise<void>;
   now?: () => number; // 假钟注入（默认 Date.now）
   intervalMs?: number; // tick 周期（默认 60s；测试可调）
 }
@@ -28,12 +28,12 @@ export class TaskScheduler {
     this.intervalMs = deps.intervalMs ?? 60_000;
   }
 
-  /** 手动/常规共用执行尾：登记 running、跑完 finishRun。cron 路径 markFired 已先行。 */
+  /** 手动/常规共用执行尾：登记 running、跑完由 executeTask 收口 run 行（#29 起全权——
+   *  它知道 outputMessageId/错误语义）；runId 传入。executeTask 自身炸掉才兜底 failed。 */
   private async run(task: ScheduledTaskRow, trigger: "cron" | "manual", runId: number): Promise<void> {
     this.running.add(task.id);
     try {
-      await this.deps.executeTask(task, trigger);
-      this.deps.store.finishRun(runId, { status: "ok" });
+      await this.deps.executeTask(task, trigger, runId);
     } catch (e) {
       this.log("task run failed:", task.id, e);
       this.deps.store.finishRun(runId, { status: "failed" });

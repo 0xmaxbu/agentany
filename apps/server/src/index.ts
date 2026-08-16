@@ -8,6 +8,8 @@ import { StreamRegistry } from "./chat/stream-registry";
 import { WorkspaceStore } from "./workspaces/store";
 import { ScheduledTaskStore } from "./scheduled-tasks/store";
 import { TaskScheduler } from "./scheduled-tasks/scheduler";
+import { makeExecuteTask } from "./scheduled-tasks/execute";
+import { ConversationQueues } from "./chat/queue";
 import { bootstrapAdmin } from "./auth/bootstrap";
 import { PORT } from "./config";
 import { warnIfNoSandbox } from "./pi/sandbox";
@@ -23,18 +25,18 @@ const taskStore = new ScheduledTaskStore(db, store); // 定时任务三表（#25
 taskStore.reviveSeedNextFire(); // seed nextFireAt=epoch 占位 → 启动算真值（enabled=0 保持禁用，M5 装配时启用）
 const sweptRuns = taskStore.sweepUnfinishedRuns(); // 重启：执行中崩溃残留的 task_runs 收 failed（DB 真相）
 if (sweptRuns > 0) console.log(`[scheduler] swept ${sweptRuns} unfinished run(s) to failed (crash recovery)`);
-// 切片 3 替换：executeTask 真实现=runTurn 同构 spawn（任务 pi 无 bridge、blocks 流收集产出文件）。
-// 本 stub 只记日志即返（scheduler.run 尾部会把 task_runs 收成 ok）。
-const scheduler = new TaskScheduler({
-  store: taskStore,
-  executeTask: async (task) => { console.log(`[scheduler] execute (stub) task=${task.id} ${task.displayName}`); },
-});
-scheduler.start(); // 每 60s tick；DB 为真相，重启后按 nextFireAt 继续
 const eventBus = new EventBus(); // 共享事件中心：持久流订阅 + bridge run 事件，同一实例
+const conversationQueues = new ConversationQueues(); // 共享 per-conv FIFO：chat 路由与任务执行同实例（#29）——产出会话被用户浏览聊天时任务 turn 仍严格串行
 const runRegistry = new RunRegistry({ store, eventBus });
 runRegistry.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed（进程没在跑了）
+const deps: RunDeps = { store, userStore, streamRegistry, workspaceStore, taskStore, eventBus, conversationQueues, runRegistry };
+const scheduler = new TaskScheduler({
+  store: taskStore,
+  executeTask: makeExecuteTask({ deps, queues: conversationQueues, eventBus }), // #29 真链：runTurn 同构、任务 pi 无 bridge
+});
+deps.scheduler = scheduler;
+scheduler.start(); // 每 60s tick；DB 为真相，重启后按 nextFireAt 继续
 await bootstrapAdmin(userStore); // env 设了 bootstrap admin 则幂等 upsert（否则走纯 dev 阀）
-const deps: RunDeps = { store, userStore, streamRegistry, workspaceStore, taskStore, scheduler, eventBus, runRegistry };
 const app = createApp(deps);
 warnIfNoSandbox(); // 逃生阀开启时显眼告警（ADR-0011 A1）
 

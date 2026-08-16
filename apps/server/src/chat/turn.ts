@@ -26,19 +26,26 @@ const CHAT_SYSTEM_PROMPT = `你是 agentany 的对话助手，用户是非技术
 当收到以「[系统事件]」开头的消息时，那是工作流状态变化（完成 / 挂起 / 失败），请据此向用户说明。
 当收到以「[待处理提问]」开头的注入时，判断用户本次消息是否回答了该提问：是→将答案归一化为符合续跑契约的对象，调 resume_workflow(runId, resumeData)；否→正常回应用户。`;
 
+/** runTurn 可覆盖项（#29 定时任务）：extension 集（任务 pi 无 bridge）与 system 追加（无人值守语境）。 */
+export interface TurnOptions {
+  extensions?: string[];
+  appendSystemPrompt?: string[];
+}
+
 export async function runTurn(
   deps: RunDeps,
   conversationId: string,
   userContent: string,
   send: TurnSend,
   signal: AbortSignal,
+  opts?: TurnOptions,
 ): Promise<void> {
   const conv = deps.store.getConversation(conversationId);
   if (!conv) { send({ type: "error", message: "conversation not found" }); return; }
   if (process.env.AGENTANY_DEBUG_BLOCKS) console.error(`[dbg-turn] runTurn ${conversationId}: "${userContent.slice(0, 40)}"`);
 
   const makeStream = deps.runPiStreamFactory ?? makeRunPiStream;
-  const runPiStream = makeStream({ workspaceId: conv.workspaceId, sessionId: `chat-${conv.id}`, extensions: CHAT_EXTENSIONS });
+  const runPiStream = makeStream({ workspaceId: conv.workspaceId, sessionId: `chat-${conv.id}`, extensions: opts?.extensions ?? CHAT_EXTENSIONS });
 
   const nonce = issueNonce(conv.id); // per-turn bridge 令牌（#11）；finally 吊销
   // 每轮注入（#15 角色 + #17 项目背景/工作流目录/挂起 run + #16 pending ask 判答）。
@@ -64,7 +71,7 @@ export async function runTurn(
         else send({ type: "block_end", blockId: b.blockId });
       },
       bridge: { port: BRIDGE_PORT, nonce, url: `http://localhost:${BRIDGE_PORT}` },
-      appendSystemPrompt: [CHAT_SYSTEM_PROMPT, ...appendDynamic],
+      appendSystemPrompt: opts?.appendSystemPrompt ?? [CHAT_SYSTEM_PROMPT, ...appendDynamic],
     });
   } catch (e) {
     // 真 pi：abort → 子进程被杀 → reject。stub：可能 resolve（下面 signal.aborted 兜底）。

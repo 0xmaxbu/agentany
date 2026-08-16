@@ -19,8 +19,8 @@ const HEARTBEAT_MS = Number(process.env.CHAT_HEARTBEAT_MS ?? 15000);
 const makeConversationId = (): string => "c_" + globalThis.crypto.randomUUID();
 
 export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
-  // 单实例（per app = per 进程）：FIFO + 事件中心 + 调度入口。
-  const queues = new ConversationQueues();
+  // FIFO 单实例：prod 由 index 注入共享（chat 与 #29 任务执行同实例——同会话严格串行）；测试缺省自建。
+  const queues = deps.conversationQueues ?? new ConversationQueues();
   const eventBus = deps.eventBus ?? new EventBus(); // 共享单例（prod 由 index 注入；bridge run 事件经此到持久流）
   const turnTrigger = new TurnTrigger({ deps, queues, eventBus });
 
