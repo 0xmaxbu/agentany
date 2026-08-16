@@ -27,11 +27,15 @@ export interface PromptParts {
   workflows: WorkflowInfo[];
   suspendedRuns: SuspendedRunInfo[];
   pendingAsks: PendingAsk[];
+  /** #35 经验注入段（collectExperience 产出：global 全会话 + member 按会话成员）。空数组=无经验文件，省略。 */
+  experience?: string[];
 }
 
 export function composeSystemPrompt(p: PromptParts): string[] {
   const out: string[] = [];
   out.push(`[项目背景]\n${p.projectDoc}`);
+  // #35 经验段紧跟项目背景（都属「做事方式」上下文，先于目录/挂起等动态态）
+  out.push(...(p.experience ?? []));
 
   if (p.workflows.length) {
     const lines = p.workflows

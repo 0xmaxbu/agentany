@@ -8,6 +8,7 @@ import { scopeOf, resolveScopePaths } from "../scope";
 import { listWorkflows } from "../registry";
 import { loadProjectDoc } from "./project-doc";
 import { composeSystemPrompt } from "./compose-prompt";
+import { collectExperience } from "../knowledge/repo";
 import type { RunDeps } from "../runs";
 import type { Frame } from "./eventbus";
 
@@ -62,6 +63,8 @@ export async function runTurn(
     pendingAsks: deps.store.listQuestions(conversationId, { includeAnswered: false, kind: "ask" }).map((q) => ({
       runId: q.runId ?? "", prompt: q.prompt, options: (q.options as string[]) ?? [], resumeSchema: q.resumeSchema,
     })),
+    // #35：三层经验之 global+member 注入 chat turn（member 按会话归属成员；任务 turn 在 execute.ts 只注 global）
+    experience: collectExperience(conv.userId),
   });
   let result;
   try {

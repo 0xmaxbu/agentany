@@ -12,6 +12,7 @@ import { runTurn, type TurnSend } from "../chat/turn";
 import type { ConversationQueues } from "../chat/queue";
 import type { EventBus, Frame } from "../chat/eventbus";
 import { resolveScopePaths, scopeOf } from "../scope";
+import { collectExperience } from "../knowledge/repo";
 import type { RunDeps } from "../runs";
 import type { ScheduledTaskRow, TaskRunTrigger } from "./store";
 import { WRITE_TOOLS, wsRelativePath } from "./files";
@@ -106,7 +107,12 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
         if (f.type === "done" && f.messageId !== undefined) outputMessageId = String(f.messageId);
         if (f.type === "error") failure = f.message;
         send(f);
-      }, signal, { extensions: TASK_EXTENSIONS, appendSystemPrompt: [TASK_SYSTEM_PROMPT], noBridge: true });
+      }, signal, {
+        extensions: TASK_EXTENSIONS,
+        // #35/D1：任务 turn 吃 global 经验（产出质量受益）、不吃 member 级（任务语境=公司/共享 ws，非个人对话）
+        appendSystemPrompt: [TASK_SYSTEM_PROMPT, ...collectExperience()],
+        noBridge: true,
+      });
     });
     if (!ok) failure = "conversation busy (event queue full)";
     if (ok) await queues.drained(convId); // 等本 turn 真跑完（FIFO 快照）再收口——finishRun 太早会丢 outputMessageId/错误

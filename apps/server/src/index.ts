@@ -11,12 +11,14 @@ import { TaskScheduler } from "./scheduled-tasks/scheduler";
 import { makeExecuteTask } from "./scheduled-tasks/execute";
 import { ConversationQueues } from "./chat/queue";
 import { bootstrapAdmin } from "./auth/bootstrap";
+import { ensureKnowledgeRepo } from "./knowledge/repo";
 import { PORT } from "./config";
 import { warnIfNoSandbox } from "./pi/sandbox";
 import { startBridge, BRIDGE_PORT } from "./bridge/server";
 import type { RunDeps } from "./runs";
 
 const db = openDbMigrated(); // 启动跑迁移（data/db.sqlite）
+ensureKnowledgeRepo(); // #35：knowledge repo 就位（空则 init+布局+skills 种子；已有则 no-op）
 const store = new WorkflowStore(db);
 const userStore = new UserStore(db); // 真 auth（ADR-0014）：与 store 共享同一 db
 const streamRegistry = new StreamRegistry(); // 活跃 SSE 登记：token 吊销时强断
