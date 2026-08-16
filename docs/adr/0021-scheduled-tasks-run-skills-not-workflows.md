@@ -18,9 +18,9 @@ v1 路线（`docs/prd-v1-roadmap.md`）把定时任务与经验提取纳入范�
 2. **任务本质=自由 prompt 任务**：用户在 chat 里说需求 → LLM 解析出 cron 表达式 + 任务目标 prompt → 落 ScheduledTask 表（每行=cron + 任务 prompt + 产出会话 + workspace 归属）。到点执行=pi 以该 prompt 为输入跑（同 chat turn 沙箱：绑 ws cwd、skills ro、tavily 基础网络）。预定义 skill 任务（如经验蒸馏）作为 `system` 级 seed 行共存。
 3. **两类 scope 都落地**：`workspace`（用户随口建的任务，绑建时的 ws）/ `system`（跨 ws 内置任务，如蒸馏，代码 seed、admin 可见）。
 4. **产出投递会话**：建任务时自动建一个「产出会话」挂同 ws；到点跑完把产出投递进该会话（复用现有消息链路，用户开 chat 即见历史产出）。
-5. **建时门控（创建即授权）+ member 自建自批**：任何 ws 成员可在 chat 里建任务——LLM 出**任务卡**（cron 人类可读描述+接下来 3 次执行时间+任务目标）→ 用户点确认即建（自建自批，无需 admin 审批）；CommandPolicy 仍生效（deny→拒；require_approval→发审批卡给 admin，批了才入库）。频率下限（默认 1h）服务端强校验，挡错解析（「每 4 小时」被 LLM 错解成每分钟）。执行时不再逐次问（无人值守）。
+5. **建时门控（创建即授权）+ member 自建自批**：任何 ws 成员可在 chat 里建任务——LLM 出**任务卡**（cron 人类可读描述+接下来 3 次执行时间+任务目标）→ 用户点确认即建（自建自批，无需 admin 审批）。CommandPolicy 仅 deny→拒；**require_approval 同样自建自批**——任务卡用户点确认即「批」，不发 admin 卡（2026-08-16 拆票复核修正，推翻本 ADR 初稿「发审批卡给 admin」）。频率下限（默认 1h）服务端强校验，挡错解析（「每 4 小时」被 LLM 错解成每分钟）。执行时不再逐次问（无人值守）。
 6. **系统作用域=服务端代码的装配权，不是给 pi 的特权**：跨 ws 数据（如蒸馏要读的各 ws pi session）由**服务端**装配成最小切片（临时目录），蒸馏 pi 只读该切片、只能写临时目录；写回（skills/experience.md、learnings/）由服务端校验路径白名单后执行 + git commit。pi 全程无跨 ws 读写能力——不需要 system workspace 给 pi 开权限，失控面为零。「系统作用域」的独立注入目录（system-skills/）概念废止——蒸馏不需要它。
-7. **管理三面**：admin 管理页（全部任务：查看/停用/手动跑/删除，含 system 任务）；member 在 chat 右侧面板或对话中管理**自己建的**任务；chat 对话支持**改任务**（LLM 定位旧任务→改 cron/prompt→新任务卡确认）。**system scope 任务（如蒸馏）经 chat 删除/停用一律服务端硬拒**（LLM 禁删系统任务，只有 admin UI 能）。
+7. **管理三面**：admin 管理页（**全部任务含所有 member 的与 system**：查看/停用/手动跑/删除）；member 在 chat 右侧面板或对话中管理**自己建的**任务；chat 对话支持**改任务**（LLM 定位旧任务→改 cron/prompt→新任务卡确认）。**system 任务经 chat 工具只读且仅 admin 可读**——LLM 工具对 system 行的删/停/改一律直接拒（不论角色；管理只走 admin UI）（2026-08-16 细化）。
 8. **停机错过窗口只记 missed 不补跑**；同任务在跑→本轮跳过记 `skipped_overrun`（不同任务并行、同任务串行）；**所有任务支持手动调用**（admin 管理页；member 自己的任务在面板）。
 
 ## 后果
