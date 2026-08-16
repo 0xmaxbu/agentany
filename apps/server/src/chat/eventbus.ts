@@ -21,8 +21,8 @@ export type Frame =
   | { type: "run_failed"; runId: string; note?: string }
   | { type: "step_started"; runId: string; stepId: string }
   | { type: "step_completed"; runId: string; stepId: string; status: string; output?: unknown; payload?: unknown; resumeSchema?: unknown }
-  | { type: "hitl_request"; questionId: number; runId: string | null; prompt: string; options: string[]; resumeSchema?: unknown; multiple?: number; kind?: "ask" | "approval"; workflowId?: string }
-  | { type: "hitl_answered"; questionId: number; answer: unknown; kind?: "ask" | "approval"; runId?: string };
+  | { type: "hitl_request"; questionId: number; runId: string | null; prompt: string; options: string[]; resumeSchema?: unknown; multiple?: number; kind?: "ask" | "approval" | "task"; workflowId?: string }
+  | { type: "hitl_answered"; questionId: number; answer: unknown; kind?: "ask" | "approval" | "task"; runId?: string };
 export type FrameHandler = (f: Frame) => void;
 
 export class EventBus {

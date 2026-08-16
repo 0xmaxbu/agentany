@@ -29,6 +29,9 @@ export const POSTURES: Record<Posture, CommandRule[]> = {
     { workflowId: "synthetic-3step", decision: "allow" },
     { workflowId: "brand-research", decision: "require_approval" },
     { workflowId: "brand-strategy-analysis", decision: "require_approval" },
+    // #28 定时任务（自由 prompt 任务，非工作流）：allow=出任务卡（require_approval 同语义——
+    // 卡确认即批，ADR-0021 修订版自建自批）；deny 由删规则/strict fail-closed 表达。
+    { workflowId: "scheduled-task", decision: "allow" },
   ],
   strict: [{ workflowId: "*", decision: "require_approval" }], // 一切需审批
 };

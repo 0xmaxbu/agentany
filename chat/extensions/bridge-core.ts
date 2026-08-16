@@ -72,6 +72,54 @@ export async function resumeWorkflow(env: BridgeEnv, runId: string, resumeData: 
   return textResult(r, `resume_workflow ${runId}`);
 }
 
+// ── #28 定时任务工具（/task/*）──
+
+/** POST /task/create：校验（频率下限等）+ 出任务卡（用户确认后服务端直建）。422/403=可解释错误，LLM 重解析。 */
+export async function createScheduledTask(env: BridgeEnv, p: { displayName: string; cron: string; prompt: string }): Promise<string> {
+  const r = await fetch(`${env.url}/task/create`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.nonce}`, "content-type": "application/json" },
+    body: JSON.stringify(p),
+  });
+  return textResult(r, `create_scheduled_task ${p.displayName}`);
+}
+
+/** GET /task/list：member 自己的；admin 全量（含 system）。 */
+export async function listScheduledTasks(env: BridgeEnv): Promise<string> {
+  const r = await fetch(`${env.url}/task/list`, { headers: { authorization: `Bearer ${env.nonce}` } });
+  return textResult(r, "list_scheduled_task");
+}
+
+/** POST /task/update：改任务 → 新任务卡确认（确认后生效）。 */
+export async function updateScheduledTask(env: BridgeEnv, taskId: string, patch: { cron?: string; prompt?: string; displayName?: string }): Promise<string> {
+  const r = await fetch(`${env.url}/task/update`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.nonce}`, "content-type": "application/json" },
+    body: JSON.stringify({ taskId, ...patch }),
+  });
+  return textResult(r, `update_scheduled_task ${taskId}`);
+}
+
+/** POST /task/delete：删自己的任务（system 拒）。 */
+export async function deleteScheduledTask(env: BridgeEnv, taskId: string): Promise<string> {
+  const r = await fetch(`${env.url}/task/delete`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.nonce}`, "content-type": "application/json" },
+    body: JSON.stringify({ taskId }),
+  });
+  return textResult(r, `delete_scheduled_task ${taskId}`);
+}
+
+/** POST /task/enable：停/启自己的任务（system 拒）。 */
+export async function setScheduledTaskEnabled(env: BridgeEnv, taskId: string, enabled: boolean): Promise<string> {
+  const r = await fetch(`${env.url}/task/enable`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.nonce}`, "content-type": "application/json" },
+    body: JSON.stringify({ taskId, enabled }),
+  });
+  return textResult(r, `enable_scheduled_task ${taskId}`);
+}
+
 /** 通用 tool result（与 pi AgentToolResult 的文本结果结构兼容；不依赖 pi 类型 → 服务端可测）。 */
 export interface BridgeToolResult {
   content: { type: "text"; text: string }[];

@@ -73,7 +73,7 @@ export interface QuestionRow {
   id: number;
   conversationId: string;
   runId: string | null; // #16 ask 卡绑挂起 run；#18 approval 卡通过前无 run → 可空
-  kind: "ask" | "approval"; // #16 ask | #18 approval
+  kind: "ask" | "approval" | "task"; // #16 ask | #18 approval | #28 task（任务卡）
   workflowId: string | null; // #18 approval：待审批工作流（ask 卡为空）
   input: unknown; // #18 approval：待审批 input（反序列化；approve 后用它 createRun）
   prompt: string;
@@ -338,7 +338,7 @@ export class WorkflowStore {
   createQuestion(p: {
     conversationId: string; runId?: string | null; prompt: string; options: unknown;
     resumeSchema?: unknown; multiple?: boolean;
-    kind?: "ask" | "approval"; workflowId?: string; input?: unknown; decidedBy?: string;
+    kind?: "ask" | "approval" | "task"; workflowId?: string; input?: unknown; decidedBy?: string;
   }): number {
     const r = this.db
       .insert(hitlQuestions)
@@ -354,7 +354,7 @@ export class WorkflowStore {
     return r.id;
   }
 
-  listQuestions(conversationId: string, opts?: { includeAnswered?: boolean; kind?: "ask" | "approval" }): QuestionRow[] {
+  listQuestions(conversationId: string, opts?: { includeAnswered?: boolean; kind?: "ask" | "approval" | "task" }): QuestionRow[] {
     const conds = [eq(hitlQuestions.conversationId, conversationId)];
     if (!opts?.includeAnswered) conds.push(eq(hitlQuestions.status, "pending"));
     if (opts?.kind) conds.push(eq(hitlQuestions.kind, opts.kind));
@@ -424,6 +424,18 @@ export class WorkflowStore {
       .where(and(eq(hitlQuestions.id, id), eq(hitlQuestions.status, "answered")))
       .run();
     return (res as any).changes > 0;
+  }
+
+  /** #28：任务卡落决（confirm/cancel）。CAS（WHERE pending）防并发双击；非 pending → undefined。 */
+  markTaskCardDecided(id: number, answer: unknown): QuestionRow | undefined {
+    const cur = this.getQuestion(id);
+    if (!cur || cur.status !== "pending") return undefined;
+    const res = this.db.update(hitlQuestions)
+      .set({ status: "answered", answer: J(answer), answeredAt: now() })
+      .where(and(eq(hitlQuestions.id, id), eq(hitlQuestions.status, "pending")))
+      .run();
+    if ((res as any).changes === 0) return undefined;
+    return this.getQuestion(id);
   }
 
   private toQuestionRow(r: any): QuestionRow {

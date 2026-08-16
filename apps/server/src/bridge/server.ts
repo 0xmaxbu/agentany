@@ -1,6 +1,6 @@
-// bridge：pi 子进程 → 服务端的薄 RPC 通道（#11 骨架 / #14 /run/* / #16 HITL /ask_user + /run/resume）。
+// bridge：pi 子进程 → 服务端的薄 RPC 通道（#11 骨架 / #14 /run/* / #16 HITL /ask_user + /run/resume
+// / #28 /task/* 定时任务工具——create 出任务卡（kind=task），list/update/delete/enable 管理面）。
 // 独立 Hono on loopback:BRIDGE_PORT（默认 3199），全局 per-turn nonce 中间件（Authorization: Bearer）。
-// 端点：/ping、/run/start、/run/read、/ask_user（建 pending 提问）、/run/resume（续跑 + 标 answered）。
 // 仅绑 127.0.0.1 + nonce 闸：只有本机持有效 nonce 的 pi 子进程能调。
 import { Hono } from "hono";
 import { verifyNonce, nonceConversation } from "./nonce";
@@ -8,6 +8,10 @@ import type { RunRegistry } from "../runs/registry";
 import type { WorkflowStore } from "../workflow-engine/store";
 import type { EventBus, Frame } from "../chat/eventbus";
 import type { ResumeOutcome } from "../workflow-engine/runner";
+import type { UserStore } from "../auth/store";
+import type { ScheduledTaskStore } from "../scheduled-tasks/store";
+import { validateCronAndFirstFire, InvalidCron, TooFrequent } from "../scheduled-tasks/cron";
+import { decide } from "../security/policy";
 import { jsonBody } from "../http";
 
 export const BRIDGE_PORT = Number(process.env.BRIDGE_PORT ?? 3199);
@@ -27,11 +31,13 @@ export interface BridgeDeps {
   runRegistry?: RunRegistry;
   store?: WorkflowStore;
   eventBus?: EventBus;
+  userStore?: UserStore; // #28：nonce→conv→userId→role（任务工具权限分野）
+  taskStore?: ScheduledTaskStore; // #28：/task/* 端点
 }
 
 export function createBridgeApp(opts: BridgeDeps = {}): Hono {
   const app = new Hono();
-  const { runRegistry: reg, store, eventBus } = opts;
+  const { runRegistry: reg, store, eventBus, userStore, taskStore } = opts;
 
   // 全局 nonce 闸：所有路由需 Authorization: Bearer <有效未吊销 nonce>。缺/坏 → 401。
   app.use("*", async (c, next) => {
@@ -116,6 +122,136 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     const row = store?.markPendingAnsweredByRun(runId, resumeData);
     if (row && eventBus) eventBus.publish(convId, { type: "hitl_answered", questionId: row.id, answer: resumeData });
     return c.json({ status: outcome.status });
+  });
+
+  // ── #28 定时任务工具（/task/*）──
+  // 身份：nonce→conv→conv.userId；角色经 userStore。member=自己的任务；system 只读（list 仅 admin
+  // 可见 system 行；写操作对 system 一律 403——admin 经工具同样拒，管理只走 admin UI，ADR-0021 决策 7）。
+
+  const taskCtx = (c: { req: { header: (n: string) => string | undefined } }) => {
+    const convId = nonceConversation(bearerToken(c.req.header("authorization"))!);
+    if (!convId) return { err: 400 as const };
+    const conv = store?.getConversation(convId);
+    const user = userStore?.getUserById(conv?.userId ?? "");
+    if (!conv || !user) return { err: 403 as const };
+    return { convId, userId: user.id, role: user.role };
+  };
+
+  /** 任务卡 prompt：displayName + cron 人类可读 + 未来 3 次执行时间 + 目标。 */
+  const taskCardPrompt = (p: { displayName: string; cron: string; prompt: string }, next3: string[]) =>
+    `创建定时任务「${p.displayName}」？频率：${p.cron}（未来 3 次执行：${next3.map((t) => new Date(t).toLocaleString("zh-CN")).join("；")}）。任务目标：${p.prompt}`;
+
+  // /task/create：校验（cron 合法+频率下限+CommandPolicy）→ 出 kind=task pending 卡（input=完整参数+next3）。
+  // 确认动作不在此（main app POST /scheduled-tasks/confirm/:id——服务端直建，参数零漂移）。
+  app.post("/task/create", async (c) => {
+    if (!store || !taskStore) return c.json({ error: "task tools unavailable" }, 503);
+    const ctx2 = taskCtx(c);
+    if ("err" in ctx2) return c.json({ error: "no identity for nonce" }, ctx2.err);
+    const body = await jsonBody(c);
+    const { displayName, cron, prompt } = body as { displayName?: string; cron?: string; prompt?: string };
+    if (typeof displayName !== "string" || !displayName || typeof prompt !== "string" || !prompt || typeof cron !== "string") {
+      return c.json({ error: "displayName, cron, prompt required" }, 400);
+    }
+    // CommandPolicy（deny-only 语义）：deny → 拒建；require_approval/allow → 出卡（自建自批，ADR-0021 修订）
+    const verdict = decide("scheduled-task");
+    if (verdict.decision === "deny") return c.json({ error: `denied by command policy: ${verdict.reason}` }, 403);
+    let next3: string[];
+    try {
+      const first = validateCronAndFirstFire(cron);
+      // 未来 3 次：parse 后连取（firstFire + 后续 2 个）
+      const { CronExpressionParser } = await import("cron-parser");
+      const it = CronExpressionParser.parse(cron, { currentDate: new Date() });
+      next3 = [it.next().toDate().toISOString(), it.next().toDate().toISOString(), it.next().toDate().toISOString()];
+      void first;
+    } catch (e) {
+      if (e instanceof TooFrequent) return c.json({ error: "cron too frequent: minimum interval is 1h — 请重新解析用户的频率需求" }, 422);
+      if (e instanceof InvalidCron) return c.json({ error: "invalid cron expression" }, 400);
+      throw e;
+    }
+    const id = store.createQuestion({
+      conversationId: ctx2.convId, kind: "task",
+      prompt: taskCardPrompt({ displayName, cron, prompt }, next3),
+      options: ["确认创建", "取消"],
+      input: { displayName, cron, prompt, next3 }, // 完整参数暂存卡上——确认时服务端直建（零 LLM 二跳）
+    });
+    eventBus?.publish(ctx2.convId, { type: "hitl_request", questionId: id, runId: null, kind: "task", prompt: taskCardPrompt({ displayName, cron, prompt }, next3), options: ["确认创建", "取消"], multiple: 0 });
+    return c.json({ status: "asked", questionId: id });
+  });
+
+  // /task/list：member 自己的（剔 system）；admin 全量（含 system——工具层只读可见）。
+  app.get("/task/list", (c) => {
+    if (!taskStore) return c.json({ error: "task tools unavailable" }, 503);
+    const ctx2 = taskCtx(c);
+    if ("err" in ctx2) return c.json({ error: "no identity for nonce" }, ctx2.err);
+    const list = ctx2.role === "admin"
+      ? taskStore.listTasks({})
+      : taskStore.listTasks({ creatorId: ctx2.userId, includeSystem: false });
+    return c.json(list);
+  });
+
+  // /task/update：改 cron/prompt/displayName → 出新任务卡（确认后服务端 updateTask + recomputeNextFire）。
+  app.post("/task/update", async (c) => {
+    if (!store || !taskStore) return c.json({ error: "task tools unavailable" }, 503);
+    const ctx2 = taskCtx(c);
+    if ("err" in ctx2) return c.json({ error: "no identity for nonce" }, ctx2.err);
+    const body = await jsonBody(c);
+    const { taskId, ...patch } = body as { taskId?: string; cron?: string; prompt?: string; displayName?: string };
+    if (!taskId || typeof taskId !== "string") return c.json({ error: "taskId required" }, 400);
+    const task = taskStore.getTask(taskId);
+    if (!task) return c.json({ error: "task not found" }, 404);
+    if (task.scope === "system") return c.json({ error: "system tasks are read-only via chat (admin UI only)" }, 403);
+    if (ctx2.role !== "admin" && task.creatorId !== ctx2.userId) return c.json({ error: "task not found" }, 404);
+    if (patch.cron !== undefined) {
+      try {
+        validateCronAndFirstFire(patch.cron);
+      } catch (e) {
+        if (e instanceof TooFrequent) return c.json({ error: "cron too frequent: minimum interval is 1h" }, 422);
+        if (e instanceof InvalidCron) return c.json({ error: "invalid cron expression" }, 400);
+        throw e;
+      }
+    }
+    const next = { ...task, ...patch } as typeof task;
+    const id = store.createQuestion({
+      conversationId: ctx2.convId, kind: "task",
+      prompt: `修改定时任务「${task.displayName}」？新配置：${patch.cron ?? task.cron} / ${patch.displayName ?? task.displayName}。目标：${patch.prompt ?? task.prompt}`,
+      options: ["确认修改", "取消"],
+      input: { update: { taskId, patch } },
+    });
+    eventBus?.publish(ctx2.convId, { type: "hitl_request", questionId: id, runId: null, kind: "task", prompt: `修改任务「${task.displayName}」`, options: ["确认修改", "取消"], multiple: 0 });
+    void next;
+    return c.json({ status: "asked", questionId: id });
+  });
+
+  // /task/delete：member 自己的（system 一律 403 含 admin）。
+  app.post("/task/delete", async (c) => {
+    if (!taskStore) return c.json({ error: "task tools unavailable" }, 503);
+    const ctx2 = taskCtx(c);
+    if ("err" in ctx2) return c.json({ error: "no identity for nonce" }, ctx2.err);
+    const body = await jsonBody(c);
+    const taskId = (body as { taskId?: string }).taskId;
+    if (!taskId) return c.json({ error: "taskId required" }, 400);
+    const task = taskStore.getTask(taskId);
+    if (!task) return c.json({ error: "task not found" }, 404);
+    if (task.scope === "system") return c.json({ error: "system tasks are read-only via chat (admin UI only)" }, 403);
+    if (ctx2.role !== "admin" && task.creatorId !== ctx2.userId) return c.json({ error: "task not found" }, 404);
+    const ok = taskStore.deleteTask(taskId, false); // allowSystem=false：工具层对 system 永拒（上面已挡，双保险）
+    return ok ? c.json({ deleted: true }) : c.json({ error: "task not found" }, 404);
+  });
+
+  // /task/enable：member 自己的停/启（system 一律 403 含 admin）。
+  app.post("/task/enable", async (c) => {
+    if (!taskStore) return c.json({ error: "task tools unavailable" }, 503);
+    const ctx2 = taskCtx(c);
+    if ("err" in ctx2) return c.json({ error: "no identity for nonce" }, ctx2.err);
+    const body = await jsonBody(c);
+    const { taskId, enabled } = body as { taskId?: string; enabled?: boolean };
+    if (!taskId || typeof enabled !== "boolean") return c.json({ error: "taskId, enabled (boolean) required" }, 400);
+    const task = taskStore.getTask(taskId);
+    if (!task) return c.json({ error: "task not found" }, 404);
+    if (task.scope === "system") return c.json({ error: "system tasks are read-only via chat (admin UI only)" }, 403);
+    if (ctx2.role !== "admin" && task.creatorId !== ctx2.userId) return c.json({ error: "task not found" }, 404);
+    const row = taskStore.setTaskEnabled(taskId, enabled, false);
+    return c.json(row);
   });
 
   return app;

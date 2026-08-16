@@ -173,4 +173,55 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
       throw e;
     }
   });
+
+  // 任务卡确认（#28，#18 审批门同构）：kind=task 卡的确定性动作——confirm 时服务端直建/直改
+  // （参数暂存卡上，零 LLM 二跳零漂移）。确认权只在卡主（自建自批；admin 也不代确认）。
+  app.post("/scheduled-tasks/confirm/:questionId", async (c) => {
+    const qid = Number(c.req.param("questionId"));
+    if (!Number.isInteger(qid)) return c.json({ error: "invalid questionId" }, 400);
+    const body = await jsonBody(c);
+    const decision: unknown = body.decision;
+    if (decision !== "confirm" && decision !== "cancel") return c.json({ error: "decision must be 'confirm' or 'cancel'" }, 400);
+    const q = deps.store.getQuestion(qid);
+    if (!q || q.kind !== "task") return c.json({ error: "task card not found" }, 404);
+    const conv = deps.store.getConversation(q.conversationId);
+    if (!conv || conv.userId !== userIdOf(c)) return c.json({ error: "task card not found" }, 404); // 仅卡主（admin 不代确认）
+    if (q.status !== "pending") return c.json({ error: "already decided" }, 409);
+
+    if (decision === "cancel") {
+      deps.store.markTaskCardDecided(qid, { decision: "cancel" });
+      deps.eventBus?.publish(q.conversationId, { type: "hitl_answered", questionId: qid, kind: "task", answer: { decision: "cancel" } });
+      return c.json({ status: "cancelled" });
+    }
+
+    const input = q.input as { displayName?: string; cron?: string; prompt?: string; next3?: string[]; update?: { taskId: string; patch: Record<string, string> } };
+    if (input.update) {
+      // 改任务卡：服务端直改（cron 变更重算 nextFireAt；store 层 system 保护兜底）
+      const { taskId, patch } = input.update;
+      let row;
+      try {
+        row = ts().updateTask(taskId, patch);
+      } catch (e) {
+        if (e instanceof SystemTaskProtected) return c.json({ error: "system task protected" }, 403);
+        throw e;
+      }
+      if (!row) { deps.store.markTaskCardDecided(qid, { decision: "cancel" }); return c.json({ error: "task no longer exists" }, 409); }
+      if (patch.cron) ts().recomputeNextFire(taskId);
+      const updated = ts().getTask(taskId)!;
+      deps.store.markTaskCardDecided(qid, { decision: "confirm" });
+      deps.eventBus?.publish(q.conversationId, { type: "hitl_answered", questionId: qid, kind: "task", answer: { decision: "confirm", taskId } });
+      return c.json(updated);
+    }
+
+    // 建任务卡：服务端直建（createWorkspaceTask 事务——产出会话派生）
+    if (!input.displayName || !input.cron || !input.prompt) return c.json({ error: "card payload incomplete" }, 409);
+    const task = ts().createWorkspaceTask({
+      displayName: input.displayName, cron: input.cron, prompt: input.prompt,
+      workspaceId: conv.workspaceId, creatorId: conv.userId,
+      firstFireAt: validateCronAndFirstFire(input.cron),
+    });
+    deps.store.markTaskCardDecided(qid, { decision: "confirm" });
+    deps.eventBus?.publish(q.conversationId, { type: "hitl_answered", questionId: qid, kind: "task", answer: { decision: "confirm", taskId: task.id } });
+    return c.json(task, 201);
+  });
 }
