@@ -13,9 +13,13 @@ import type { ConversationQueues } from "../chat/queue";
 import type { EventBus, Frame } from "../chat/eventbus";
 import { resolveScopePaths, scopeOf } from "../scope";
 import { collectExperience } from "../knowledge/repo";
+import { runDistill } from "../knowledge/distill";
 import type { RunDeps } from "../runs";
 import type { ScheduledTaskRow, TaskRunTrigger } from "./store";
 import { WRITE_TOOLS, wsRelativePath } from "./files";
+
+// 蒸馏 seed 任务 id（迁移 0013 种的 system 任务——executeTask 以此特判走蒸馏链）。
+export const DISTILL_TASK_ID = "t_seed_distill";
 
 // 任务 pi 的 extension 集：仅基础网络（tavily）——无 chat-bridge（chat/extensions.ts 对照）。
 export const TASK_EXTENSIONS: string[] = [
@@ -50,11 +54,18 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
     if (task.scope === "system") {
       const runId = own ? deps.taskStore!.recordRun({ taskId: task.id, trigger, status: "ok", startedAt: new Date().toISOString() }) : runIdProvided!;
       try {
-        const runPi = (deps.runPiFactory ?? makeRunPi)({
-          extensions: TASK_EXTENSIONS, scope: "general", workspaceId: null, sessionId: `task-${task.id}`,
-        });
-        await runPi({ prompt: task.prompt });
-        deps.taskStore!.finishRun(runId, { status: "ok" });
+        if (task.id === DISTILL_TASK_ID) {
+          // #36 蒸馏特判：不走通用 pi 通道（蒸馏需 zero-extension 纯文本调用 + 服务端 git 收口，
+          // runDistill 全链自足）；note 带 commit hash/失败原因（admin 任务页可读）。
+          const r = await runDistill(deps, deps.runPiFactory as never);
+          deps.taskStore!.finishRun(runId, { status: r.ok ? "ok" : "failed", note: r.note });
+        } else {
+          const runPi = (deps.runPiFactory ?? makeRunPi)({
+            extensions: TASK_EXTENSIONS, scope: "general", workspaceId: null, sessionId: `task-${task.id}`,
+          });
+          await runPi({ prompt: task.prompt });
+          deps.taskStore!.finishRun(runId, { status: "ok" });
+        }
       } catch (e) {
         const note = (e as Error)?.message ?? String(e);
         deps.taskStore!.finishRun(runId, { status: "failed", note });

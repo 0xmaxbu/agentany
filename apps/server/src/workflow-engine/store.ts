@@ -1,6 +1,6 @@
 // Drizzle 版 WorkflowStore（替 spike-b 裸 bun:sqlite；方法同 spike-b）。
 // 这是引擎里唯一耦合 db 的文件；runner 只接收本类实例、不 import db。
-import { and, desc, eq, isNull, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, isNotNull, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { conversations, feedback, hitlQuestions, messages, workflowRunLog, workflowRuns } from "../db/schema";
 
@@ -230,6 +230,44 @@ export class WorkflowStore {
       .where(and(eq(feedback.targetKind, targetKind), eq(feedback.targetId, targetId)))
       .orderBy(feedback.id)
       .all();
+  }
+
+  // ── #36 蒸馏增量查询（水位 lastFeedbackId 的配套；不走 HTTP）──
+
+  /** id 水位之后的全部 feedback（跨 targetKind——蒸馏要全部新反馈）。 */
+  listFeedbackSince(lastId: number): FeedbackRow[] {
+    return this.db
+      .select()
+      .from(feedback)
+      .where(gt(feedback.id, lastId))
+      .orderBy(feedback.id)
+      .all();
+  }
+
+  /** feedback 全表最大 id（水位推进兜底：无新行时也校准）。 */
+  maxFeedbackId(): number {
+    const r = this.db.select({ max: sql<number>`max(${feedback.id})` }).from(feedback).get();
+    return r?.max ?? 0;
+  }
+
+  /** message 级 feedback 反查会话（targetId=message id → conversationId）。 */
+  conversationIdOfMessage(messageId: string): string | null {
+    const r = this.db
+      .select({ conversationId: messages.conversationId })
+      .from(messages)
+      .where(eq(messages.id, Number(messageId)))
+      .get();
+    return r?.conversationId ?? null;
+  }
+
+  /** run 级 feedback 反查会话（workflow_runs.runId → conversationId）。 */
+  conversationIdOfRun(runId: string): string | null {
+    const r = this.db
+      .select({ conversationId: workflowRuns.conversationId })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, runId))
+      .get();
+    return r?.conversationId ?? null;
   }
 
   // ── chat 切片①（ADR-0009：1 会话 = 1 Pi session）──
