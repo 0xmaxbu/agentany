@@ -97,6 +97,23 @@ describe("POST /feedback/message（消息级 👍/👎）", () => {
     })).status).toBe(401);
   });
 
+  test("作者落库 + 回显按人（Spec-4：admin 不误吞他人反馈）", async () => {
+    const ctx = await setup();
+    const tokM1 = await ctx.login("m1");
+    await ctx.app.request(`/feedback/message/${ctx.msgId}`, {
+      method: "POST", headers: { ...JH, authorization: tokM1 }, body: JSON.stringify({ rating: 5 }),
+    });
+    // admin 也点同消息 👎
+    const tokAd = await ctx.login("ad");
+    await ctx.app.request(`/feedback/message/${ctx.msgId}`, {
+      method: "POST", headers: { ...JH, authorization: tokAd }, body: JSON.stringify({ rating: 1 }),
+    });
+    const r = await ctx.app.request(`/feedback/message/${ctx.msgId}`, { headers: { authorization: tokAd } });
+    const rows = await r.json() as any[];
+    expect(rows).toHaveLength(2);
+    expect(rows.map((x) => x.authorId)).toEqual([ctx.m1.id, (await ctx).deps.userStore!.getUserByUsername("ad")!.id]);
+  });
+
   test("未知 targetKind → 400（白名单外挂载点不开）", async () => {
     const ctx = await setup();
     const tok = await ctx.login("m1");

@@ -46,6 +46,7 @@ export interface FeedbackRow {
   targetId: string;
   text: string;
   rating: number | null;
+  authorId: string | null; // #34 审查 Spec-4：作者（回显按人过滤）
   createdAt: string;
 }
 
@@ -214,10 +215,10 @@ export class WorkflowStore {
   }
 
   // ── 反馈（ADR-0008，多态挂载到任意执行）──
-  addFeedback(p: { targetKind: string; targetId: string; text: string; rating?: number }): number {
+  addFeedback(p: { targetKind: string; targetId: string; text: string; rating?: number; authorId?: string }): number {
     const r = this.db
       .insert(feedback)
-      .values({ targetKind: p.targetKind, targetId: p.targetId, text: p.text, rating: p.rating ?? null, createdAt: now() })
+      .values({ targetKind: p.targetKind, targetId: p.targetId, text: p.text, rating: p.rating ?? null, authorId: p.authorId ?? null, createdAt: now() })
       .returning({ id: feedback.id })
       .get();
     return r?.id ?? 0;
@@ -248,6 +249,15 @@ export class WorkflowStore {
   maxFeedbackId(): number {
     const r = this.db.select({ max: sql<number>`max(${feedback.id})` }).from(feedback).get();
     return r?.max ?? 0;
+  }
+
+  /** feedback 挂载目标反查所属会话（权限锚/蒸馏重入队共用口径；#34 审查 Std-4 归一）。 */
+  conversationOfFeedbackTarget(kind: string, targetId: string): ConversationRow | null {
+    let convId: string | null = null;
+    if (kind === "message") convId = this.conversationIdOfMessage(targetId);
+    else if (kind === "workflow_run") convId = this.conversationIdOfRun(targetId);
+    else if (kind === "chat") convId = targetId;
+    return convId ? (this.getConversation(convId) ?? null) : null;
   }
 
   /** message 级 feedback 反查会话（targetId=message id → conversationId）。 */

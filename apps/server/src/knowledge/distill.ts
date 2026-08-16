@@ -3,20 +3,23 @@
 // zero-extension、无 bridge）产 actions JSON → 服务端白名单校验写回 → git commit（水位同 commit 原子）
 // → push best-effort → task_runs note 带 hash。
 // 失败语义：pi 错/坏 JSON → 不 commit 不推水位（下轮重读）；拒动作 → 剔除留痕水位照推（防毒丸）。
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { DATA_DIR } from "../config";
-import { makeRunPi } from "../pi/runPi-factory";
+import { dataDir, generalSessionDir, workspaceSessionDir } from "../config";
+import { COMPANY_WORKSPACE_ID } from "../workspaces/store";
+import { makeRunPi, type MakeRunPiOpts, type ConfiguredRunPi } from "../pi/runPi-factory";
 import { knowledgeRoot, DISTILL_STATE_FILE, ensureKnowledgeRepo } from "./repo";
 import type { RunDeps } from "../runs";
+import type { WorkflowStore } from "../workflow-engine/store";
 
-/** pi-sessions 根（general + 全部 workspace；水位按文件名集合，跨目录不重名——文件名含时间戳+sessionId）。 */
+/** pi-sessions 根（general + 全部 workspace；水位按文件名集合，跨目录不重名——文件名含时间戳+sessionId）。
+ *  路径真相走 config.ts 口径函数（scope.ts 约定）；公司 ws 即 general 目录。 */
 function sessionDirs(deps: RunDeps): string[] {
-  const dirs = [join(process.env.DATA_DIR ?? DATA_DIR, "general", "pi-sessions")];
+  const dirs = [generalSessionDir()];
   for (const ws of deps.workspaceStore!.listAllWorkspaces()) {
-    if (ws.id === "ws_company") continue; // 公司 ws 即 general 目录（scope.ts 口径）
-    dirs.push(join(process.env.DATA_DIR ?? DATA_DIR, "workspaces", ws.id, "pi-sessions"));
+    if (ws.id === COMPANY_WORKSPACE_ID) continue; // 公司 ws 即 general 目录（scope.ts 口径）
+    dirs.push(workspaceSessionDir(ws.id));
   }
   return dirs;
 }
@@ -56,6 +59,12 @@ export function validateWriteTarget(a: DistillAction): string | undefined {
     const id = a.target.slice("member:".length);
     return ID_RE.test(id) ? join("experience/members", `${id}.md`) : undefined;
   }
+  if (a.target.startsWith("learning:")) {
+    // learnings/ 审计（spec 写回白名单第四通道）：topic 走 ID_RE，日期服务端产（LLM 不可控时间）
+    const topic = a.target.slice("learning:".length);
+    return a.op === "append" && ID_RE.test(topic)
+      ? join("learnings", `${topic}-${new Date().toISOString().slice(0, 10)}.md`) : undefined;
+  }
   if (a.target.startsWith("skill:")) {
     const name = a.target.slice("skill:".length);
     // skill 必须真实存在（repo skills/ 种子目录），防任意目录 append
@@ -79,7 +88,7 @@ const DISTILL_PROMPT_HEAD = `你是 agentany 的经验蒸馏器。以下是本�
 {"actions":[{"target":"global|member:<userId>|skill:<skill名>","op":"revise|append","content":"..."}],"commitMessage":"distill: ..."}
 规则：
 - target=global/member 的 op=revise：给出该文件合并后的完整新内容（合并同类、淘汰过时，优先精简而非新增；禁止包含可识别具体成员/客户/品牌/价格的信息）
-- target=skill:* 的 op=append：只给追加条目（append-only，不重写既有内容）
+- target=skill:* 的 op=append：只给追加条目（append-only，不重写既有内容）\n- target=learning:<topic> 的 op=append：本轮蒸馏的审计结论（本次读了什么、提炼了什么、依据哪些反馈），topic 用短横线英文 slug
 - 无人交互的纯机械过程没有经验价值——只从含用户信号（提问方式/纠偏/反馈/选择）的记录中提取\n- 经验文档保持精炼（每个文件 ≤80 行）——合并淘汰优先于新增，宁缺毋滥`;
 
 
@@ -129,9 +138,11 @@ export interface DistillOptions {
  * 跑一轮蒸馏。deps 需要 store（feedback/message 反查）+ workspaceStore（session 目录枚举）。
  * LLM 经 runPiFactory 注入（默认 makeRunPi）；返回 note 供 executeTask 落 task_runs。
  */
+export type DistillPiFactory = (opts: MakeRunPiOpts) => ConfiguredRunPi;
+
 export async function runDistill(
   deps: RunDeps,
-  factory?: (opts: unknown) => (call: unknown) => Promise<{ text: string }>,
+  factory?: DistillPiFactory,
   opts: DistillOptions = {},
 ): Promise<DistillResult> {
   ensureKnowledgeRepo();
@@ -148,10 +159,10 @@ export async function runDistill(
   let corpus = selectCorpusFiles(allNames, state.processedFiles);
 
   // 2) feedback 增量：id > lastFeedbackId 的行 → 关联文件重入队 + feedback 内容进语料
-  const feedbacks = listFeedbackSince(deps, state.lastFeedbackId);
+  const feedbacks = deps.store.listFeedbackSince(state.lastFeedbackId);
   const reQueued: string[] = [];
   for (const fb of feedbacks) {
-    const convId = targetConversation(deps, fb.targetKind, fb.targetId);
+    const convId = deps.store.conversationOfFeedbackTarget(fb.targetKind, fb.targetId)?.id;
     if (!convId) continue;
     for (const name of allNames.filter((n) => n.endsWith(`chat-${convId}.jsonl`))) {
       if (!corpus.includes(name)) { corpus.push(name); reQueued.push(name); }
@@ -180,8 +191,7 @@ export async function runDistill(
   }
 
   // 4) 蒸馏 pi：headless 纯文本（zero-extension、无 bridge、timeout 放宽）
-  const factoryFn = (factory ?? makeRunPi) as (o: unknown) => (c: unknown) => Promise<{ text: string }>;
-  const runPi = factoryFn({ extensions: [], scope: "general", workspaceId: null, sessionId: "distill-weekly" });
+  const runPi = (factory ?? makeRunPi)({ extensions: [], scope: "general", workspaceId: null, sessionId: "distill-weekly" });
   let raw: string;
   try {
     const r = await runPi({ prompt: parts.join("\n"), timeoutMs: DISTILL_TIMEOUT_MS });
@@ -200,18 +210,22 @@ export async function runDistill(
   } catch (e) {
     // 事后检查素材：LLM 原文落 knowledge repo 外层（不进 git——诊断用）；note 尾部+头部可诊断
     try {
-      writeFileSync(join(process.env.DATA_DIR ?? DATA_DIR, "distill-last-raw.txt"), raw, "utf8");
+      writeFileSync(join(dataDir(), "distill-last-raw.txt"), raw, "utf8");
     } catch { /* 诊断落盘失败不掩盖原错误 */ }
     return { ok: false, note: `distill bad JSON (len=${raw.length}): ${(e as Error).message} | head=${raw.slice(0, 150)} | tail=${raw.slice(-150)}` };
   }
 
-  // 6) 白名单校验 + 写回（拒动作剔除留痕）
+  // 6) 白名单校验 + 写回（拒动作剔除留痕）。写前快照原内容——commit 失败时文件级恢复
+  // （git checkout 在 index.lock 等场景自身不可用且不清未跟踪文件，回滚不依赖 git）。
   const rejected: string[] = [];
   const applied: string[] = [];
+  const snapshot: Array<{ abs: string; prev: Buffer | null }> = [];
+  const snap = (abs: string) => snapshot.push({ abs, prev: existsSync(abs) ? readFileSync(abs) : null });
   for (const a of parsed.actions ?? []) {
     const rel = validateWriteTarget(a);
     if (!rel) { rejected.push(a?.target ?? String(a)); continue; }
     const abs = join(root, rel);
+    snap(abs);
     mkdirSync(join(abs, ".."), { recursive: true });
     if (a.op === "append") appendFileSync(abs, `${a.content.endsWith("\n") ? "" : "\n"}${a.content}\n`, "utf8");
     else writeFileSync(abs, a.content, "utf8");
@@ -225,10 +239,23 @@ export async function runDistill(
   };
   writeFileSync(statePath, JSON.stringify(newState, null, 2), "utf8");
 
-  // 8) commit（含写回 + 水位）+ push best-effort
+  // 8) commit（含写回 + 水位）+ push best-effort。commit 抛错 → restore 全部未提交变更
+  // （水位+经验写回一起丢弃，回到本轮起点——原子性；下轮重读同批素材）。
   const msg = parsed.commitMessage?.trim() || "distill: weekly batch";
-  gitOut(["add", "-A"], root);
-  gitOut(["commit", "-q", "-m", msg, "--allow-empty"], root);
+  try {
+    gitOut(["add", "-A"], root);
+    gitOut(["commit", "-q", "-m", msg, "--allow-empty"], root);
+  } catch (e) {
+    // 文件级回滚：快照逆序恢复（append 场景同文件多动作要逆序）+ 水位恢复原文；恢复失败仅记 warn
+    try {
+      for (const { abs, prev } of snapshot.reverse()) {
+        if (prev === null) rmSync(abs, { force: true });
+        else writeFileSync(abs, prev);
+      }
+      writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+    } catch (e2) { console.warn("[distill] rollback failed:", e2); }
+    return { ok: false, note: `distill commit failed: ${(e as Error)?.message ?? String(e)}（写回已回滚，下轮重读）` };
+  }
   const hash = gitOut(["rev-parse", "--short", "HEAD"], root);
   const pushNote = doPush(opts, root);
 
@@ -253,23 +280,11 @@ function readIfExists(p: string): string {
   return existsSync(p) ? readFileSync(p, "utf8") : "(空)";
 }
 
-// ── feedback / message 反查（store 直查，避免为蒸馏扩 HTTP 面；实现在 WorkflowStore）──
-interface FbRow { id: number; targetKind: string; targetId: string; text: string; rating: number | null }
+// ── feedback 增量/反查：直调 WorkflowStore（listFeedbackSince / conversationOfFeedbackTarget）──
 
-function listFeedbackSince(deps: RunDeps, lastId: number): FbRow[] {
-  return deps.store.listFeedbackSince(lastId);
-}
-
-function maxFeedbackId(deps: RunDeps, prev: number, rows: FbRow[]): number {
+function maxFeedbackId(deps: RunDeps, prev: number, rows: ReturnType<WorkflowStore["listFeedbackSince"]>): number {
   const m = rows.reduce((acc, r) => Math.max(acc, r.id), prev);
   return Math.max(m, deps.store.maxFeedbackId());
-}
-
-function targetConversation(deps: RunDeps, kind: string, targetId: string): string | null {
-  if (kind === "chat") return targetId; // 会话级直用
-  if (kind === "message") return deps.store.conversationIdOfMessage(targetId);
-  if (kind === "workflow_run") return deps.store.conversationIdOfRun?.(targetId) ?? null;
-  return null;
 }
 
 function doPush(opts: DistillOptions, root: string): string {

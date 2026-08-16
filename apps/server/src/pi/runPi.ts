@@ -1,5 +1,5 @@
 // oneshot: pi -p --mode json NDJSON 驱动（Spike A step1 已证；pi --help 实证 flag）。
-// **-p 必须有**（非交互处理即退，否则 pi 进交互模式挂起）。prompt=位置参数（spawn args 数组，不走 shell）。
+// **-p 必须有**（非交互处理即退，否则 pi 进交互模式挂起）。prompt=位置参数（短）/ stdin（>PROMPT_STDIN_THRESHOLD，不走 shell）。
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -41,14 +41,15 @@ function buildArgs(opts: RunPiOptions): string[] {
   for (const s of repoSkillPaths()) args.push("--skill", s); // 自动发现全部 repo skills（ADR-0005）
   for (const e of opts.extensions ?? []) args.push("-e", e);
   for (const a of opts.appendSystemPrompt ?? []) args.push("--append-system-prompt", a); // pi --help 实证（可多次）
-  // #37：超长 prompt 走 stdin（pi 实测支持；蒸馏语料可至 MB 级，argv 会 E2BIG）
-  if (opts.prompt.length > PROMPT_STDIN_THRESHOLD) return args;
+  if (promptViaStdin(opts.prompt)) return args;
   args.push(opts.prompt); // 位置参数（pi --help 实证：pi -p "…"）
   return args;
 }
 
 /** argv prompt 上限（超出走 stdin）。ARG_MAX 含 env ~1MB，512k 留裕量。 */
 export const PROMPT_STDIN_THRESHOLD = 512_000;
+/** prompt 传递通道判定（唯一处，buildArgs/spawn 共用）：超出阈值走 stdin（pi 实测支持；蒸馏语料 MB 级 argv E2BIG）。 */
+export const promptViaStdin = (prompt: string): boolean => prompt.length > PROMPT_STDIN_THRESHOLD;
 
 // h3：pi 子进程 env 白名单——只放行 pi/tavily/系统必需，排除未来 TURN_SECRET/DB 凭据等。
 // 注：密钥仍在 pi env 内（pi 需用它鉴权 provider）；彻底不让 pi 见密钥靠 A1 沙箱 + A4 LLM-经服务端代理。
@@ -103,7 +104,8 @@ async function spawnPiCore(opts: RunPiStreamOptions): Promise<RunPiResult> {
     loopbackPorts: opts.loopbackPorts,
     allow: {
       rw: [cwd, opts.sessionDir].filter((p): p is string => !!p),
-      ro: [repoSkillsDir(), ...extDirs],
+      // ro 放行 skill 目录真相源：repoSkillPaths 的根（#37/Spec-3 后=knowledge 副本优先，回落代码仓）
+      ro: [dirname(repoSkillPaths()[0] ?? repoSkillsDir()), ...extDirs],
     },
   });
   const proc = spawn(plan.argv[0], plan.argv.slice(1), {
@@ -114,8 +116,10 @@ async function spawnPiCore(opts: RunPiStreamOptions): Promise<RunPiResult> {
   const stdout = proc.stdout;
   const stderr = proc.stderr;
   if (!stdout || !stderr) throw new Error("spawn failed: no stdio");
-  // #37 超长 prompt 走 stdin（buildArgs 已不进 argv）；写完即 end——pi 读 EOF 后当 prompt 处理
-  if (opts.prompt.length > PROMPT_STDIN_THRESHOLD) proc.stdin.write(opts.prompt);
+  // 超长 prompt 走 stdin（buildArgs 已不进 argv）；写完即 end——pi 读 EOF 后当 prompt 处理。
+  // EPIPE 吞掉：pi 早死时写端报错，进程退出路径已由 stdout/stderr 的 reject 覆盖——这里只防 node 崩。
+  proc.stdin.on("error", () => {});
+  if (promptViaStdin(opts.prompt)) proc.stdin.write(opts.prompt);
   proc.stdin.end();
 
   return new Promise<RunPiResult>((resolveP, reject) => {

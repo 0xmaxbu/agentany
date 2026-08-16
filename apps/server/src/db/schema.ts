@@ -29,10 +29,11 @@ export const workflowRunLog = sqliteTable("workflow_run_log", {
 // 反馈（ADR-0008 持续学习闭环）：多态挂载到任意「执行」。
 export const feedback = sqliteTable("feedback", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  targetKind: text("targetKind").notNull(), // workflow_run | chat | …
-  targetId: text("targetId").notNull(), // runId / conversationId / …
+  targetKind: text("targetKind").notNull(), // message | workflow_run | chat
+  targetId: text("targetId").notNull(), // messageId / runId / conversationId
   text: text("text").notNull(),
-  rating: integer("rating"), // 可选 1-5
+  rating: integer("rating"), // 可选 1-5（消息级 👍→5 / 👎→1）
+  authorId: text("authorId"), // #34 审查 Spec-4：作者（回显按人过滤；旧行 null=按末条回退）
   createdAt: text("createdAt").notNull(),
 });
 

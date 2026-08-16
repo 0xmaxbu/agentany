@@ -12,29 +12,11 @@ import { jsonBody } from "../http";
 
 const ALLOWED_KINDS = new Set(["message", "workflow_run", "chat"]);
 
-/** targetKind/targetId → 挂载目标所属会话（权限锚点）。查不到 → null（404）。 */
-function targetConversation(
-  deps: RunDeps, kind: string, targetId: string,
-): { id: string; userId: string } | null {
-  if (kind === "message") {
-    const convId = deps.store.conversationIdOfMessage(targetId);
-    if (!convId) return null;
-    return deps.store.getConversation(convId) ?? null;
-  }
-  if (kind === "workflow_run") {
-    const convId = deps.store.conversationIdOfRun(targetId);
-    if (!convId) return null;
-    return deps.store.getConversation(convId) ?? null;
-  }
-  // chat：targetId 即 conversationId
-  return deps.store.getConversation(targetId) ?? null;
-}
-
 export function registerFeedbackRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
   app.post("/feedback/:targetKind/:targetId", async (c) => {
     const { targetKind, targetId } = c.req.param();
     if (!ALLOWED_KINDS.has(targetKind)) return c.json({ error: "unsupported targetKind" }, 400);
-    const conv = targetConversation(deps, targetKind, targetId);
+    const conv = deps.store.conversationOfFeedbackTarget(targetKind, targetId);
     if (!conv || !canAccessConversation(conv, principalOf(c))) return c.json({ error: "not found" }, 404);
     const body = await jsonBody(c);
     const text: string | undefined = body.text;
@@ -47,14 +29,15 @@ export function registerFeedbackRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
     if (rating !== undefined && (typeof rating !== "number" || rating < 1 || rating > 5)) {
       return c.json({ error: "rating must be 1-5" }, 400);
     }
-    const id = deps.store.addFeedback({ targetKind, targetId, text: text ?? "", rating });
+    const u = principalOf(c);
+    const id = deps.store.addFeedback({ targetKind, targetId, text: text ?? "", rating, authorId: u.id });
     return c.json({ id, targetKind, targetId }, 201);
   });
 
   app.get("/feedback/:targetKind/:targetId", (c) => {
     const { targetKind, targetId } = c.req.param();
     if (!ALLOWED_KINDS.has(targetKind)) return c.json({ error: "unsupported targetKind" }, 400);
-    const conv = targetConversation(deps, targetKind, targetId);
+    const conv = deps.store.conversationOfFeedbackTarget(targetKind, targetId);
     if (!conv || !canAccessConversation(conv, principalOf(c))) return c.json({ error: "not found" }, 404);
     return c.json(deps.store.getFeedback(targetKind, targetId));
   });

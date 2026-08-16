@@ -10,6 +10,7 @@ import {
   getMessageFeedback, getRunFeedback, rateMessage, rateRun, type FeedbackRow,
 } from "../api";
 import { Button } from "./ui/button";
+import { useAuth } from "../store/auth";
 
 const IW = 1.5;
 
@@ -21,17 +22,20 @@ export function MessageFeedback({ messageId }: { messageId: string | number }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    void getMessageFeedback(messageId).then(setRows).catch(() => setRows([]));
-  }, [messageId]);
+  const me = useAuth((s) => s.user);
 
-  // 回显：列表最后一条 = 本会话最新反馈（member 会话私有=必是本人；admin 展开可见全部）
+  /** 本人最新一条（按 authorId 过滤——admin 看他人会话不误高亮；旧行 null 按末条回退）。单处维护（审查 Std-9）。 */
+  const mineFrom = (list: FeedbackRow[]): FeedbackRow | null => {
+    if (!list.length) return null;
+    const mineRows = list.filter((r) => r.authorId == null || r.authorId === me?.id);
+    const last = mineRows[mineRows.length - 1];
+    return last && (last.rating === 5 || last.rating === 1) ? last : null;
+  };
+
   useEffect(() => {
-    if (rows && rows.length > 0) {
-      const last = rows[rows.length - 1];
-      if (last.rating === 5 || last.rating === 1) setMine(last);
-    }
-  }, [rows]);
+    void getMessageFeedback(messageId).then((r) => { setRows(r); setMine(mineFrom(r)); }).catch(() => setRows([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageId, me?.id]);
 
   const rate = async (up: boolean, withNote?: string) => {
     setBusy(true);
@@ -39,8 +43,7 @@ export function MessageFeedback({ messageId }: { messageId: string | number }) {
       await rateMessage(messageId, up, withNote);
       const fresh = await getMessageFeedback(messageId).catch(() => [] as FeedbackRow[]);
       setRows(fresh);
-      const last = fresh[fresh.length - 1];
-      setMine(last ?? null);
+      setMine(mineFrom(fresh));
       setExpanded(false);
       setNote("");
     } catch (e) {
@@ -49,6 +52,9 @@ export function MessageFeedback({ messageId }: { messageId: string | number }) {
       setBusy(false);
     }
   };
+
+  /** 备注提交的方向：保持本人已点的方向；从未点过则默认 👍（显式化原 `up || !down` 晦涩式）。 */
+  const noteDirection = (): boolean => mine?.rating !== 1;
 
   const up = mine?.rating === 5;
   const down = mine?.rating === 1;
@@ -95,7 +101,7 @@ export function MessageFeedback({ messageId }: { messageId: string | number }) {
           />
           <Button
             variant="outline" className="h-6 px-2 text-xs" disabled={busy || !note.trim()}
-            onClick={() => void rate(up || !down, note.trim())}
+            onClick={() => void rate(noteDirection(), note.trim())}
             data-testid="feedback-note-submit"
           >
             提交

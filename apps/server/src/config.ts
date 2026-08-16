@@ -1,4 +1,4 @@
-import { resolve, sep } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 
 // h1：workspaceId 是构建文件系统路径的关键输入，必须严格校验（防 ../../、绝对路径注入 cwd/sessionDir）。
@@ -49,14 +49,17 @@ export const DATA_DIR = resolve(process.env.DATA_DIR ?? `${REPO_ROOT}data`);
 export const PORT = Number(process.env.PORT ?? 3000);
 
 // 工作空间工作区 / Pi session 目录（ADR-0018：ws=目录锚的唯一单位）。runPi-factory 与 workflow steps 共用。
+/** DATA_DIR 动态取值（#37 坑：模块级 const 在 bun test 单进程下晚设 env 无效；生产同值无差异）。 */
+export const dataDir = (): string => process.env.DATA_DIR ?? DATA_DIR;
+
 export const workspaceWorkspacePath = (workspaceId: string): string =>
-  resolve(DATA_DIR, "workspaces", workspaceId, "workspace");
+  resolve(dataDir(), "workspaces", workspaceId, "workspace");
 export const workspaceSessionDir = (workspaceId: string): string =>
-  resolve(DATA_DIR, "workspaces", workspaceId, "pi-sessions");
+  resolve(dataDir(), "workspaces", workspaceId, "pi-sessions");
 
 // 通用（公司 workspace ws_company）工作区 / Pi session 目录（ADR-0009 general 沿用；ADR-0018）。
-export const generalWorkspacePath = (): string => resolve(DATA_DIR, "general", "workspace");
-export const generalSessionDir = (): string => resolve(DATA_DIR, "general", "pi-sessions");
+export const generalWorkspacePath = (): string => resolve(dataDir(), "general", "workspace");
+export const generalSessionDir = (): string => resolve(dataDir(), "general", "pi-sessions");
 
 // 仓库根（skill/extension 绝对路径解析用）。
 export const repoSkillsPath = (name: string): string => `${REPO_ROOT}skills/${name}`;
@@ -67,7 +70,11 @@ export const chatExtensionPath = (sub: string): string => `${REPO_ROOT}chat/${su
 // 自动发现：repo/skills/ 下每个含 SKILL.md 的子目录（ADR-0005：skills 全量标准发现、不策展）。
 // dev 无沙箱用 --skill <每个>；沙箱上线后换 ro-bind repo/skills → workspace/.pi/skills（去掉 --skill）。
 export function repoSkillPaths(): string[] {
-  const dir = `${REPO_ROOT}skills`;
+  // #37/Spec-3：knowledge 副本优先（蒸馏写回的 skills/<name>/experience.md 在副本——pi 读它才闭环）；
+  // 副本缺席（测试 DATA_DIR 未建 knowledge）回落代码仓种子。
+  const dir = existsSync(join(dataDir(), "knowledge", "skills"))
+    ? join(dataDir(), "knowledge", "skills")
+    : `${REPO_ROOT}skills`;
   try {
     return readdirSync(dir, { withFileTypes: true })
       .filter((d) => d.isDirectory() || d.isSymbolicLink())

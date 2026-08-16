@@ -48,7 +48,7 @@ export interface Workspace {
 // GET /conversations/:id/messages（#20 双源：pi session 优先、DB 兜底）统一 HistoryMessage 形状
 export interface Message {
   id: number | string; // pi session entry id（string）或 DB 自增（兜底源）
-  dbId?: number | null; // #34 pi 源对齐回填的 DB messages.id（消息级反馈锚；null=无对应行
+  dbId?: number | null; // #34 pi 源对齐回填的 DB messages.id（消息级反馈锚；null=无对应行）
   role: "user" | "assistant";
   content: string; // text blocks 拼接（冗余字段——前端不渲染，#20 比对用）
   blocks: Block[];
@@ -135,7 +135,7 @@ export interface TaskFileGroup {
 
 export interface FeedbackRow {
   id: number; targetKind: string; targetId: string; text: string;
-  rating: number | null; createdAt: string;
+  rating: number | null; authorId: string | null; createdAt: string;
 }
 
 /** 点赞/点踩（👍→5 / 👎→1，可带可选备注）。 */

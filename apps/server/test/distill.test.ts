@@ -3,7 +3,7 @@
 // seam ②直构+stub：runDistill 全链（语料组装→LLM JSON→白名单写回→git commit→水位→note）；
 // 真 git 临时目录验证 commit；失败语义（pi 错/坏 JSON 不推水位；拒动作剔除照推）。
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { openDbMigrated } from "../src/db/client";
@@ -198,6 +198,39 @@ describe("runDistill（#36 蒸馏全链）", () => {
     const res = await runDistill(deps, llm.factory as any);
     expect(res.ok).toBe(true);
     expect(readFileSync(join(knowledgeRoot(), "experience/global.md"), "utf8")).toContain("第一条");
+  });
+
+  test("learning target → learnings/<topic>-<date>.md 落盘（审计通道）", async () => {
+    ensureKnowledgeRepo();
+    const { deps } = setup();
+    seedSession("2026-08-10T00-00-00-000Z_chat-c1");
+    const llm = stubLlm({ json: { actions: [
+      { target: "learning:weekly-audit", op: "append", content: "# 本轮蒸馏审计\n读了 1 个会话文件" },
+    ], commitMessage: "m" } });
+    const res = await runDistill(deps, llm.factory as any);
+    expect(res.ok).toBe(true);
+    const files = readdirSync(join(knowledgeRoot(), "learnings")).filter((f) => f.startsWith("weekly-audit-"));
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/weekly-audit-\d{4}-\d{2}-\d{2}\.md$/);
+    expect(readFileSync(join(knowledgeRoot(), "learnings", files[0]), "utf8")).toContain("蒸馏审计");
+  });
+
+  test("commit 失败 → 工作区回滚（水位/经验写回丢弃）、run failed", async () => {
+    ensureKnowledgeRepo();
+    const { deps } = setup();
+    seedSession("2026-08-10T00-00-00-000Z_chat-c1");
+    const llm = stubLlm({ json: { actions: [{ target: "global", op: "revise", content: "x" }], commitMessage: "m" } });
+    // 破坏 commit：把 git 换成必败（PATH 优先目录放假 git）——用 DistillOptions 不可注入 commit，
+    // 这里用真 git 但改 repo 状态制造冲突：commit.message 含换行会被 -m 拒？不会。最稳：临时改 user.name？
+    // 简化：注入坏 commitMessage 使 shell 层出错不可行（execFileSync 数组参数安全）。
+    // 采用：把 .git/index 锁死（写只读文件）→ add 失败 → 同一 try 分支。
+    writeFileSync(join(knowledgeRoot(), ".git", "index.lock"), "locked", "utf8");
+    const res = await runDistill(deps, llm.factory as any);
+    expect(res.ok).toBe(false);
+    expect(res.note).toContain("commit failed");
+    rmSync(join(knowledgeRoot(), ".git", "index.lock"), { force: true });
+    expect(git(["status", "--porcelain"], knowledgeRoot())).toBe(""); // 写回已回滚（checkout -- .）
+    expect(readState().processedFiles).toEqual([]); // 水位未推进
   });
 
   test("LLM 尾部多余 }（实测冒烟样本）→ 平衡截断可解析", async () => {

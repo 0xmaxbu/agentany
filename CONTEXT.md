@@ -32,7 +32,7 @@
 | 全自动工作流 vs HITL 工作流 | 工作流按是否需人介入分两种：**全自动**的跑到底、人工只验收（不足可定向重跑，如「调研」）；**HITL**的中途挂起等人输入再续（如「战略升级分析」选角度）。决定一个工作流能否被无门程序化触发（如「新建项目」自动跑调研） |
 | 角色 (Role) | 用户的**功能身份**（v1：admin | member 单值）。admin 管用户/workspace；**可见性不由角色控制**——workspace 访问看名单/allUsers，会话看创建者（ADR-0018）。 |
 | 执行 (Execution) | 一次 agent 调用（**工作流运行** or **对话**），有过程、可收反馈、可被提取经验。工作流运行和对话都是「执行」的形态（ADR-0008）。 |
-| 反馈 (Feedback) | 用户对一次「执行」的评价/批注（文本 + 可选评分），是经验提取的原料。**多态挂载**（`workflow_run` / `chat`，同表同接口）。 |
+| 反馈 (Feedback) | 用户对一次「执行」的评价/批注（文本 + 可选评分），是经验提取的原料。**多态挂载**（`message` / `workflow_run` / `chat`，同表同接口；行带作者 authorId，回显按人过滤）。 |
 | 经验提取 (Experience Extraction) | 从「执行过程（pi session）+ 反馈」蒸馏可复用经验 → 直写对应 skill 的 `experience.md`（agent 即时受益）+ `learnings/` 审计（ADR-0008，后期定时 LLM 任务）。 |
 | 经验文档 (learning) | 一次运行后沉淀的结论/教训，带证据和适用场景。见 `learnings/` |
 | Skill | 成熟的经验固化为 agent 可直接调用的能力（SKILL.md）。见 `skills/` |
