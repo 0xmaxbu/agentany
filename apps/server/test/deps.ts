@@ -10,12 +10,13 @@ import type { RunDeps } from "../src/runs";
 
 export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {
   const db = openDbMigrated(":memory:");
+  const store = new WorkflowStore(db);
   return {
-    store: new WorkflowStore(db),
+    store,
     userStore: new UserStore(db),
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db), // 与 store/userStore 共享同一 db（名单 join users；公司 ws 由迁移 seed）
-    taskStore: new ScheduledTaskStore(db), // #25：三表与蒸馏 seed 同 db（迁移 0013）
+    taskStore: new ScheduledTaskStore(db, store), // #25：三表与蒸馏 seed 同 db；产出会话派生复用 store.createConversation
     ...overrides,
   };
 }

@@ -19,8 +19,10 @@ const store = new WorkflowStore(db);
 const userStore = new UserStore(db); // 真 auth（ADR-0014）：与 store 共享同一 db
 const streamRegistry = new StreamRegistry(); // 活跃 SSE 登记：token 吊销时强断
 const workspaceStore = new WorkspaceStore(db); // 工作空间 + 名单（ADR-0018）：与 store/userStore 共享同一 db；公司 ws 由迁移 seed
-const taskStore = new ScheduledTaskStore(db); // 定时任务三表（#25/ADR-0021）：共享 db；迁移 seed 蒸馏行
+const taskStore = new ScheduledTaskStore(db, store); // 定时任务三表（#25/ADR-0021）：共享 db；产出会话复用 store.createConversation
 taskStore.reviveSeedNextFire(); // seed nextFireAt=epoch 占位 → 启动算真值（enabled=0 保持禁用，M5 装配时启用）
+const sweptRuns = taskStore.sweepUnfinishedRuns(); // 重启：执行中崩溃残留的 task_runs 收 failed（DB 真相）
+if (sweptRuns > 0) console.log(`[scheduler] swept ${sweptRuns} unfinished run(s) to failed (crash recovery)`);
 // 切片 3 替换：executeTask 真实现=runTurn 同构 spawn（任务 pi 无 bridge、blocks 流收集产出文件）。
 // 本 stub 只记日志即返（scheduler.run 尾部会把 task_runs 收成 ok）。
 const scheduler = new TaskScheduler({

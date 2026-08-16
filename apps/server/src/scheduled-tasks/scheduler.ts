@@ -42,24 +42,23 @@ export class TaskScheduler {
     }
   }
 
-  /** 单次扫描。幂等、可重入；测试直调。 */
+  /** 单次扫描。幂等、可重入；测试直调。分支序（spec 明文）：missed 判定 → running 判定 → 正常执行。 */
   async tick(): Promise<void> {
     const nowMs = this.now();
     const due = this.deps.store.dueTasks(new Date(nowMs).toISOString());
     for (const task of due) {
       const fireAt = new Date(task.nextFireAt).getTime();
-      // 严格 missed：到期早于 now-2×interval（停机跨窗、非本 tick 窗口内）→ 只记录不执行
-      const missed = fireAt < nowMs - 2 * this.intervalMs;
+      // 先推进再执行（崩溃=丢一次，不重复触发同窗口）
+      this.deps.store.markFired(task.id, nextFireAfter(task.cron, new Date(nowMs)));
+      // 严格 missed：到期早于 now-2×interval（停机跨窗、非本 tick 窗口内）→ 只记录不执行。
+      // 判定先于 running——在跑任务跨窗恢复时按 missed 记（窗口早错过，非本轮拥堵）。
+      if (fireAt < nowMs - 2 * this.intervalMs) {
+        this.deps.store.recordRun({ taskId: task.id, trigger: "cron", status: "missed" });
+        continue;
+      }
       if (this.running.has(task.id)) {
         // 同任务上轮未完 → 本轮跳过（spec 故事 13：慢任务不自我堆叠；不同任务天然并行）
         this.deps.store.recordRun({ taskId: task.id, trigger: "cron", status: "skipped_overrun" });
-        this.deps.store.markFired(task.id, nextFireAfter(task.cron, new Date(nowMs)));
-        continue;
-      }
-      // 先推进再执行（崩溃=丢一次，不重复触发同窗口）
-      this.deps.store.markFired(task.id, nextFireAfter(task.cron, new Date(nowMs)));
-      if (missed) {
-        this.deps.store.recordRun({ taskId: task.id, trigger: "cron", status: "missed" });
         continue;
       }
       const runId = this.deps.store.recordRun({ taskId: task.id, trigger: "cron", status: "ok", startedAt: new Date(nowMs).toISOString() });

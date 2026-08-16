@@ -1,6 +1,7 @@
 // 定时任务路由（#25 建任务 tracer + #26 手动调用 + #27 管理闭环）。
 // 权限口径：member=自己的任务（他人 404 不泄漏）；system 任务 member 一律 403 硬拒
 // （ADR-0021 决策 7——chat LLM 删/停蒸馏同样被这道服务端闸挡住）；admin 全量可管。
+import type { Context } from "hono";
 import type { Hono } from "hono";
 import type { RunDeps } from "../runs";
 import { userRoleOf, principalOf, userIdOf, type AppEnv } from "../auth/middleware";
@@ -14,11 +15,17 @@ const toTask = (t: ScheduledTaskRow): Record<string, unknown> => ({
   cron: t.cron, prompt: t.prompt, outputConversationId: t.outputConversationId,
   creatorId: t.creatorId, nextFireAt: t.nextFireAt, enabled: t.enabled, createdAt: t.createdAt,
 });
-const toRun = (r: TaskRunRow): Record<string, unknown> => ({ ...r });
 
 /** 任务可见性：admin 全量；member 仅 creatorId=自己（system 行对 member 一律不可见——含 seed）。 */
 const canSeeTask = (t: ScheduledTaskRow, u: { id: string; role: "admin" | "member" }): boolean =>
   u.role === "admin" || (t.scope !== "system" && t.creatorId === u.id);
+
+/** cron 校验统一出口：TooFrequent→422 / InvalidCron→400；合法返首个火点。 */
+const cronErrorResponse = (e: unknown, c: Context<AppEnv>): Response | null => {
+  if (e instanceof TooFrequent) return c.json({ error: "cron too frequent: minimum interval is 1h" }, 422);
+  if (e instanceof InvalidCron) return c.json({ error: "invalid cron expression" }, 400);
+  return null;
+};
 
 export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
   const ts = () => {
@@ -27,12 +34,14 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
     return s;
   };
 
-  /** 载入 + 可见性。可见但 system+member → 显式 403（硬拒语义优先于不泄漏——seed id 非秘密）。 */
-  const loadTask = (id: string, u: { id: string; role: "admin" | "member" }): { status?: number; task?: ScheduledTaskRow } => {
+  /** 载入+可见性；失败直接给错误响应（system+member=403 硬拒优先于不泄漏，seed id 非秘密）。 */
+  const loadTask = (c: Context<AppEnv>): { task?: ScheduledTaskRow; err?: Response } => {
+    const u = principalOf(c);
+    const id = c.req.param("id")!;
     const t = ts().getTask(id);
-    if (!t) return { status: 404 };
-    if (t.scope === "system" && u.role !== "admin") return { status: 403 };
-    if (!canSeeTask(t, u)) return { status: 404 };
+    if (!t) return { err: c.json({ error: "task not found" }, 404) };
+    if (t.scope === "system" && u.role !== "admin") return { err: c.json({ error: "system task protected" }, 403) };
+    if (!canSeeTask(t, u)) return { err: c.json({ error: "task not found" }, 404) };
     return { task: t };
   };
 
@@ -54,8 +63,8 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
     try {
       firstFire = validateCronAndFirstFire(cron);
     } catch (e) {
-      if (e instanceof TooFrequent) return c.json({ error: "cron too frequent: minimum interval is 1h" }, 422);
-      if (e instanceof InvalidCron) return c.json({ error: "invalid cron expression" }, 400);
+      const errRes = cronErrorResponse(e, c);
+      if (errRes) return errRes;
       throw e;
     }
     const task = ts().createWorkspaceTask({
@@ -76,8 +85,8 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
 
   // 手动调用（#26/spec 故事 4/7）：立即执行一次。不经 tick——不推进 nextFireAt；在跑 409。
   app.post("/scheduled-tasks/:id/run", (c) => {
-    const { status, task } = loadTask(c.req.param("id"), principalOf(c));
-    if (!task) return c.json({ error: status === 403 ? "system task protected" : "task not found" }, status as 403 | 404);
+    const { task, err } = loadTask(c);
+    if (!task) return err!;
     if (!deps.scheduler) return c.json({ error: "scheduler not wired" }, 503);
     const runId = deps.scheduler.runManual(task);
     if (runId === undefined) return c.json({ error: "task already running" }, 409);
@@ -88,15 +97,16 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
 
   // 执行历史（#24 故事 5）：状态/触发/起止/产出引用。admin 任意（含 system 日志）；member 自己的。
   app.get("/scheduled-tasks/:id/runs", (c) => {
-    const { status, task } = loadTask(c.req.param("id"), principalOf(c));
-    if (!task) return c.json({ error: status === 403 ? "system task protected" : "task not found" }, status as 403 | 404);
-    return c.json(ts().listRuns(task.id).map(toRun));
+    const { task, err } = loadTask(c);
+    if (!task) return err!;
+    const runs: TaskRunRow[] = ts().listRuns(task.id);
+    return c.json(runs);
   });
 
   // 点开即清（#24 故事 9）：该任务 viewedAt 批量盖章 → unreadCounts 归零。system 任务 admin 专用。
   app.post("/scheduled-tasks/:id/view", (c) => {
-    const { status, task } = loadTask(c.req.param("id"), principalOf(c));
-    if (!task) return c.json({ error: status === 403 ? "system task protected" : "task not found" }, status as 403 | 404);
+    const { task, err } = loadTask(c);
+    if (!task) return err!;
     ts().markTaskRunsViewed(task.id);
     return c.json({ viewed: true });
   });
@@ -104,8 +114,8 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
   // 改任务（#24 故事「对话改任务」的 API 面；切片 2 chat 流复用）：cron 变更重算 nextFireAt。
   // system 拒改（admin 也不行——只许停/启/删，内容是代码 seed 的真相）。
   app.patch("/scheduled-tasks/:id", async (c) => {
-    const { status, task } = loadTask(c.req.param("id"), principalOf(c));
-    if (!task) return c.json({ error: status === 403 ? "system task protected" : "task not found" }, status as 403 | 404);
+    const { task, err } = loadTask(c);
+    if (!task) return err!;
     if (task.scope === "system") return c.json({ error: "system tasks cannot be edited" }, 403);
     const body = await jsonBody(c);
     const patch: { displayName?: string; cron?: string; prompt?: string } = {};
@@ -122,14 +132,14 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
       try {
         validateCronAndFirstFire(body.cron); // 复用建时口径：合法 + 频率下限
       } catch (e) {
-        if (e instanceof TooFrequent) return c.json({ error: "cron too frequent: minimum interval is 1h" }, 422);
-        if (e instanceof InvalidCron) return c.json({ error: "invalid cron expression" }, 400);
+        const errRes = cronErrorResponse(e, c);
+        if (errRes) return errRes;
         throw e;
       }
       patch.cron = body.cron;
     }
     if (Object.keys(patch).length === 0) return c.json({ error: "nothing to update" }, 400);
-    const updated = ts().updateTask(task.id, patch);
+    ts().updateTask(task.id, patch);
     if (patch.cron) ts().recomputeNextFire(task.id); // cron 变了才重算（displayName/prompt 不动调度）
     return c.json(toTask(ts().getTask(task.id)!));
   });
@@ -137,8 +147,8 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
   // 停/启（#24 故事 8）：member 自己的；system 仅 admin（allowSystem）。
   app.patch("/scheduled-tasks/:id/enable", async (c) => {
     const u = principalOf(c);
-    const { status, task } = loadTask(c.req.param("id"), u);
-    if (!task) return c.json({ error: status === 403 ? "system task protected" : "task not found" }, status as 403 | 404);
+    const { task, err } = loadTask(c);
+    if (!task) return err!;
     const body = await jsonBody(c);
     if (typeof body.enabled !== "boolean") return c.json({ error: "enabled (boolean) required" }, 400);
     try {
@@ -153,8 +163,8 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
   // 删（#24 故事 8）：member 自己的（runs/files 级联清）；system 仅 admin。
   app.delete("/scheduled-tasks/:id", (c) => {
     const u = principalOf(c);
-    const { status, task } = loadTask(c.req.param("id"), u);
-    if (!task) return c.json({ error: status === 403 ? "system task protected" : "task not found" }, status as 403 | 404);
+    const { task, err } = loadTask(c);
+    if (!task) return err!;
     try {
       const ok = ts().deleteTask(task.id, u.role === "admin");
       return ok ? c.json({ deleted: true }) : c.json({ error: "task not found" }, 404);

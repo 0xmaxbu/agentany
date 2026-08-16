@@ -75,6 +75,26 @@ describe("TaskScheduler · tick 语义（假钟）", () => {
     expect(new Date(after.nextFireAt).getTime()).toBeGreaterThan(clock.now());
   });
 
+  test("c1（review 修正）：任务在跑 + 停机跨窗恢复 → 记 missed 而非 skipped_overrun（missed 判定先行）", async () => {
+    const { store } = mkDeps();
+    const clock = fakeClock(T0);
+    const slow = mkTask(store, { displayName: "slow" });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const sched = new TaskScheduler({
+      store, now: clock.now, intervalMs: 60_000,
+      executeTask: async () => { await gate; },
+    });
+    clock.advance(H + 60_000);
+    await sched.tick(); // slow 挂起中（running）
+    // 停机很久后恢复：跨了多个窗口——missed 优先于 running 判定
+    clock.advance(3 * H);
+    await sched.tick();
+    const runs = store.listRuns(slow.id);
+    expect(runs.map((r) => r.status)).toEqual(["ok", "missed"]); // 不是 skipped_overrun
+    release();
+  });
+
   test("skipped_overrun：上轮在跑（挂起不 resolve）→ 下 tick 本任务 skipped、其它任务照常并行", async () => {
     const { store } = mkDeps();
     const clock = fakeClock(T0);
@@ -159,6 +179,80 @@ describe("TaskScheduler · tick 语义（假钟）", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe("failed");
     expect(new Date(store.getTask(task.id)!.nextFireAt).getTime()).toBeGreaterThan(T0 + H);
+  });
+});
+
+describe("TaskScheduler · runManual（#26 真实现路径——review a1 补）", () => {
+  test("手动执行：trigger=manual 落 task_runs、nextFireAt 不动、成功收 ok", async () => {
+    const { store } = mkDeps();
+    const clock = fakeClock(T0);
+    const task = mkTask(store);
+    const before = task.nextFireAt;
+    const calls: { id: string; trigger: string }[] = [];
+    const sched = new TaskScheduler({
+      store, now: clock.now, intervalMs: 60_000,
+      executeTask: async (t, trigger) => { calls.push({ id: t.id, trigger }); },
+    });
+    const runId = sched.runManual(task);
+    expect(runId).toBeGreaterThan(0);
+    await new Promise((r) => setTimeout(r, 10)); // 等 run 尾 finishRun
+    expect(calls).toEqual([{ id: task.id, trigger: "manual" }]);
+    const runs = store.listRuns(task.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].trigger).toBe("manual");
+    expect(runs[0].status).toBe("ok");
+    expect(store.getTask(task.id)!.nextFireAt).toBe(before); // 不推进
+  });
+
+  test("手动在跑（挂起未完）→ runManual 返 undefined（路由 409）", async () => {
+    const { store } = mkDeps();
+    const clock = fakeClock(T0);
+    const task = mkTask(store);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const sched = new TaskScheduler({
+      store, now: clock.now, intervalMs: 60_000,
+      executeTask: async () => { await gate; },
+    });
+    const first = sched.runManual(task);
+    expect(first).toBeGreaterThan(0);
+    const second = sched.runManual(task); // 在跑
+    expect(second).toBeUndefined();
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sched.isRunning(task.id)).toBe(false);
+  });
+
+  test("手动执行抛错 → run 收 failed", async () => {
+    const { store } = mkDeps();
+    const clock = fakeClock(T0);
+    const task = mkTask(store);
+    const sched = new TaskScheduler({
+      store, now: clock.now, intervalMs: 60_000,
+      executeTask: async () => { throw new Error("boom"); },
+    });
+    sched.runManual(task);
+    await new Promise((r) => setTimeout(r, 10));
+    const runs = store.listRuns(task.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].status).toBe("failed");
+    expect(runs[0].trigger).toBe("manual");
+  });
+});
+
+describe("TaskScheduler · 崩溃残留 sweep（review c2 补）", () => {
+  test("启动 sweep：无 finishedAt 的 run 行收 failed（markRunningAsFailed 同款）", () => {
+    const { store } = mkDeps();
+    const task = mkTask(store);
+    // 模拟执行中崩溃：recordRun 已落、finishRun 未到
+    store.recordRun({ taskId: task.id, trigger: "cron", status: "ok", startedAt: new Date(T0).toISOString() });
+    const swept = store.sweepUnfinishedRuns();
+    expect(swept).toBe(1);
+    const runs = store.listRuns(task.id);
+    expect(runs[0].status).toBe("failed");
+    expect(runs[0].finishedAt).not.toBeNull();
+    // 已终结的不动
+    expect(store.sweepUnfinishedRuns()).toBe(0);
   });
 });
 

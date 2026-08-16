@@ -10,10 +10,10 @@ export class TooFrequent extends Error {
   constructor(expr: string) { super(`cron too frequent (<1h between fires): ${expr}`); this.name = "TooFrequent"; }
 }
 
-/** 解析 5 段 cron。非法抛 InvalidCron。 */
-export function parseCron(expr: string) {
+/** 解析 5 段 cron（from 起算）。非法抛 InvalidCron。 */
+function parseCron(expr: string, from: Date) {
   try {
-    return CronExpressionParser.parse(expr, { currentDate: new Date() });
+    return CronExpressionParser.parse(expr, { currentDate: from });
   } catch {
     throw new InvalidCron(expr);
   }
@@ -24,12 +24,7 @@ export function parseCron(expr: string) {
  * 返回从 from 起的首个未来火点 ISO（createTask 的首个 nextFireAt）。
  */
 export function validateCronAndFirstFire(expr: string, from: Date = new Date()): string {
-  let it: ReturnType<typeof parseCron>;
-  try {
-    it = CronExpressionParser.parse(expr, { currentDate: from });
-  } catch {
-    throw new InvalidCron(expr);
-  }
+  const it = parseCron(expr, from);
   const a = it.next().toDate();
   const b = it.next().toDate();
   if (b.getTime() - a.getTime() < MIN_INTERVAL_MS) throw new TooFrequent(expr);

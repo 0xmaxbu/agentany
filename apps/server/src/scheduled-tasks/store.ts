@@ -1,10 +1,11 @@
 // ScheduledTaskStore（#25/ADR-0021 切片 1）：三表唯一耦合 db 的类（与 WorkflowStore 共享同一 db）。
 // 调度语义（markFired 先推进、strict missed、skipped_overrun）在 TaskScheduler（切片 #26）；
 // 本文件只做 CRUD + 扫描查询 + system 保护。
-import { and, eq, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, isNull, lte, ne, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { conversations as conversationsTable, scheduledTasks, taskFiles, taskRuns } from "../db/schema";
+import { scheduledTasks, taskFiles, taskRuns } from "../db/schema";
 import { nextFireAfter } from "./cron";
+import type { WorkflowStore } from "../workflow-engine/store";
 
 export type TaskScope = "workspace" | "system";
 export type TaskRunStatus = "ok" | "failed" | "missed" | "skipped_overrun";
@@ -43,7 +44,8 @@ export class SystemTaskProtected extends Error {
 const now = (): string => new Date().toISOString();
 
 export class ScheduledTaskStore {
-  constructor(private db: BunSQLiteDatabase<any>) {}
+  /** workflowStore：产出会话派生复用其 createConversation（#24 明文决策——会话语义单点）。 */
+  constructor(private db: BunSQLiteDatabase<any>, private workflowStore?: WorkflowStore) {}
 
   createTask(p: {
     scope: TaskScope; workspaceId: string | null; displayName: string; cron: string; prompt: string;
@@ -61,27 +63,24 @@ export class ScheduledTaskStore {
 
   /**
    * 建 workspace 任务 + 事务内派生产出会话（#24：一处定死事务语义——切片 2 chat 建流复用）。
-   * 会话标题=displayName、挂任务同 ws、创建者=建任务用户（ADR-0021 决策 4）。
-   * 事务只包两张表写入（conversations 行 + scheduled_tasks 行）——id 由调用侧生成传入，
-   * 保证回滚时不留半链（会话无任务/任务无会话）。
+   * 会话行经 WorkflowStore.createConversation 生成（spec 明文复用；同 db 事务内写入），
+   * 标题=displayName、挂任务同 ws、创建者=建任务用户（ADR-0021 决策 4）。
    */
   createWorkspaceTask(p: {
     displayName: string; cron: string; prompt: string; workspaceId: string; creatorId: string;
-    firstFireAt: string; makeTaskId?: () => string; makeConversationId?: () => string;
+    firstFireAt: string;
   }): ScheduledTaskRow {
-    const taskId = p.makeTaskId?.() ?? "t_" + globalThis.crypto.randomUUID();
+    const store = this.workflowStore;
+    if (!store) throw new Error("createWorkspaceTask: workflowStore not provided");
+    const taskId = "t_" + globalThis.crypto.randomUUID();
     const convId = "c_" + globalThis.crypto.randomUUID();
-    const ts = now();
     let row: ScheduledTaskRow | undefined;
-    this.db.transaction((tx) => {
-      tx.insert(scheduledTasks).values({
+    this.db.transaction(() => {
+      store.createConversation({ id: convId, workspaceId: p.workspaceId, userId: p.creatorId, title: p.displayName });
+      this.db.insert(scheduledTasks).values({
         id: taskId, scope: "workspace", workspaceId: p.workspaceId, displayName: p.displayName,
         cron: p.cron, prompt: p.prompt, outputConversationId: convId, creatorId: p.creatorId,
-        nextFireAt: p.firstFireAt, enabled: true, createdAt: ts,
-      }).run();
-      tx.insert(conversationsTable).values({
-        id: convId, workspaceId: p.workspaceId, userId: p.creatorId, title: p.displayName,
-        createdAt: ts, updatedAt: ts,
+        nextFireAt: p.firstFireAt, enabled: true, createdAt: now(),
       }).run();
       row = this.getTask(taskId);
     });
@@ -118,7 +117,7 @@ export class ScheduledTaskStore {
   listTasks(opts: { creatorId?: string; includeSystem?: boolean } = {}): ScheduledTaskRow[] {
     const conds = [];
     if (opts.creatorId) conds.push(eq(scheduledTasks.creatorId, opts.creatorId));
-    if (opts.includeSystem === false) conds.push(sql`${scheduledTasks.scope} != 'system'`);
+    if (opts.includeSystem === false) conds.push(ne(scheduledTasks.scope, "system"));
     const q = this.db.select().from(scheduledTasks);
     return (conds.length ? q.where(and(...conds)) : q).orderBy(scheduledTasks.createdAt).all() as ScheduledTaskRow[];
   }
@@ -203,11 +202,25 @@ export class ScheduledTaskStore {
       .where(and(eq(taskRuns.taskId, taskId), isNull(taskRuns.viewedAt))).run();
   }
 
+  /**
+   * 启动 sweep（review c2）：执行中崩溃残留（recordRun 已落、finishRun 未到——
+   * status=ok 且 finishedAt IS NULL）收为 failed。进程没了 run 不可能还在跑。
+   * 返回收编行数（WorkflowStore.markRunningAsFailed 同款）。
+   */
+  sweepUnfinishedRuns(): number {
+    const r = this.db.update(taskRuns)
+      .set({ status: "failed", finishedAt: now() })
+      .where(and(eq(taskRuns.status, "ok"), isNull(taskRuns.finishedAt)))
+      .run();
+    return (r as any).changes ?? 0;
+  }
+
   // ── task_files（切片 3 写入；schema 本切片定型）──
   addTaskFile(p: { taskRunId: string; path: string; name: string }): number {
     const r = this.db.insert(taskFiles).values({ ...p, createdAt: now() })
       .returning({ id: taskFiles.id }).get();
-    return r?.id ?? 0;
+    if (!r) throw new Error("addTaskFile: insert returned no row"); // fail-fast（recordRun 同款，不返假 id）
+    return r.id;
   }
 
   listTaskFiles(taskRunId: string): { id: number; taskRunId: string; path: string; name: string; createdAt: string }[] {

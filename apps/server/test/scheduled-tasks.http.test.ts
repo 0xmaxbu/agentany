@@ -31,6 +31,13 @@ async function memberIdOf(app: ReturnType<typeof createApp>, member: Record<stri
   return conv.userId;
 }
 
+/** 第二个 member（权限矩阵对照组）：建号+login 一步到位。 */
+async function mkM2(app: ReturnType<typeof createApp>): Promise<Record<string, string>> {
+  await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+  const l = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+  return { ...JH, authorization: `Bearer ${(await l.json() as any).token}` };
+}
+
 const taskBody = (over: Record<string, unknown> = {}) => ({
   displayName: "新闻汇总",
   cron: "0 */4 * * *", // 每 4 小时——合法频率
@@ -140,9 +147,7 @@ describe("GET /scheduled-tasks（权限分野）", () => {
   test("两个 member 互相不可见", async () => {
     const app = createApp(makeDeps());
     const { member } = await mkUsers(app);
-    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const m2 = await mkM2(app);
     await app.request("/scheduled-tasks", { method: "POST", headers: member, body: JSON.stringify(taskBody()) });
     const list2 = (await (await app.request("/scheduled-tasks", { headers: m2 })).json()) as any[];
     expect(list2.filter((t) => t.scope === "workspace")).toHaveLength(0);
@@ -201,9 +206,7 @@ describe("POST /scheduled-tasks/:id/run（手动调用，#26）", () => {
     const deps = makeDeps();
     const app = createApp(deps);
     const { member, admin } = await mkUsers(app);
-    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const m2 = await mkM2(app);
     const task = await mkTaskAs(app, m2, "m2 的任务");
     deps.scheduler = { runManual: () => 1, isRunning: () => false } as any;
     const forbidden = await app.request(`/scheduled-tasks/${task.id}/run`, { method: "POST", headers: member });
@@ -235,9 +238,7 @@ describe("管理闭环（#27）：runs 历史 + 未读数点开即清 + 启停�
     const deps = makeDeps();
     const app = createApp(deps);
     const { member, admin } = await mkUsers(app);
-    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const m2 = await mkM2(app);
     const mine = await mkTaskAs(app, member, "我的");
     const theirs = await mkTaskAs(app, m2, "m2 的");
     seedRuns(deps, mine.id, 2);
@@ -287,9 +288,7 @@ describe("管理闭环（#27）：runs 历史 + 未读数点开即清 + 启停�
     const deps = makeDeps();
     const app = createApp(deps);
     const { member } = await mkUsers(app);
-    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const m2 = await mkM2(app);
     const theirs = await mkTaskAs(app, m2, "m2 的");
     const res = await app.request(`/scheduled-tasks/${theirs.id}/view`, { method: "POST", headers: member });
     expect(res.status).toBe(404);
@@ -315,9 +314,7 @@ describe("管理闭环（#27）：runs 历史 + 未读数点开即清 + 启停�
     const deps = makeDeps();
     const app = createApp(deps);
     const { member } = await mkUsers(app);
-    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const m2 = await mkM2(app);
     const mine = await mkTaskAs(app, member, "我的");
     const tooFast = await app.request(`/scheduled-tasks/${mine.id}`, { method: "PATCH", headers: member, body: JSON.stringify({ cron: "*/15 * * * *" }) });
     expect(tooFast.status).toBe(422);
@@ -342,9 +339,7 @@ describe("管理闭环（#27）：runs 历史 + 未读数点开即清 + 启停�
     const deps = makeDeps();
     const app = createApp(deps);
     const { member } = await mkUsers(app);
-    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
-    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const m2 = await mkM2(app);
     const mine = await mkTaskAs(app, member, "我的");
     const theirs = await mkTaskAs(app, m2, "m2 的");
     seedRuns(deps, mine.id, 2);
