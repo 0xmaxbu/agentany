@@ -21,19 +21,19 @@
 - [x] darwin Seatbelt 零回归
 - [ ] 网络对等（pasta netns：loopback 拒+bridge 窄放行）——拆 #22，需原生 Linux（v1 GA 前收口）
 
-## M4 — 定时任务（骨架 ✅ #25/#26/#27 @ 01293dd/1cd5d52/316911c；切片 2-5 待实现）
+## M4 — 定时任务（✅ 全切片落地：#25-#27 骨架、#28 chat 建流、#29 执行链、#30 产出文件、#31 UI、#32 headless 挂载）
 
-- [ ] chat 说「每 4 小时去 xx 网站读新闻发摘要」→ LLM 任务卡（display_name + cron 人类可读 + 未来 3 次执行时间）→ 用户确认 → 入库
+- [x] chat 说「每 4 小时去 xx 网站读新闻发摘要」→ LLM 任务卡（displayName + cron + 未来 3 次执行时间，参数暂存卡上零漂移）→ 用户确认（消息绑卡 inReplyTo）→ 入库（#28 + ADR-0022）
 - [x] 频率下限强校验：API 层 422（相邻火点 <1h 拒；=1h 放行——票面示例勘误，按规则本体实现）
 - [x] member 自建自批（API 面）：登录即可建、任务卡确认即建（卡片 UI 属切片 2/4）
-- [ ] CommandPolicy：deny 任务拒建；require_approval 任务发审批卡给 admin，批后入库
-- [ ] 到点执行（clock 注入假钟测试）：产出出现在产出会话（标题=display_name），含目标摘要（执行 stub 待切片 3 替换）
+- [x] CommandPolicy：deny 任务拒建（工具层 403）；require_approval 修订为自建自批（ADR-0021 修订版——任务卡卡主确认即建，不发 admin）
+- [x] 到点执行（假钟测试）：产出落在产出会话（标题=displayName）、task_runs 收口（#29 真链 runTurn 同构；#32 system 分支 headless + note 日志）
 - [x] 调度语义（假钟测试）：markFired 先推进再执行；missed 不补跑；skipped_overrun 同任务串行跨任务并行；重启恢复（DB 真相）
-- [ ] 任务执行走 runTurn 同构（enqueueEventTurn）；任务 pi 无 bridge（无交互工具）、tavily 保留
-- [ ] 产出文件：任务写了文件（tool_use 记录收集）→ 产出消息带下载链接 → 登录态浏览器可打开（auth 保护）
+- [x] 任务执行走 runTurn 同构（enqueueEventTurn + 共享 per-conv FIFO）；任务 pi 无 bridge、tavily 保留（TASK_EXTENSIONS）
+- [x] 产出文件（#30）：tool_use write/edit 收集 → task_files → 产出消息尾文件列表卡（文件管理器式）→ GET /files/<ws>/<path> 预览（md/txt/html/pdf + 顶部下载）auth 保护、防逃逸
 - [x] system 任务（蒸馏 seed）：迁移幂等 seed、无产出会话、经 API 建被拒；未读数 unreadRuns + POST view 点开即清（管理页 UI 属切片 4）
 - [x] 对话/管理改任务（API 面）：PATCH cron/prompt/displayName、cron 重算 nextFireAt（chat LLM 流属切片 2）
-- [ ] member 在右侧面板看/停/删自己的任务；admin 管理页管全部任务（UI 切片 4）
+- [x] member 右侧面板「我的任务」看/停/删/手动跑自己的任务；admin 管理页 /admin/tasks 全量（member+system）+ 执行历史展开 + 未读 badge 点开即清（#31，e2e 两条流锁）
 - [x] system 任务经 API 删/停/改 → member 403 硬拒（admin 可停/启/删、拒改内容）；chat LLM 侧同一服务端闸兜底
 - [x] 手动调用：POST /:id/run 立即执行（trigger=manual、不推进 nextFireAt）、在跑 409
 - [x] task_runs 历史：状态/trigger/起止/产出引用（GET /:id/runs；页面展开属切片 4）
