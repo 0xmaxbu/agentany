@@ -38,6 +38,8 @@
 | Skill | 成熟的经验固化为 agent 可直接调用的能力（SKILL.md）。见 `skills/` |
 | 能力 (Capability) | chat 里可用的一个动作（工作流或工具型 skill）。**触发走对话 NL 自动发现**——用户在对话里说，系统自动匹配并触发，不靠点菜单；**菜单里的工作流/skill 列表是管理面**（查看/配置可用能力），非触发入口。基础通用工具（如搜索）默认开启。方法论型 skill 是各自工作流的内部深度指引，不独立触发 |
 | 工作空间 (Workspace) | **可访问目录 + 权限控制的唯一原子单位**（ADR-0018）：一个服务器目录（工作区+pi session）配一份权限（`allUsers` 全员布尔 ∪ 可访问名单）。无类型之分——公司级/团队级只是名单范围差异。默认存在全员可访的公司 workspace（`ws_company`）。仅 admin 可建/可管。会话与工作流运行都挂 workspace；run 可见性随 workspace 权限。 |
+| System Workspace（逻辑概念） | **项目全部域**——system 定时任务的执行范围。非实体 workspace 行（不占 ws 表、无名单/权限）：执行时沙箱白名单动态=全部 workspace 的工作区目录（新建 ws 自动纳入）。与之相对，实体 Workspace 是最小权限锚点（单域）；System Workspace 是 admin 信任边界下的全域（#38）。**越界原则**：需触达 workspace 目录之外的域（DB / knowledge / pi-sessions 等），一律经专属 extension 受控通道（服务端按权限过滤），不放宽文件沙箱（ADR-0023）。 |
+| System 任务 (System Task) | 无人值守定时任务（scope=system）：无产出会话、无交互（无 bridge），产出=task_runs 日志。分两种命运——蒸馏（内置 seed，全局单例，特判链，仅可改 cron）与通用 headless（admin 经 UI 建/改，权限开关 allowWrite/allowSearch 收敛，#38）。 |
 | 项目 (Project) | **逻辑概念**（非系统实体）：一次客户/品牌 engagement 的通称。系统里以 workspace 承载（如为 engagement `acme` 建 ws）；曾试实体化（ADR-0013/0014），被 ADR-0018 废除——作用域归 workspace，组织归属不进权限链。 |
 | 会话 (Conversation) | 一条聊天线索，挂在 workspace 上（缺省公司 workspace）；**一律创建者私有**（+admin）——对话隐私与 workspace 权限是正交维度。用户在其中对话、上传资料、触发「能力」 |
 | 资料 (Materials) | 用户在会话中上传的文件，落入该会话 workspace 的服务器工作区；可被 agent 当上下文读、喂给触发的「能力」、或用文档工具加工 |
