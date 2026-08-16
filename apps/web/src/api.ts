@@ -128,23 +128,17 @@ export async function abortConversation(conversationId: string): Promise<void> {
   await apiFetch(`/conversations/${conversationId}/abort`, { method: "POST" });
 }
 
-// #18 审批门：人类审批某 pending 审批卡。POST /approvals/:id/decide（main app, authStub）。
-// 返 200（已决，hitl_answered 帧经持久流驱动 UI）/ 409（已决并发）/ 其它。
-export async function decideApproval(questionId: number, decision: "approve" | "deny"): Promise<number> {
-  const r = await apiFetch(`/approvals/${questionId}/decide`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ decision }) });
-  return r.status;
-}
 
 /**
  * 发消息：POST → 202 ACK（不再返流）。流式输出经 openStream 订阅的持久流异步到达。
  * 返回 202 / 429 / false（网络/其它错）。
  */
-export async function postMessage(conversationId: string, content: string): Promise<number | false> {
+export async function postMessage(conversationId: string, content: string, inReplyTo?: number): Promise<number | false> {
   try {
     const r = await apiFetch(`/conversations/${conversationId}/messages`, {
       method: "POST",
       headers: jsonHeaders,
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(inReplyTo === undefined ? { content } : { content, inReplyTo }),
     });
     if (r.status === 202 || r.status === 429) return r.status;
     return false;

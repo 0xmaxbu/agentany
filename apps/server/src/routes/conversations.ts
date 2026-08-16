@@ -13,6 +13,7 @@ import { ROLE } from "../auth/store";
 import { dbMessagesToHistory, readConversationHistory } from "../pi-session/reader";
 import { eraseConversationSessions } from "../pi-session/erase";
 import { resolveScopePaths, scopeOf } from "../scope";
+import { dispatchCardAnswer } from "../chat/hitl-dispatch";
 import { jsonBody } from "../http";
 
 const HEARTBEAT_MS = Number(process.env.CHAT_HEARTBEAT_MS ?? 15000);
@@ -122,6 +123,8 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
   });
 
   // POST 消息 → 202 ACK + 投 EventBus（不再返流）。429 由 TurnTrigger 同步判（满即不入队）。
+  // inReplyTo（可选 questionId）：统一卡应答（#28 重构）——task/approval 卡确定性收口（零 LLM 二跳）、
+  // ask 卡点选项确定性 resume；不带/不匹配 → 纯对话消息（老判答路不变）。
   app.post("/conversations/:id/messages", async (c) => {
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
@@ -130,11 +133,18 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const body = await jsonBody(c);
     const content: unknown = body.content;
     if (typeof content !== "string" || content.length === 0) return c.json({ error: "content required" }, 400);
+    const inReplyTo: unknown = body.inReplyTo;
+    const questionId = typeof inReplyTo === "number" && Number.isInteger(inReplyTo) ? inReplyTo : undefined;
+    if (inReplyTo !== undefined && questionId === undefined) return c.json({ error: "inReplyTo must be an integer questionId" }, 400);
     if (!queues.wouldAcceptHttpTurn(id)) return c.json({ error: "conversation busy (queue full)" }, 429); // 同步 429 预检（不入队）
     const userMsgId = deps.store.appendMessage({ conversationId: id, role: "user", content }); // 立即落库
     deps.store.touchConversation(id); // updatedAt = 列表排序锚（#20）
+    if (questionId !== undefined) {
+      const r = await dispatchCardAnswer(deps, id, questionId, content, userIdOf(c));
+      if (r.error) console.warn(`[hitl-dispatch] question=${questionId}:`, r.error);
+    }
     turnTrigger.attach(id); // 幂等兜底：后端重启后旧会话的 attached 内存态丢失——不补则 user_message 无人响应（turn 永不起）
-    eventBus.publish(id, { type: "user_message", id: userMsgId, content }); // 扇出：持久流显示用户消息 + TurnTrigger 起 turn
+    eventBus.publish(id, { type: "user_message", id: userMsgId, content }); // 扇出：持久流显示用户消息 + TurnTrigger 起 turn（answered 卡注入态更新，pi 不再重复判答）
     return c.json({ accepted: true }, 202);
   });
 

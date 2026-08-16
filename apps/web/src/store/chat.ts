@@ -3,7 +3,7 @@
 // f2-3：会话列表职责迁 workspace store（服务端真相，弃 localStorage）；URL /c/:id 为当前会话锚
 //（ChatPage effect 唯一驱动 switchConversation/newConversation——init 已废）。
 import { create } from "zustand";
-import { abortConversation, createConversation, decideApproval as decideApprovalApi, getHitlQuestions, getMessages, openStream, postMessage, type Conversation, type Question } from "../api";
+import { abortConversation, createConversation, getHitlQuestions, getMessages, openStream, postMessage, type Conversation, type Question } from "../api";
 import { useWorkspace } from "./workspace";
 import type { SSEEvent } from "../sse";
 import type { Block } from "../sse";
@@ -64,7 +64,7 @@ interface ChatState {
   newConversation: (workspaceId?: string) => Promise<string | null>; // 返新会话 id（ChatPage navigate 用；#手风琴：可指定 ws）
   switchConversation: (id: string) => Promise<void>; // 幂等（同 id return）
   closeStream: () => void; // 断持久流（登出/forceLogout 时 auth store 调）
-  decideApproval: (questionId: number, decision: "approve" | "deny") => Promise<void>; // #18 审批门
+  sendCardAnswer: (questionId: number, content: string) => Promise<void>; // 统一卡应答（消息绑定 questionId；task/approval/ask 三卡同路）
 }
 
 const errMsg = (message: string): UIMessage => ({ id: null, role: "assistant", blocks: [{ kind: "text", text: message }], status: "error" });
@@ -294,16 +294,13 @@ export const useChat = create<ChatState>((set, get) => {
       if (convId) await abortConversation(convId); // 服务端杀 turn → done.aborted 经持久流回来
     },
 
-    decideApproval: async (questionId, decision) => {
-      try {
-        const status = await decideApprovalApi(questionId, decision);
-        if (status !== 200 && status !== 409) {
-          set((s) => ({ messages: [...s.messages, errMsg(`审批失败 (${status})`)] }));
-        }
-        // 200：hitl_answered 帧经持久流驱动 UI；409：已决（并发双击），帧应已到。
-      } catch (e) {
-        set((s) => ({ messages: [...s.messages, errMsg(msg(e))] }));
-      }
+    sendCardAnswer: async (questionId, content) => {
+      // 统一卡应答：答案=普通消息（对话历史可见）+ inReplyTo 绑定卡——服务端确定性收口（零 LLM 二跳）。
+      const convId = get().conversationId;
+      if (!convId) return;
+      const status = await postMessage(convId, content, questionId);
+      if (status === false) set((s) => ({ messages: [...s.messages, errMsg("发送失败")] }));
+      // 202：hitl_answered 帧经持久流驱动卡转已答；非 pending 重复点=服务端幂等 no-op。
     },
   };
 });

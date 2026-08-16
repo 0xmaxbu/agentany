@@ -15,6 +15,11 @@ import { EventBus } from "../src/chat/eventbus";
 import type { RunDeps } from "../src/runs";
 
 const JH = { "content-type": "application/json" };
+/** 统一卡应答（#28 重构）：发消息绑卡（content=卡上选项文本）。 */
+const answerCard = (app: any, token: string, conv: string, questionId: number, content: string) =>
+  app.request(`/conversations/${conv}/messages`, { method: "POST", headers: { ...JH, authorization: token }, body: JSON.stringify({ content, inReplyTo: questionId }) });
+const login = (app: any, u: string) =>
+  app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: u, password: "pw-long-enough" }) }).then(async (r: any) => `Bearer ${(await r.json()).token}`);
 
 async function setup() {
   const db = openDbMigrated(":memory:");
@@ -90,45 +95,42 @@ describe("bridge /task/create（#28 任务卡）", () => {
   });
 });
 
-describe("任务卡确认流（main app POST /scheduled-tasks/confirm/:questionId）", () => {
+describe("任务卡确认流（统一卡应答 · 消息绑定，#28 重构）", () => {
+
   test("用户确认 → 服务端直建（createWorkspaceTask 事务）+ 产出会话派生 + 卡 answered + hitl_answered 帧", async () => {
     const created = await ctx.call("c_m1", "/task/create", {
       displayName: "新闻汇总", cron: "0 */4 * * *", prompt: "去读新闻",
     });
     const { questionId } = await created.json() as any;
-    const login = await ctx.app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m1", password: "pw-long-enough" }) });
-    const { token } = await login.json() as any;
+    const tok = await login(ctx.app, "m1");
     const frames: any[] = [];
     ctx.deps.eventBus!.subscribe("c_m1", (f) => frames.push(f));
 
-    const confirm = await ctx.app.request(`/scheduled-tasks/confirm/${questionId}`, {
-      method: "POST", headers: { ...JH, authorization: `Bearer ${token}` }, body: JSON.stringify({ decision: "confirm" }),
-    });
-    expect(confirm.status).toBe(201);
-    const task = (await confirm.json()) as any;
-    expect(task.id).toStartWith("t_");
+    const confirm = await answerCard(ctx.app, tok, "c_m1", questionId, "确认创建");
+    expect(confirm.status).toBe(202);
+    await new Promise((res) => setTimeout(res, 30));
+    const mine = ctx.deps.taskStore!.listTasks({ creatorId: ctx.m1.id });
+    expect(mine).toHaveLength(1);
+    const task = mine[0];
     expect(task.displayName).toBe("新闻汇总");
     // 产出会话派生（标题=displayName）
-    const conv = ctx.store.getConversation(task.outputConversationId);
+    const conv = ctx.store.getConversation(task.outputConversationId!);
     expect(conv!.title).toBe("新闻汇总");
     expect(conv!.userId).toBe(ctx.m1.id);
     // 卡 answered + 帧
     expect(ctx.store.getQuestion(questionId)!.status).toBe("answered");
     expect(frames.some((f) => f.type === "hitl_answered")).toBe(true);
     // 任务归属创建者
-    const mine = ctx.deps.taskStore!.listTasks({ creatorId: ctx.m1.id });
-    expect(mine).toHaveLength(1);
+    expect(mine[0].creatorId).toBe(ctx.m1.id);
   });
 
   test("取消 → 卡 answered（denied）、不建任务", async () => {
     const created = await ctx.call("c_m1", "/task/create", { displayName: "x", cron: "0 */4 * * *", prompt: "p" });
     const { questionId } = await created.json() as any;
-    const login = await ctx.app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m1", password: "pw-long-enough" }) });
-    const { token } = await login.json() as any;
-    const cancel = await ctx.app.request(`/scheduled-tasks/confirm/${questionId}`, {
-      method: "POST", headers: { ...JH, authorization: `Bearer ${token}` }, body: JSON.stringify({ decision: "cancel" }),
-    });
-    expect(cancel.status).toBe(200);
+    const tok = await login(ctx.app, "m1");
+    const cancel = await answerCard(ctx.app, tok, "c_m1", questionId, "取消");
+    expect(cancel.status).toBe(202);
+    await new Promise((res) => setTimeout(res, 20));
     expect(ctx.store.getQuestion(questionId)!.status).toBe("answered");
     expect(ctx.deps.taskStore!.listTasks({ creatorId: ctx.m1.id })).toHaveLength(0);
   });
@@ -136,12 +138,12 @@ describe("任务卡确认流（main app POST /scheduled-tasks/confirm/:questionI
   test("非本人（他人确认我的卡）→ 404", async () => {
     const created = await ctx.call("c_m1", "/task/create", { displayName: "x", cron: "0 */4 * * *", prompt: "p" });
     const { questionId } = await created.json() as any;
-    const login = await ctx.app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "ad", password: "pw-long-enough" }) });
-    const { token } = await login.json() as any;
-    const r = await ctx.app.request(`/scheduled-tasks/confirm/${questionId}`, {
-      method: "POST", headers: { ...JH, authorization: `Bearer ${token}` }, body: JSON.stringify({ decision: "confirm" }),
-    });
-    expect(r.status).toBe(404); // admin 不是卡主——确认权只在卡主（自建自批）
+    const tok = await login(ctx.app, "ad"); // admin 在 c_m1 会话内可见（admin 全量）但不代确认
+    const r = await answerCard(ctx.app, tok, "c_m1", questionId, "确认创建");
+    expect(r.status).toBe(202); // 消息正常落库
+    await new Promise((res) => setTimeout(res, 20));
+    expect(ctx.store.getQuestion(questionId)!.status).toBe("pending"); // task 卡限卡主（自建自批）
+    expect(ctx.deps.taskStore!.listTasks({ creatorId: ctx.m1.id })).toHaveLength(0);
   });
 });
 
@@ -175,13 +177,11 @@ describe("bridge /task/list + /task/update + /task/delete + /task/enable", () =>
     expect((q.input as any).update?.taskId).toBe(task.id);
     // 未确认不动
     expect(ctx.deps.taskStore!.getTask(task.id)!.cron).toBe("0 */4 * * *");
-    // 确认（login m1）
-    const login = await ctx.app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m1", password: "pw-long-enough" }) });
-    const { token } = await login.json() as any;
-    const confirm = await ctx.app.request(`/scheduled-tasks/confirm/${questionId}`, {
-      method: "POST", headers: { ...JH, authorization: `Bearer ${token}` }, body: JSON.stringify({ decision: "confirm" }),
-    });
-    expect(confirm.status).toBe(200);
+    // 确认（消息绑定）
+    const tok = await login(ctx.app, "m1");
+    const confirm = await answerCard(ctx.app, tok, "c_m1", questionId, "确认修改");
+    expect(confirm.status).toBe(202);
+    await new Promise((res) => setTimeout(res, 20));
     const updated = ctx.deps.taskStore!.getTask(task.id)!;
     expect(updated.cron).toBe("0 */2 * * *");
     expect(new Date(updated.nextFireAt).getTime()).toBeGreaterThan(Date.now() - 1000); // 重算

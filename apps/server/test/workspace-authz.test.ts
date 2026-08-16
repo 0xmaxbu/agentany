@@ -141,15 +141,17 @@ describe("workspace + 鉴权边界（ADR-0018）", () => {
     expect((await app.request(`/runs/${wsRun.runId}`, { headers: H(m1Tok) })).status).toBe(200);
   });
 
-  test("approvals decide：非会话创建者 404", async () => {
-    // 直接经 store 造一张审批卡在 m1 的会话上
+  test("审批卡应答（消息绑定）：非会话可见者发不进消息（404）→ 卡不动；创建者答 → 卡 answered", async () => {
+    // #28 重构：/approvals 路由已删——审批走 POST /messages inReplyTo（会话守卫天然挡外部人）。
     const conv = await createConv(m1Tok);
     const qId = deps.store.createQuestion({
       conversationId: conv.id, runId: null, kind: "approval", workflowId: "synthetic-3step",
       input: {}, prompt: "批？", options: ["批准", "拒绝"],
     });
-    expect((await app.request(`/approvals/${qId}/decide`, { method: "POST", headers: H(outTok), body: JSON.stringify({ decision: "deny" }) })).status).toBe(404);
-    expect((await app.request(`/approvals/${qId}/decide`, { method: "POST", headers: H(m1Tok), body: JSON.stringify({ decision: "deny" }) })).status).toBe(200);
+    expect((await app.request(`/conversations/${conv.id}/messages`, { method: "POST", headers: H(outTok), body: JSON.stringify({ content: "拒绝", inReplyTo: qId }) })).status).toBe(404);
+    expect((await app.request(`/conversations/${conv.id}/messages`, { method: "POST", headers: H(m1Tok), body: JSON.stringify({ content: "拒绝", inReplyTo: qId }) })).status).toBe(202);
+    expect(deps.store.getQuestion(qId)!.status).toBe("answered");
+    expect((deps.store.getQuestion(qId)!.answer as any).decision).toBe("deny");
   });
 
   test("名单读时过滤 active：注销用户不出现于名单", async () => {

@@ -1,4 +1,6 @@
-// ticket #18：QM 审批门 e2e（registry 门控 + /approvals 路由 + 审批闭环 + enforce + 审计 + HTTP 旁路）。
+// ticket #18：QM 审批门 e2e（registry 门控 + 审批闭环 + enforce + 审计 + HTTP 旁路）。
+// #28 重构：/approvals/:id/decide 已删——审批走统一卡应答（POST /messages inReplyTo 绑定卡，
+// hitl-dispatch 按 kind 确定性执行；审批人=会话可见的人类，pi 无消息端点无自批路径）。
 // 测试环境 SECURITY_POSTURE 未设 → auto（synthetic=allow / brand-*=require_approval）。禁 set env。
 import { describe, test, expect } from "bun:test";
 import { RunRegistry } from "../src/runs/registry";
@@ -89,8 +91,11 @@ describe("registry.start 门控（#18）", () => {
 });
 
 const JH = { "content-type": "application/json" } as const;
+/** 统一卡应答：发消息绑卡（content=卡上选项文本）。 */
+const answerCard = (app: ReturnType<typeof createApp>, questionId: number, content: string) =>
+  app.request(`/conversations/c-appr/messages`, { method: "POST", headers: JH, body: JSON.stringify({ content, inReplyTo: questionId }) });
 
-describe("POST /approvals/:id/decide（#18 main app 路由）", () => {
+describe("审批卡应答（统一卡应答 · 消息绑定，#28 重构）", () => {
   test("approve：{approve} → {approved, runId}；run_started；卡 answered + 回填 runId + decidedBy + hitl_answered{approval}", async () => {
     const { store, eventBus, registry } = setup();
     const app = createApp(fullDeps(store, { runRegistry: registry, eventBus }));
@@ -98,16 +103,13 @@ describe("POST /approvals/:id/decide（#18 main app 路由）", () => {
     eventBus.subscribe("c-appr", (f) => frames.push(f));
     const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "测试品牌" } });
     if (r.status !== "needs_approval") throw new Error("expected needs_approval");
-    const resp = await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "approve" }) });
-    expect(resp.status).toBe(200);
-    const data: any = await resp.json();
-    expect(data.status).toBe("approved");
-    expect(data.runId).toBeTruthy();
+    const resp = await answerCard(app, r.questionId, "批准");
+    expect(resp.status).toBe(202);
     await delayUntil(() => frames.some((f) => f.type === "run_started"));
     expect(frames.some((f) => f.type === "run_started")).toBe(true);
     const q = store.getQuestion(r.questionId)!;
     expect(q.status).toBe("answered");
-    expect(q.runId).toBe(data.runId);
+    expect(q.runId).toBeTruthy();
     expect(q.decidedBy).toBe("dev-user");
     expect(q.answer).toEqual({ decision: "approve" });
     expect(frames.some((f) => f.type === "hitl_answered" && f.kind === "approval")).toBe(true);
@@ -120,9 +122,8 @@ describe("POST /approvals/:id/decide（#18 main app 路由）", () => {
     eventBus.subscribe("c-appr", (f) => frames.push(f));
     const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "x" } });
     if (r.status !== "needs_approval") throw new Error("expected needs_approval");
-    const resp = await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "deny" }) });
-    expect(resp.status).toBe(200);
-    expect((await resp.json() as any).status).toBe("denied");
+    const resp = await answerCard(app, r.questionId, "拒绝");
+    expect(resp.status).toBe(202);
     await delay(30);
     expect(frames.some((f) => f.type === "run_started")).toBe(false); // 不 createRun
     const q = store.getQuestion(r.questionId)!;
@@ -136,37 +137,24 @@ describe("POST /approvals/:id/decide（#18 main app 路由）", () => {
     const app = createApp(fullDeps(store, { runRegistry: registry }));
     const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "x" } });
     if (r.status !== "needs_approval") throw new Error("expected needs_approval");
-    await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "approve" }) });
-    const resp2 = await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "approve" }) });
-    expect(resp2.status).toBe(409);
+    await answerCard(app, r.questionId, "批准");
+    const runAfterFirst = store.getQuestion(r.questionId)!.runId;
+    const resp2 = await answerCard(app, r.questionId, "批准");
+    expect(resp2.status).toBe(202); // 消息正常落库
+    expect(store.getQuestion(r.questionId)!.runId).toBe(runAfterFirst); // 不重复建 run
   });
 
-  test("非审批卡（kind=ask）→ 404", async () => {
-    const { store, registry } = setup();
-    const app = createApp(fullDeps(store, { runRegistry: registry }));
-    const askId = store.createQuestion({ conversationId: "c-appr", runId: "r1", prompt: "q", options: ["A"] }); // 默认 kind=ask
-    const resp = await app.request(`/approvals/${askId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "approve" }) });
-    expect(resp.status).toBe(404);
-  });
 
-  test("坏 decision → 400", async () => {
-    const { store, registry } = setup();
-    const app = createApp(fullDeps(store, { runRegistry: registry }));
-    const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "x" } });
-    if (r.status !== "needs_approval") throw new Error("expected needs_approval");
-    const resp = await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "maybe" }) });
-    expect(resp.status).toBe(400);
-  });
 });
 
 describe("审批只人类 enforce + HTTP 旁路（#18）", () => {
-  test("enforce：bridge 无 /approvals 端点 → pi 持 nonce 调 /approvals → 404（无自批路径）", async () => {
+  test("enforce：bridge 无消息端点 → pi 持 nonce 也无法发审批消息（无自批路径）", async () => {
     const { store, eventBus, registry } = setup();
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
     const token = issueNonce("c-appr");
     try {
-      const resp = await fetch(`http://127.0.0.1:${port}/approvals/1/decide`, { method: "POST", headers: { authorization: `Bearer ${token}`, ...JH }, body: JSON.stringify({ decision: "approve" }) });
-      expect(resp.status).toBe(404);
+      const resp = await fetch(`http://127.0.0.1:${port}/conversations/c-appr/messages`, { method: "POST", headers: { authorization: `Bearer ${token}`, ...JH }, body: JSON.stringify({ content: "批准", inReplyTo: 1 }) });
+      expect(resp.status).toBe(404); // bridge 不挂对话路由——审批消息只能人类经 main app 发
     } finally { stop(); _clearNonces(); }
   });
 
@@ -188,10 +176,11 @@ describe("approve CAS 顺序 + 失败回滚（#codex review：占位不得永久
     // 真建审批卡（registry.start 返 needs_approval，不建 run）
     const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "x" } });
     if (r.status !== "needs_approval") throw new Error("expected needs_approval");
-    const app = createApp(fullDeps(store)); // 无 runRegistry → approve 应 503
-    const resp = await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "approve" }) });
-    expect(resp.status).toBe(503);
-    expect(store.getQuestion(r.questionId)!.status).toBe("pending"); // 未占位 → 可重试
+    const app = createApp(fullDeps(store)); // 无 runRegistry → dispatch 报错但卡可重试
+    const resp = await answerCard(app, r.questionId, "批准");
+    expect(resp.status).toBe(202); // 消息本身正常
+    await delay(20);
+    expect(store.getQuestion(r.questionId)!.status).toBe("pending"); // 回滚/未执行 → 可重试
   });
 
   test("start() 抛错 → 500 + 回滚卡为 pending（可重试，不永久卡死）", async () => {
@@ -201,8 +190,9 @@ describe("approve CAS 顺序 + 失败回滚（#codex review：占位不得永久
     // 注入 start 会抛错的假 registry（模拟会话被删 / 工作流失注等 start 抛错）
     const boomRegistry = { start: () => { throw new Error("conversation gone"); } };
     const app = createApp(fullDeps(store, { runRegistry: boomRegistry as any }));
-    const resp = await app.request(`/approvals/${r.questionId}/decide`, { method: "POST", headers: JH, body: JSON.stringify({ decision: "approve" }) });
-    expect(resp.status).toBe(500);
+    const resp = await answerCard(app, r.questionId, "批准");
+    expect(resp.status).toBe(202);
+    await delay(20);
     expect(store.getQuestion(r.questionId)!.status).toBe("pending"); // 回滚 → 可重试
   });
 });

@@ -22,8 +22,7 @@ export function ChatWindow() {
   const messages = useChat((s) => s.messages);
   const runs = useChat((s) => s.runs);
   const questions = useChat((s) => s.questions);
-  const send = useChat((s) => s.send);
-  const decideApproval = useChat((s) => s.decideApproval);
+  const sendCardAnswer = useChat((s) => s.sendCardAnswer);
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -92,24 +91,12 @@ export function ChatWindow() {
             {q.status === "pending" ? (
               <CardContent>
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                  {isApproval ? (
-                    // 审批：动作固定 approve/deny（不靠选项文本反推——options 仅作标签，去字符串耦合）。
-                    // 契约：registry 建审批卡 options=["批准","拒绝"]（index 0=approve, 1=deny）。
-                    <>
-                      <Button size="sm" variant="outline" onClick={() => decideApproval(q.id, "approve")}>
-                        {q.options[0] ?? "批准"}
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => decideApproval(q.id, "deny")}>
-                        {q.options[1] ?? "拒绝"}
-                      </Button>
-                    </>
-                  ) : (
-                    q.options.map((opt, i) => (
-                      <Button key={i} size="sm" variant="outline" onClick={() => void send(opt)}>
-                        {opt}
-                      </Button>
-                    ))
-                  )}
+                  {q.options.map((opt, i) => (
+                    // 统一卡应答：所有卡（ask/approval/task）点选项=发消息+inReplyTo 绑定——服务端按 kind 确定性执行。
+                    <Button key={i} size="sm" variant="outline" onClick={() => void sendCardAnswer(q.id, opt)}>
+                      {opt}
+                    </Button>
+                  ))}
                 </div>
               </CardContent>
             ) : (

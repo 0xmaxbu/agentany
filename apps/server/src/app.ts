@@ -6,7 +6,6 @@ import { registerWorkspaceRoutes } from "./routes/workspaces";
 import { registerWorkflowRoutes } from "./routes/workflows";
 import { registerFeedbackRoutes } from "./routes/feedback";
 import { registerConversationRoutes } from "./routes/conversations";
-import { registerApprovalRoutes } from "./routes/approvals";
 import { registerScheduledTaskRoutes } from "./routes/scheduled-tasks";
 import type { RunDeps } from "./runs";
 
@@ -27,7 +26,6 @@ export function createApp(deps: RunDeps): Hono<AppEnv> {
   registerWorkflowRoutes(app, deps);
   registerFeedbackRoutes(app, deps);
   registerConversationRoutes(app, deps);
-  registerApprovalRoutes(app, deps);
   registerScheduledTaskRoutes(app, deps); // #25：taskStore 未接线时路由自 500（ts() 守卫）——测试/prod 均已装配
   return app;
 }
