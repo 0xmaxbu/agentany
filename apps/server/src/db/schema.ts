@@ -130,3 +130,59 @@ export const workspaceMembers = sqliteTable(
     wsUid: uniqueIndex("workspace_members_workspaceId_userId_unique").on(t.workspaceId, t.userId),
   }),
 );
+
+// 定时任务（#25/ADR-0021）：cron 触发的自由 prompt LLM 任务（不触发工作流）。
+// 两类 scope：workspace（成员自建，绑建时 ws+产出会话）/ system（跨 ws 内置如蒸馏，seed DB 行，无产出会话）。
+export const scheduledTasks = sqliteTable(
+  "scheduled_tasks",
+  {
+    id: text("id").primaryKey(), // "t_" + uuid
+    scope: text("scope").notNull(), // workspace | system
+    workspaceId: text("workspaceId"), // system 时 null
+    displayName: text("displayName").notNull(),
+    cron: text("cron").notNull(), // 5 段标准 cron
+    prompt: text("prompt").notNull(),
+    outputConversationId: text("outputConversationId"), // workspace 时必填；system null
+    creatorId: text("creatorId").notNull(),
+    nextFireAt: text("nextFireAt").notNull(), // ISO——调度扫描键
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdAt: text("createdAt").notNull(),
+  },
+  (t) => ({
+    // dueTasks 扫描：enabled AND nextFireAt（索引覆盖 WHERE + ORDER BY）
+    due: index("scheduled_tasks_enabled_nextFireAt_idx").on(t.enabled, t.nextFireAt),
+  }),
+);
+
+// 任务执行历史（#25/ADR-0021 决策 8）：viewedAt null=未读（system 任务 badge 计数锚）。
+export const taskRuns = sqliteTable(
+  "task_runs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskId: text("taskId").notNull(),
+    trigger: text("trigger").notNull(), // cron | manual（手动不推进 nextFireAt）
+    status: text("status").notNull(), // ok | failed | missed | skipped_overrun
+    startedAt: text("startedAt"), // missed/skipped 无实际开始
+    finishedAt: text("finishedAt"),
+    outputMessageId: text("outputMessageId"), // 产出消息引用（可悬空——消息表自增 id）
+    viewedAt: text("viewedAt"), // null=未读
+  },
+  (t) => ({
+    taskViewed: index("task_runs_taskId_id_idx").on(t.taskId, t.id),
+  }),
+);
+
+// 任务产出文件（#25 一次定型 schema；切片 3 写入）：ws 相对路径防逃逸。
+export const taskFiles = sqliteTable(
+  "task_files",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    taskRunId: text("taskRunId").notNull(),
+    path: text("path").notNull(), // workspace 内相对路径
+    name: text("name").notNull(), // 下载显示名
+    createdAt: text("createdAt").notNull(),
+  },
+  (t) => ({
+    run: index("task_files_taskRunId_idx").on(t.taskRunId),
+  }),
+);

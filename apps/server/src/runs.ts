@@ -12,12 +12,14 @@ import type { RunRegistry } from "./runs/registry";
 import type { UserStore } from "./auth/store";
 import type { StreamRegistry } from "./chat/stream-registry";
 import type { WorkspaceStore } from "./workspaces/store";
+import type { ScheduledTaskStore } from "./scheduled-tasks/store";
 
 export interface RunDeps {
   store: WorkflowStore;
   userStore: UserStore; // 真 auth（ADR-0014）：身份解析 + 用户/token CRUD
   streamRegistry: StreamRegistry; // 活跃 SSE 登记：token 吊销时强断（不杀 run）
   workspaceStore: WorkspaceStore; // 工作空间 + 名单（ADR-0018）：鉴权边界唯一口径
+  taskStore?: ScheduledTaskStore; // 定时任务三表（#25/ADR-0021）：与 store 共享 db；可选——既有测试装配不破坏
   runPiFactory?: typeof makeRunPi; // 测试可换 stub（di）
   runPiStreamFactory?: typeof makeRunPiStream; // chat 切片①：测试注确定性 delta stub（di）
   eventBus?: EventBus; // 共享事件中心（持久流 + bridge run 事件；prod 由 index 注入）

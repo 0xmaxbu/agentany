@@ -5,6 +5,7 @@ import { WorkflowStore } from "../src/workflow-engine/store";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
+import { ScheduledTaskStore } from "../src/scheduled-tasks/store";
 import type { RunDeps } from "../src/runs";
 
 export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {
@@ -14,6 +15,7 @@ export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {
     userStore: new UserStore(db),
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db), // 与 store/userStore 共享同一 db（名单 join users；公司 ws 由迁移 seed）
+    taskStore: new ScheduledTaskStore(db), // #25：三表与蒸馏 seed 同 db（迁移 0013）
     ...overrides,
   };
 }
