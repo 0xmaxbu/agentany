@@ -1,5 +1,5 @@
-// 定时任务路由（#25/ADR-0021 切片 1）：建任务 tracer——POST 建 + GET 列表（权限分野）。
-// #26 起补：PATCH/enable/DELETE/run/runs/view（管理闭环）。产出会话事务在 taskStore.createWorkspaceTask。
+// 定时任务路由（#25/ADR-0021 切片 1 + #26 手动调用）：建任务 tracer + 调度管理。
+// #27 起补：PATCH/enable/DELETE/runs/view（管理闭环）。产出会话事务在 taskStore.createWorkspaceTask。
 import type { Hono } from "hono";
 import type { RunDeps } from "../runs";
 import { userRoleOf, principalOf, userIdOf, type AppEnv } from "../auth/middleware";
@@ -13,6 +13,10 @@ const toTask = (t: ScheduledTaskRow): Record<string, unknown> => ({
   cron: t.cron, prompt: t.prompt, outputConversationId: t.outputConversationId,
   creatorId: t.creatorId, nextFireAt: t.nextFireAt, enabled: t.enabled, createdAt: t.createdAt,
 });
+
+/** 任务可见性：admin 全量；member 仅 creatorId=自己（system 行对 member 一律不可见——含 seed）。 */
+const canSeeTask = (t: ScheduledTaskRow, u: { id: string; role: "admin" | "member" }): boolean =>
+  u.role === "admin" || (t.scope !== "system" && t.creatorId === u.id);
 
 export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
   const ts = () => {
@@ -57,5 +61,15 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
     const list = ts().listTasks(isAdmin ? {} : { creatorId: userIdOf(c), includeSystem: false });
     const unread = ts().unreadCounts();
     return c.json(list.map((t) => ({ ...toTask(t), unreadRuns: unread.get(t.id) ?? 0 })));
+  });
+
+  // 手动调用（#26/spec 故事 4/7）：立即执行一次。不经 tick——不推进 nextFireAt；在跑 409。
+  app.post("/scheduled-tasks/:id/run", (c) => {
+    const task = ts().getTask(c.req.param("id"));
+    if (!task || !canSeeTask(task, principalOf(c))) return c.json({ error: "task not found" }, 404); // 不泄漏存在
+    if (!deps.scheduler) return c.json({ error: "scheduler not wired" }, 503);
+    const runId = deps.scheduler.runManual(task);
+    if (runId === undefined) return c.json({ error: "task already running" }, 409);
+    return c.json({ accepted: true, runId }, 202);
   });
 }

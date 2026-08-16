@@ -159,3 +159,63 @@ describe("seed（迁移幂等）", () => {
     expect(typeof seed!.nextFireAt).toBe("string");
   });
 });
+
+describe("POST /scheduled-tasks/:id/run（手动调用，#26）", () => {
+  const mkTaskAs = async (app: ReturnType<typeof createApp>, headers: Record<string, string>, name = "手动任务") => {
+    const post = await app.request("/scheduled-tasks", { method: "POST", headers, body: JSON.stringify(taskBody({ displayName: name })) });
+    return (await post.json()) as any;
+  };
+
+  test("立即执行：trigger=manual、nextFireAt 不动；落 runs", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member } = await mkUsers(app);
+    const task = await mkTaskAs(app, member);
+    const before = task.nextFireAt;
+    // 手动跑经 scheduler.runManual——HTTP 层注入 spy scheduler
+    const calls: any[] = [];
+    deps.scheduler = {
+      runManual: (t: any) => { calls.push(t); return 1; },
+      isRunning: () => false,
+    } as any;
+    const res = await app.request(`/scheduled-tasks/${task.id}/run`, { method: "POST", headers: member });
+    expect(res.status).toBe(202);
+    expect(calls.map((t) => t.id)).toEqual([task.id]);
+    const after = deps.taskStore!.getTask(task.id)!;
+    expect(after.nextFireAt).toBe(before); // 手动不推进
+    const runs = deps.taskStore!.listRuns(task.id);
+    expect(runs).toHaveLength(0); // runManual spy 未写真 runs——真实 scheduler 在 index 装配
+  });
+
+  test("同任务在跑 → 409", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member } = await mkUsers(app);
+    const task = await mkTaskAs(app, member);
+    deps.scheduler = { runManual: () => undefined, isRunning: () => false } as any;
+    const res = await app.request(`/scheduled-tasks/${task.id}/run`, { method: "POST", headers: member });
+    expect(res.status).toBe(409);
+  });
+
+  test("member 跑别人的任务 → 404；admin 跑任意 → 202", async () => {
+    const deps = makeDeps();
+    const app = createApp(deps);
+    const { member, admin } = await mkUsers(app);
+    await app.request("/users", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+    const l2 = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: "m2", password: "pw-m2-Long" }) });
+    const m2 = { ...JH, authorization: `Bearer ${(await l2.json() as any).token}` };
+    const task = await mkTaskAs(app, m2, "m2 的任务");
+    deps.scheduler = { runManual: () => 1, isRunning: () => false } as any;
+    const forbidden = await app.request(`/scheduled-tasks/${task.id}/run`, { method: "POST", headers: member });
+    expect(forbidden.status).toBe(404); // 不泄漏存在
+    const ok = await app.request(`/scheduled-tasks/${task.id}/run`, { method: "POST", headers: admin });
+    expect(ok.status).toBe(202);
+  });
+
+  test("任务不存在 → 404", async () => {
+    const app = createApp(makeDeps());
+    const { member } = await mkUsers(app);
+    const res = await app.request("/scheduled-tasks/t_none/run", { method: "POST", headers: member });
+    expect(res.status).toBe(404);
+  });
+});

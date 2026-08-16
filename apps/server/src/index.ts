@@ -7,6 +7,7 @@ import { UserStore } from "./auth/store";
 import { StreamRegistry } from "./chat/stream-registry";
 import { WorkspaceStore } from "./workspaces/store";
 import { ScheduledTaskStore } from "./scheduled-tasks/store";
+import { TaskScheduler } from "./scheduled-tasks/scheduler";
 import { bootstrapAdmin } from "./auth/bootstrap";
 import { PORT } from "./config";
 import { warnIfNoSandbox } from "./pi/sandbox";
@@ -20,11 +21,18 @@ const streamRegistry = new StreamRegistry(); // 活跃 SSE 登记：token 吊销
 const workspaceStore = new WorkspaceStore(db); // 工作空间 + 名单（ADR-0018）：与 store/userStore 共享同一 db；公司 ws 由迁移 seed
 const taskStore = new ScheduledTaskStore(db); // 定时任务三表（#25/ADR-0021）：共享 db；迁移 seed 蒸馏行
 taskStore.reviveSeedNextFire(); // seed nextFireAt=epoch 占位 → 启动算真值（enabled=0 保持禁用，M5 装配时启用）
+// 切片 3 替换：executeTask 真实现=runTurn 同构 spawn（任务 pi 无 bridge、blocks 流收集产出文件）。
+// 本 stub 只记日志即返（scheduler.run 尾部会把 task_runs 收成 ok）。
+const scheduler = new TaskScheduler({
+  store: taskStore,
+  executeTask: async (task) => { console.log(`[scheduler] execute (stub) task=${task.id} ${task.displayName}`); },
+});
+scheduler.start(); // 每 60s tick；DB 为真相，重启后按 nextFireAt 继续
 const eventBus = new EventBus(); // 共享事件中心：持久流订阅 + bridge run 事件，同一实例
 const runRegistry = new RunRegistry({ store, eventBus });
 runRegistry.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed（进程没在跑了）
 await bootstrapAdmin(userStore); // env 设了 bootstrap admin 则幂等 upsert（否则走纯 dev 阀）
-const deps: RunDeps = { store, userStore, streamRegistry, workspaceStore, taskStore, eventBus, runRegistry };
+const deps: RunDeps = { store, userStore, streamRegistry, workspaceStore, taskStore, scheduler, eventBus, runRegistry };
 const app = createApp(deps);
 warnIfNoSandbox(); // 逃生阀开启时显眼告警（ADR-0011 A1）
 
