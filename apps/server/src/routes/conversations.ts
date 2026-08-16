@@ -147,12 +147,14 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     if (!queues.wouldAcceptHttpTurn(id)) return c.json({ error: "conversation busy (queue full)" }, 429); // 同步 429 预检（不入队）
     const userMsgId = deps.store.appendMessage({ conversationId: id, role: "user", content }); // 立即落库
     deps.store.touchConversation(id); // updatedAt = 列表排序锚（#20）
+    turnTrigger.attach(id); // 幂等兜底：后端重启后旧会话的 attached 内存态丢失——不补则 user_message 无人响应（turn 永不起）
+    // 先发 user_message（用户 turn 先入 FIFO），再 dispatch 卡应答（resume 派生的 completed 事件 turn 排后）——
+    // 对话顺序 = 用户点选在前、系统总结在后（点选项=发消息的语义：答案属于对话流）。
+    eventBus.publish(id, { type: "user_message", id: userMsgId, content }); // 扇出：持久流显示用户消息 + TurnTrigger 起 turn（answered 卡注入态更新，pi 不再重复判答）
     if (questionId !== undefined) {
       const r = await dispatchCardAnswer(deps, id, questionId, content, userIdOf(c));
       if (r.error) console.warn(`[hitl-dispatch] question=${questionId}:`, r.error);
     }
-    turnTrigger.attach(id); // 幂等兜底：后端重启后旧会话的 attached 内存态丢失——不补则 user_message 无人响应（turn 永不起）
-    eventBus.publish(id, { type: "user_message", id: userMsgId, content }); // 扇出：持久流显示用户消息 + TurnTrigger 起 turn（answered 卡注入态更新，pi 不再重复判答）
     return c.json({ accepted: true }, 202);
   });
 

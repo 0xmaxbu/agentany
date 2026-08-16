@@ -141,6 +141,55 @@ export async function fetchFile(workspaceId: string, path: string, download = fa
   return apiFetch(`/files/${encodeURIComponent(workspaceId)}/${path.split("/").map(encodeURIComponent).join("/")}${download ? "?download=1" : ""}`);
 }
 
+// ── 定时任务（#31/M4-4）：列表含 unreadRuns；管理动作走 REST 面 ──
+export interface ScheduledTask {
+  id: string;
+  scope: "workspace" | "system";
+  workspaceId: string | null;
+  displayName: string;
+  cron: string;
+  prompt: string;
+  outputConversationId: string | null;
+  creatorId: string;
+  nextFireAt: string;
+  enabled: boolean;
+  createdAt: string;
+  unreadRuns?: number;
+}
+export interface TaskRun {
+  id: number;
+  taskId: string;
+  trigger: "cron" | "manual";
+  status: "ok" | "failed" | "missed" | "skipped_overrun";
+  startedAt: string | null;
+  finishedAt: string | null;
+  outputMessageId: string | null;
+  viewedAt: string | null;
+}
+
+export async function listScheduledTasks(): Promise<ScheduledTask[]> {
+  const r = await apiFetch("/scheduled-tasks");
+  if (!r.ok) throw new Error(`listScheduledTasks: ${r.status}`);
+  return r.json();
+}
+export async function listTaskRuns(taskId: string): Promise<TaskRun[]> {
+  const r = await apiFetch(`/scheduled-tasks/${taskId}/runs`);
+  if (!r.ok) throw new Error(`listTaskRuns: ${r.status}`);
+  return r.json();
+}
+export async function runTaskNow(taskId: string): Promise<Response> {
+  return apiFetch(`/scheduled-tasks/${taskId}/run`, { method: "POST" });
+}
+export async function setTaskEnabled(taskId: string, enabled: boolean): Promise<Response> {
+  return apiFetch(`/scheduled-tasks/${taskId}/enable`, { method: "PATCH", headers: jsonHeaders, body: JSON.stringify({ enabled }) });
+}
+export async function deleteTask(taskId: string): Promise<Response> {
+  return apiFetch(`/scheduled-tasks/${taskId}`, { method: "DELETE" });
+}
+export async function markTaskViewed(taskId: string): Promise<void> {
+  await apiFetch(`/scheduled-tasks/${taskId}/view`, { method: "POST" });
+}
+
 export async function abortConversation(conversationId: string): Promise<void> {
   await apiFetch(`/conversations/${conversationId}/abort`, { method: "POST" });
 }

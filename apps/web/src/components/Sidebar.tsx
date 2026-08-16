@@ -11,10 +11,10 @@ import { useAuth, ROLE } from "../store/auth";
 import { listConversations, type ConversationRow, type Workspace } from "../api";
 
 /** 管理菜单（f4）：「所有 admin 管理项目」可扩展列表——M4 定时任务、M5 人审后续挂这。 */
-/** 管理菜单（f4）：「所有 admin 管理项目」可扩展列表——M4 定时任务、M5 人审后续挂这。 */
 const ADMIN_MENU = [
   { path: "/admin/users", label: "用户" },
   { path: "/admin/workspaces", label: "Workspace" },
+  { path: "/admin/tasks", label: "定时任务" },
 ] as const;
 
 /**

@@ -17,6 +17,9 @@ const AdminUsersPage = lazy(() =>
 const AdminWorkspacesPage = lazy(() =>
   import("./routes/admin/WorkspacesPage").then((m) => ({ default: m.AdminWorkspacesPage })),
 );
+const AdminTasksPage = lazy(() =>
+  import("./routes/admin/TasksPage").then((m) => ({ default: m.AdminTasksPage })),
+);
 
 export function App() {
   const bootstrap = useAuth((s) => s.bootstrap);
@@ -47,6 +50,14 @@ export function App() {
               element={
                 <Suspense fallback={null}>
                   <AdminWorkspacesPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="admin/tasks"
+              element={
+                <Suspense fallback={null}>
+                  <AdminTasksPage />
                 </Suspense>
               }
             />

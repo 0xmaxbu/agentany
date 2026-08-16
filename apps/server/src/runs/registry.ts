@@ -105,10 +105,12 @@ export class RunRegistry {
       if (row.conversationId) this.deps.eventBus.publish(row.conversationId, frame);
     };
     const onProgress = (p: RunProgress) => publish({ ...p, runId });
-    publish({ type: "run_resumed", runId });
+    // run_resumed 不预发：先让 runner 判幂等/拒绝（h7 串行锁内）——非挂起态的重复 resume 不产生任何帧
+    // （ADR-0022 双路判答竞争下：先到的 resume 完成后，后到的 idempotent 静默——前端状态不被回写「resumed」）。
     const outcome = await resume(wf, this.deps.store, runId, resumeData, ctx, onProgress);
     // rejected / idempotent 不是 clean 结局，不发 run_*（由调用方处理）。
     if (!("rejected" in outcome) && !("idempotent" in outcome)) {
+      publish({ type: "run_resumed", runId }); // 真续跑成立才补发（此时步骤帧已先行——顺序仅影响展示，状态终值正确）
       this.publishOutcome(publish, runId, outcome);
     }
     return outcome;

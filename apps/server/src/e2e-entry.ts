@@ -13,6 +13,11 @@ import { startBridge, BRIDGE_PORT } from "./bridge/server";
 import { UserStore } from "./auth/store";
 import { StreamRegistry } from "./chat/stream-registry";
 import { WorkspaceStore } from "./workspaces/store";
+import { ScheduledTaskStore } from "./scheduled-tasks/store";
+import { TaskScheduler } from "./scheduled-tasks/scheduler";
+import { makeExecuteTask } from "./scheduled-tasks/execute";
+import { ConversationQueues } from "./chat/queue";
+import type { RunDeps } from "./runs";
 import type { ConfiguredRunPiStream, ConfiguredRunPi } from "./pi/runPi-factory";
 import type { RunPiResult } from "./workflow-engine/defineWorkflow";
 
@@ -101,6 +106,12 @@ const scriptedStubFactory = (): ConfiguredRunPiStream => async (call): Promise<R
     if (runId) await post("/run/resume", { runId, resumeData: { decision: "accept" } });
     return { text: "好的，按你的选择续跑。", messages: [], toolResults: [] };
   }
+  // ADR-0022 统一卡应答：点 accept = 发消息（"accept"）+ inReplyTo——服务端已确定性 resume（dispatch 内），
+  // 本 turn 只是普通对话轮（挂起注入已被 markPendingAnsweredByRun 收走）→ 短确认即可。
+  if (call.prompt.trim() === "accept" || call.prompt.trim() === "redirect") {
+    emitText(call, "收到，已按你的选择处理。");
+    return { text: "收到，已按你的选择处理。", messages: [], toolResults: [] };
+  }
   if (call.prompt.includes("合成") || call.prompt.includes("跑")) {
     // 用户要求跑工作流 → start_workflow（synthetic=allow 直跑）
     emitText(call, "好的，启动合成三步工作流。");
@@ -133,8 +144,9 @@ const db = openDbMigrated();
 const store = new WorkflowStore(db);
 const eventBus = new EventBus(); // 【硬条件·#19】共享：bridge run 事件 → TurnTrigger 自动 turn（不传则全链断）
 const runRegistry = new RunRegistry({ store, eventBus, runPiFactory: stubRunPiFactory });
-// auth/鉴权依赖（e2e 走 dev 放行；workspaceStore 公司 ws 由迁移 seed）
-const app = createApp({
+// #31：定时任务三表 + 调度器（手动跑走真 executeTask——runTurn 用下面的 stub streamFactory 产出确定性文本）
+const taskStore = new ScheduledTaskStore(db, store);
+const deps: RunDeps = {
   store,
   userStore: new UserStore(db),
   streamRegistry: new StreamRegistry(),
@@ -142,7 +154,15 @@ const app = createApp({
   eventBus,
   runRegistry,
   runPiStreamFactory: scriptedStubFactory,
+  taskStore,
+  conversationQueues: new ConversationQueues(),
+};
+deps.scheduler = new TaskScheduler({
+  store: taskStore,
+  executeTask: makeExecuteTask({ deps, queues: deps.conversationQueues!, eventBus }),
 });
+// auth/鉴权依赖（e2e 走 dev 放行；workspaceStore 公司 ws 由迁移 seed）
+const app = createApp(deps);
 startBridge(BRIDGE_PORT, { runRegistry, store, eventBus }); // bridge RPC（loopback:3199，stub 经此驱动）
 
 const port = Number(process.env.PORT ?? 3000);

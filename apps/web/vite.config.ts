@@ -22,6 +22,8 @@ export default defineConfig({
       "/me": BACKEND, // f2 身份探测（GET /me——dev 阀未设时 200 匿名直进）
       "/users": BACKEND, // f4 管理页预留
       "/workspaces": BACKEND, // f2 会话列表按 ws 分组（GET /workspaces）
+      "/scheduled-tasks": BACKEND, // #31 定时任务管理面（REST）
+      "/files": BACKEND, // #30 产出文件预览/下载
     },
   },
 });
