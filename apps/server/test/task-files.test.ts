@@ -211,6 +211,13 @@ describe("GET /files/:workspaceId/:path（#30 文件服务）", () => {
     expect((await ctx.app.request("/files/ws_company/task-files-test/nope.md", { headers: { authorization: tok } })).status).toBe(404);
   });
 
+  test("目录路径 → 404（review-c2：非普通文件不当流回）", async () => {
+    const ctx = await setup();
+    const tok = await ctx.login("ad");
+    const r = await ctx.app.request("/files/ws_company/task-files-test", { headers: { authorization: tok } });
+    expect(r.status).toBe(404);
+  });
+
   test("未登录 → 401", async () => {
     const ctx = await setup();
     expect((await ctx.app.request("/files/ws_company/task-files-test/digest.md")).status).toBe(401);

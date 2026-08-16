@@ -1,14 +1,15 @@
 // #30/M4-3b 文件服务路由：GET /files/<workspaceId>/<relative_path>。
 // 鉴权：登录（auth 中间件全家桶）+ canAccessWorkspace（无权 404 不泄漏——resolveRequestWorkspace 口径）。
-// 防逃逸：归一 resolve 后必须仍在 ws cwd 内（wsRelativePath 同一逻辑——收集与读取共用口径）。
+// 防逃逸：wsRelativePath 单一口径（与 #30 收集端同一函数——resolve 后必须仍在 ws cwd 内）。
 // 预览/下载同一端点：?download=1 → attachment；缺省 inline（扩展名路由预览 or 下载由前端决定）。
 import { createReadStream, statSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { extname } from "node:path";
 import type { Hono } from "hono";
 import { resolveScopePaths, scopeOf } from "../scope";
 import { principalOf, type AppEnv } from "../auth/middleware";
 import { canAccessWorkspace } from "../workspaces/guard";
 import { assertValidWorkspaceId } from "../config";
+import { wsRelativePath } from "../scheduled-tasks/files";
 import type { RunDeps } from "../runs";
 
 // v1 预览能力扩展名（票面：md/txt/html/pdf 纯文本/PDF 预览；其余前端直接下载）。
@@ -33,16 +34,18 @@ export function registerFileRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
     if (!deps.workspaceStore.getWorkspace(wsId) || !canAccessWorkspace(deps.workspaceStore, wsId, u)) {
       return c.json({ error: "workspace not found" }, 404);
     }
-    // 防逃逸：URL path 解码后归一，必须落在 ws cwd 内
+    // 防逃逸：URL path 解码后归一（wsRelativePath=与收集端同一口径），非普通文件（目录等）→ 404
     const cwd = resolveScopePaths(scopeOf(wsId), wsId).cwd;
     const rel = c.req.param("path");
-    const abs = resolve(cwd, rel);
-    if (abs !== cwd && !abs.startsWith(cwd + "/") && !abs.startsWith(cwd + "\\")) {
+    if (wsRelativePath(cwd, rel) === undefined) {
       return c.json({ error: "file not found" }, 404);
     }
+    const abs = `${cwd}/${rel}`;
     let size: number;
     try {
-      size = statSync(abs).size; // 不存在/非普通文件（目录）→ 404
+      const st = statSync(abs);
+      if (!st.isFile()) return c.json({ error: "file not found" }, 404); // 目录/设备文件等
+      size = st.size;
     } catch {
       return c.json({ error: "file not found" }, 404);
     }

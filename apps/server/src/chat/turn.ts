@@ -32,6 +32,8 @@ const CHAT_SYSTEM_PROMPT = `你是 agentany 的对话助手，用户是非技术
 export interface TurnOptions {
   extensions?: string[];
   appendSystemPrompt?: string[];
+  /** true=不发 bridge nonce、沙箱不放行 loopback（review-c4：任务 pi 无交互通道——nonce 落地即被 bash curl 可用）。 */
+  noBridge?: boolean;
 }
 
 export async function runTurn(
@@ -72,7 +74,9 @@ export async function runTurn(
         else if (b.op === "delta") send({ type: "block_delta", blockId: b.blockId, delta: b.delta });
         else send({ type: "block_end", blockId: b.blockId });
       },
-      bridge: { port: BRIDGE_PORT, nonce, url: `http://localhost:${BRIDGE_PORT}` },
+      bridge: opts?.noBridge === true
+        ? undefined // review-c4：任务 turn 无交互通道——nonce 不注入 env、loopback 不放行（bash curl 亦不可达）
+        : { port: BRIDGE_PORT, nonce, url: `http://localhost:${BRIDGE_PORT}` },
       appendSystemPrompt: opts?.appendSystemPrompt ?? [CHAT_SYSTEM_PROMPT, ...appendDynamic],
     });
   } catch (e) {

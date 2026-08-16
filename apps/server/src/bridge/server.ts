@@ -142,7 +142,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     `创建定时任务「${p.displayName}」？频率：${p.cron}（未来 3 次执行：${next3.map((t) => new Date(t).toLocaleString("zh-CN")).join("；")}）。任务目标：${p.prompt}`;
 
   // /task/create：校验（cron 合法+频率下限+CommandPolicy）→ 出 kind=task pending 卡（input=完整参数+next3）。
-  // 确认动作不在此（main app POST /scheduled-tasks/confirm/:id——服务端直建，参数零漂移）。
+  // 确认不经此（ADR-0022）：用户点选项=发消息绑卡（inReplyTo）→ hitl-dispatch 确定性直建，参数零漂移。
   app.post("/task/create", async (c) => {
     if (!store || !taskStore) return c.json({ error: "task tools unavailable" }, 503);
     const ctx2 = taskCtx(c);

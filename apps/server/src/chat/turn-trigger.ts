@@ -36,6 +36,9 @@ export class TurnTrigger {
   private onFrame(conversationId: string, f: Frame): void {
     switch (f.type) {
       case "user_message":
+        // #29 定时任务投递的 prompt 帧带 taskId：executeTask 已自起 event turn（TASK_EXTENSIONS 无 bridge），
+        // 再起 HTTP turn（CHAT_EXTENSIONS 含 bridge）会同 prompt 双跑 + 交互工具泄漏——跳过（review-c1）。
+        if (f.type === "user_message" && f.taskId !== undefined) break;
         this.onUserMessage(conversationId, String(f.content));
         break;
       case "run_started":

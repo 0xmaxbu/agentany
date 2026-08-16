@@ -41,14 +41,15 @@ const runStatusText: Record<TaskRun["status"], string> = {
   skipped_overrun: "跳过",
 };
 
-/** 手动跑后轮询：新 run 行落库（executeTask 收口即 ok；上限 60s 防 True pi 长跑卡 UI）。 */
+/** 手动跑后轮询：新 run 行落库（executeTask 收口即 ok；上限 60s 防 True pi 长跑卡 UI）。
+ *  次序约定：listRuns 按 id 升序=最新在尾（与渲染 slice(-8).reverse() 同一约定）。 */
 async function waitForNewRun(taskId: string, knownRunId: number | null): Promise<void> {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     try {
       const runs = await listTaskRuns(taskId);
-      const top = runs[runs.length - 1];
-      if (top && top.id !== knownRunId && top.finishedAt != null) return;
+      const latest = runs[runs.length - 1];
+      if (latest && latest.id !== knownRunId && latest.finishedAt != null) return;
     } catch {
       /* 瞬时错继续轮询 */
     }
@@ -148,7 +149,7 @@ function TaskRow({
       if (r.status === 409) return; // 在跑 → 按钮保持禁用
       if (r.ok) {
         // 等执行收口（stub 秒级、真 pi 分钟级——轮询 run 行直到有新行），收口即刷历史与列表
-        await waitForNewRun(task.id, runs?.[0]?.id ?? null);
+        await waitForNewRun(task.id, runs != null && runs.length > 0 ? runs[runs.length - 1].id : null);
         setRuns(null); // 触发展开态 effect 重拉
       }
       setRunning(false);

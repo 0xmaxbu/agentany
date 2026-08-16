@@ -5,7 +5,7 @@
 // Frame = 判别式联合（按 type 收窄）—— publish/send 站点类型受检，去 as Frame 与打字错误风险。
 // 与 apps/web/src/sse.ts SSEEvent 对齐（线协议）。
 export type Frame =
-  | { type: "user_message"; id: number; content: string }
+  | { type: "user_message"; id: number; content: string; taskId?: string } // taskId=#29 定时任务投递标志（TurnTrigger 跳过——executeTask 自起 event turn，防同 prompt 双跑）
   | { type: "done"; messageId?: number; aborted?: boolean }
   // #20 block 三帧：消息=blocks 序列（text/thinking/tool_use/tool_result）；f3 前与 delta/done 双发。
   | { type: "block_start"; blockId: string; kind: "text" | "thinking" | "tool_use" | "tool_result"; meta?: Record<string, unknown> }

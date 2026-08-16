@@ -91,10 +91,11 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
       if (rel !== undefined) written.add(rel); // 归一后去重（write+edit 同文件只一行）
     };
 
-    // 任务 prompt 先落 user 消息（历史可读：产出会话里每次执行的目标原文）+ 推流
+    // 任务 prompt 先落 user 消息（历史可读：产出会话里每次执行的目标原文）+ 推流。
+    // 帧 带 taskId 标志：TurnTrigger 见标志不起 HTTP turn（本函数已自起 event turn——防同 prompt 双跑，review-c1）。
     const userMsgId = deps.store.appendMessage({ conversationId: convId, role: "user", content: task.prompt });
     deps.store.touchConversation(convId);
-    eventBus.publish(convId, { type: "user_message", id: userMsgId, content: task.prompt });
+    eventBus.publish(convId, { type: "user_message", id: userMsgId, content: task.prompt, taskId: task.id });
 
     let outputMessageId: string | null = null;
     let failure: string | null = null;
@@ -105,7 +106,7 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
         if (f.type === "done" && f.messageId !== undefined) outputMessageId = String(f.messageId);
         if (f.type === "error") failure = f.message;
         send(f);
-      }, signal, { extensions: TASK_EXTENSIONS, appendSystemPrompt: [TASK_SYSTEM_PROMPT] });
+      }, signal, { extensions: TASK_EXTENSIONS, appendSystemPrompt: [TASK_SYSTEM_PROMPT], noBridge: true });
     });
     if (!ok) failure = "conversation busy (event queue full)";
     if (ok) await queues.drained(convId); // 等本 turn 真跑完（FIFO 快照）再收口——finishRun 太早会丢 outputMessageId/错误
