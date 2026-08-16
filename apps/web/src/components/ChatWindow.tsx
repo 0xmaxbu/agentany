@@ -6,6 +6,7 @@ import { ChatCircleDotsIcon, CheckIcon, PlayIcon, WarningIcon } from "@phosphor-
 import { useChat } from "../store/chat";
 import { MessageBlocks } from "./MessageBlock";
 import { FileListCard, groupForMessage } from "./FileListCard";
+import { MessageFeedback, RunFeedback } from "./FeedbackControls";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 
@@ -51,6 +52,11 @@ export function ChatWindow() {
               )}
               {m.status === "streaming" && <span className="cursor">▍</span>}
             </div>
+            {m.role === "assistant" && m.status !== "streaming" && m.id != null && (
+              <div className="pl-1">
+                <MessageFeedback messageId={m.id} />
+              </div>
+            )}
             {fileGroup && workspaceId && (
               <div className="bubble assistant">
                 <FileListCard group={fileGroup} workspaceId={workspaceId} />
@@ -78,6 +84,7 @@ export function ChatWindow() {
               ))}
             </div>
             {r.note && <div className="mt-1 text-destructive">{r.note}</div>}
+            <RunFeedback runId={r.runId} />
           </CardContent>
         </Card>
       ))}

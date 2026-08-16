@@ -10,6 +10,7 @@ import { flattenText, partsToBlocks, textOf, type Block } from "../blocks";
 /** 历史消息（GET /conversations/:id/messages 的新形状；与实时 block 帧同构）。 */
 export interface HistoryMessage {
   id: string; // session entry id（树节点 id，非 DB 自增）
+  dbId?: number | null; // #34 对齐回填的 DB messages.id（消息级反馈锚；null=DB 无对应行
   role: "user" | "assistant";
   content: string; // text blocks 拼接（冗余字段——前端 f3 前的兼容；#20 冗余比对用）
   blocks: Block[];
@@ -76,6 +77,7 @@ export function readConversationHistory(sessionDir: string, conversationId: stri
 export function dbMessagesToHistory(rows: { id: number | string; role: string; content: string; createdAt: string }[]): HistoryMessage[] {
   return rows.map((m) => ({
     id: String(m.id),
+    dbId: Number(m.id), // #34 DB 兜底源：id 本即 DB messages.id（前端反馈锚只认 dbId——与 pi 源对齐值同字段）
     role: m.role as HistoryMessage["role"],
     content: m.content,
     blocks: [{ kind: "text", text: m.content }],

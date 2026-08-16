@@ -86,8 +86,8 @@ const foldToolResults = (blocks: UIAnyBlock[]): UIAnyBlock[] => {
   }
   return out;
 };
-const toUIMessage = (m: { id: string | number; role: "user" | "assistant"; blocks: Block[]; status?: string }): UIMessage => ({
-  id: typeof m.id === "number" ? m.id : null,
+const toUIMessage = (m: { id: string | number; dbId?: number | null; role: "user" | "assistant"; blocks: Block[]; status?: string }): UIMessage => ({
+  id: m.dbId ?? null, // #34 反馈锚只认 dbId（pi 源=对齐回填；DB 兜底源=自带；无=不可反馈）
   role: m.role,
   blocks: foldToolResults(m.blocks),
   status: "complete",

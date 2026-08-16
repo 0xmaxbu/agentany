@@ -48,6 +48,7 @@ export interface Workspace {
 // GET /conversations/:id/messages（#20 双源：pi session 优先、DB 兜底）统一 HistoryMessage 形状
 export interface Message {
   id: number | string; // pi session entry id（string）或 DB 自增（兜底源）
+  dbId?: number | null; // #34 pi 源对齐回填的 DB messages.id（消息级反馈锚；null=无对应行
   role: "user" | "assistant";
   content: string; // text blocks 拼接（冗余字段——前端不渲染，#20 比对用）
   blocks: Block[];
@@ -130,6 +131,43 @@ export interface TaskFileGroup {
   outputMessageId: string | null;
   files: { id: number; path: string; name: string; createdAt: string }[];
 }
+// ---- #34/M5-1 反馈面（两粒度；feedback 表多态挂载，回显=本人最新一条）----
+
+export interface FeedbackRow {
+  id: number; targetKind: string; targetId: string; text: string;
+  rating: number | null; createdAt: string;
+}
+
+/** 点赞/点踩（👍→5 / 👎→1，可带可选备注）。 */
+export async function rateMessage(messageId: string | number, up: boolean, text?: string): Promise<void> {
+  await apiFetch(`/feedback/message/${messageId}`, {
+    method: "POST", headers: jsonHeaders,
+    body: JSON.stringify({ rating: up ? 5 : 1, ...(text ? { text } : {}) }),
+  });
+}
+
+/** 消息已给反馈（回显：本人最新一条）。 */
+export async function getMessageFeedback(messageId: string | number): Promise<FeedbackRow[]> {
+  const r = await apiFetch(`/feedback/message/${messageId}`);
+  if (!r.ok) return [];
+  return (await r.json()) as FeedbackRow[];
+}
+
+/** run 级批注 + 1-5 评分。 */
+export async function rateRun(runId: string, text: string, rating?: number): Promise<void> {
+  await apiFetch(`/feedback/workflow_run/${runId}`, {
+    method: "POST", headers: jsonHeaders,
+    body: JSON.stringify({ text, ...(rating !== undefined ? { rating } : {}) }),
+  });
+}
+
+/** run 已给反馈（回显）。 */
+export async function getRunFeedback(runId: string): Promise<FeedbackRow[]> {
+  const r = await apiFetch(`/feedback/workflow_run/${runId}`);
+  if (!r.ok) return [];
+  return (await r.json()) as FeedbackRow[];
+}
+
 export async function getConversationFiles(conversationId: string): Promise<TaskFileGroup[]> {
   const r = await apiFetch(`/conversations/${conversationId}/files`);
   if (!r.ok) throw new Error(`getConversationFiles: ${r.status}`);

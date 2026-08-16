@@ -1,0 +1,174 @@
+// #34/M5-1 反馈控件（两粒度）：
+// - MessageFeedback：assistant 气泡尾部 👍/👎（Phosphor，点击即提交 rating 5/1；已点高亮；
+//   展开可补可选备注再提交）。回显拉全量后取本人最新一条（v1 无按人过滤端点——本人会话即本人反馈，
+//   admin 可见他全部，展开态可见明细即可）。
+// - RunFeedback：run 卡内批注 + 1-5 评分（展开表单；提交后回显只读）。
+// 交互纪律：轻量优先——不弹层、不打断；反馈失败静默（console）不扰主流程。
+import { useEffect, useState } from "react";
+import { ChatTextIcon, ThumbsDownIcon, ThumbsUpIcon } from "@phosphor-icons/react";
+import {
+  getMessageFeedback, getRunFeedback, rateMessage, rateRun, type FeedbackRow,
+} from "../api";
+import { Button } from "./ui/button";
+
+const IW = 1.5;
+
+/** 消息级：👍/👎 + 可选备注。 */
+export function MessageFeedback({ messageId }: { messageId: string | number }) {
+  const [rows, setRows] = useState<FeedbackRow[] | null>(null);
+  const [mine, setMine] = useState<FeedbackRow | null>(null); // 本人最新一条（高亮锚）
+  const [expanded, setExpanded] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void getMessageFeedback(messageId).then(setRows).catch(() => setRows([]));
+  }, [messageId]);
+
+  // 回显：列表最后一条 = 本会话最新反馈（member 会话私有=必是本人；admin 展开可见全部）
+  useEffect(() => {
+    if (rows && rows.length > 0) {
+      const last = rows[rows.length - 1];
+      if (last.rating === 5 || last.rating === 1) setMine(last);
+    }
+  }, [rows]);
+
+  const rate = async (up: boolean, withNote?: string) => {
+    setBusy(true);
+    try {
+      await rateMessage(messageId, up, withNote);
+      const fresh = await getMessageFeedback(messageId).catch(() => [] as FeedbackRow[]);
+      setRows(fresh);
+      const last = fresh[fresh.length - 1];
+      setMine(last ?? null);
+      setExpanded(false);
+      setNote("");
+    } catch (e) {
+      console.warn("feedback failed", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const up = mine?.rating === 5;
+  const down = mine?.rating === 1;
+
+  return (
+    <div className="mt-1 flex items-center gap-1.5" data-testid="msg-feedback">
+      <button
+        title="有帮助"
+        disabled={busy}
+        onClick={() => void rate(true)}
+        className={`rounded p-1 transition-colors hover:bg-accent ${up ? "text-primary" : "text-muted-foreground/60"}`}
+        data-testid="thumb-up"
+      >
+        <ThumbsUpIcon size={13} strokeWidth={IW} weight={up ? "fill" : "regular"} />
+      </button>
+      <button
+        title="没帮助"
+        disabled={busy}
+        onClick={() => void rate(false)}
+        className={`rounded p-1 transition-colors hover:bg-accent ${down ? "text-destructive" : "text-muted-foreground/60"}`}
+        data-testid="thumb-down"
+      >
+        <ThumbsDownIcon size={13} strokeWidth={IW} weight={down ? "fill" : "regular"} />
+      </button>
+      <button
+        title="写备注"
+        onClick={() => setExpanded((v) => !v)}
+        className="rounded p-1 text-muted-foreground/60 transition-colors hover:bg-accent"
+        data-testid="feedback-note-toggle"
+      >
+        <ChatTextIcon size={13} strokeWidth={IW} />
+      </button>
+      {mine?.text ? (
+        <span className="max-w-64 truncate text-[11px] text-muted-foreground" title={mine.text}>{mine.text}</span>
+      ) : null}
+      {expanded && (
+        <span className="flex items-center gap-1">
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="可选备注…"
+            className="h-6 w-44 rounded border border-border bg-background px-2 text-xs"
+            data-testid="feedback-note-input"
+          />
+          <Button
+            variant="outline" className="h-6 px-2 text-xs" disabled={busy || !note.trim()}
+            onClick={() => void rate(up || !down, note.trim())}
+            data-testid="feedback-note-submit"
+          >
+            提交
+          </Button>
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** run 级：批注 + 1-5 评分（展开表单；回显只读）。 */
+export function RunFeedback({ runId }: { runId: string }) {
+  const [rows, setRows] = useState<FeedbackRow[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [rating, setRating] = useState<number | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => void getRunFeedback(runId).then(setRows).catch(() => setRows([]));
+  useEffect(load, [runId]);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await rateRun(runId, text.trim(), rating);
+      setText(""); setRating(undefined); setOpen(false);
+      load();
+    } catch (e) {
+      console.warn("run feedback failed", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-1.5" data-testid="run-feedback">
+      {rows && rows.length > 0 ? (
+        <div className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
+          {rows.slice(-2).reverse().map((r) => (
+            <span key={r.id} className="truncate">
+              批注：{r.text || "-"}{r.rating != null ? ` · ${r.rating}/5` : ""}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {open ? (
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="对这次执行的批注…"
+            className="h-6 min-w-40 flex-1 rounded border border-border bg-background px-2 text-xs"
+            data-testid="run-feedback-text"
+          />
+          <select
+            value={rating ?? ""}
+            onChange={(e) => setRating(e.target.value ? Number(e.target.value) : undefined)}
+            className="h-6 rounded border border-border bg-background px-1 text-xs"
+            data-testid="run-feedback-rating"
+          >
+            <option value="">不评分</option>
+            {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <Button variant="outline" className="h-6 px-2 text-xs" disabled={busy || !text.trim()} onClick={() => void submit()} data-testid="run-feedback-submit">
+            提交
+          </Button>
+          <button className="text-[11px] text-muted-foreground hover:underline" onClick={() => setOpen(false)}>取消</button>
+        </div>
+      ) : (
+        <button className="text-[11px] text-muted-foreground/70 hover:underline" onClick={() => setOpen(true)} data-testid="run-feedback-open">
+          批注这次执行
+        </button>
+      )}
+    </div>
+  );
+}

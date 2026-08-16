@@ -11,6 +11,7 @@ import { canAccessConversation, resolveRequestWorkspace } from "../workspaces/gu
 import { userIdOf, principalOf, userRoleOf, type AppEnv } from "../auth/middleware";
 import { ROLE } from "../auth/store";
 import { dbMessagesToHistory, readConversationHistory } from "../pi-session/reader";
+import { alignDbIds } from "../chat/align-db-ids";
 import { eraseConversationSessions } from "../pi-session/erase";
 import { resolveScopePaths, scopeOf } from "../scope";
 import { dispatchCardAnswer } from "../chat/hitl-dispatch";
@@ -76,7 +77,10 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     if (!conv) return c.json({ error: "conversation not found" }, 404);
     const sessionDir = resolveScopePaths(scopeOf(conv.workspaceId), conv.workspaceId).sessionDir;
     const history = readConversationHistory(sessionDir, conv.id);
-    if (history) return c.json(history);
+    if (history) {
+      // #34 消息级反馈锚：pi 源 entry id ↔ DB messages.id 对齐回填（role+content 双指针贪心）
+      return c.json(alignDbIds(history, deps.store.listMessages(conv.id)));
+    }
     return c.json(dbMessagesToHistory(deps.store.listMessages(conv.id)));
   });
 
