@@ -1,5 +1,6 @@
 // 定时任务管理（#31/M4-4，admin）：全量列表（全部 member 任务 + system seed）。
-// 行操作：停/启、手动跑（在跑禁用）、删除（确认）；行展开：执行历史（状态/触发/起止）+ 未读清零。
+// 行操作：停/启、手动跑（在跑禁用）、编辑/删除（确认）；行展开：执行历史（状态/触发/起止）+ 未读清零。
+// #40/M6-2：新建 system 任务 + system 行编辑/删除弹窗（ADR-0023——蒸馏 seed 冻结态在 TaskDialog 特判）。
 // 权限：member 任务与 system 任务的服务端闸在路由层（member 只见自己的、system 硬拒）——
 // 本页只在 admin 菜单出现；直接输 URL 的 member 由列表空/NoAccess 兜底。
 import { useCallback, useEffect, useState } from "react";
@@ -9,7 +10,9 @@ import {
   CaretRightIcon,
   ClockIcon,
   PauseIcon,
+  PencilSimpleIcon,
   PlayIcon,
+  PlusIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
 import {
@@ -19,11 +22,13 @@ import {
   markTaskViewed,
   runTaskNow,
   setTaskEnabled,
+  DISTILL_TASK_ID,
   type ScheduledTask,
   type TaskRun,
 } from "../../api";
 import { useAuth, ROLE } from "../../store/auth";
 import { Button } from "../../components/ui/button";
+import { TaskDialog } from "./TaskDialog";
 
 const IW = 1.5;
 
@@ -69,6 +74,8 @@ export function AdminTasksPage() {
   const [tasks, setTasks] = useState<ScheduledTask[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  // #40：弹窗态——null=关；"new"=新建；行对象=编辑该任务
+  const [dialogTask, setDialogTask] = useState<ScheduledTask | "new" | null>(null);
   const user = useAuth((s) => s.user);
   const status = useAuth((s) => s.status);
   const isAdmin = status === "anonymous" || user?.role === ROLE.admin;
@@ -94,6 +101,11 @@ export function AdminTasksPage() {
     <div className="main flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <h1 className="text-base font-semibold">定时任务</h1>
+        {/* #40：admin 新建 system 任务（全域+权限开关在弹窗内定） */}
+        <Button className="h-7 px-2 text-xs" onClick={() => setDialogTask("new")} data-testid="task-create-btn">
+          <PlusIcon size={12} strokeWidth={IW} />
+          新建
+        </Button>
       </header>
       <div className="flex-1 overflow-y-auto p-6">
         {err && <p className="mx-auto mb-4 max-w-4xl text-sm text-destructive">{err}</p>}
@@ -107,6 +119,7 @@ export function AdminTasksPage() {
                 expanded={expanded === t.id}
                 onToggle={() => openHistory(t)}
                 onChanged={reload}
+                onEdit={() => setDialogTask(t)}
               />
             ))}
             {tasks.length === 0 && (
@@ -115,6 +128,13 @@ export function AdminTasksPage() {
           </div>
         )}
       </div>
+      {dialogTask !== null && (
+        <TaskDialog
+          task={dialogTask === "new" ? null : dialogTask}
+          onClose={() => setDialogTask(null)}
+          onSaved={reload}
+        />
+      )}
     </div>
   );
 }
@@ -124,16 +144,19 @@ function TaskRow({
   expanded,
   onToggle,
   onChanged,
+  onEdit,
 }: {
   task: ScheduledTask;
   expanded: boolean;
   onToggle: () => void;
   onChanged: () => void;
+  onEdit: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [running, setRunning] = useState(false);
   const [runs, setRuns] = useState<TaskRun[] | null>(null);
   const isSystem = task.scope === "system";
+  const isDistill = task.id === DISTILL_TASK_ID;
 
   // 展开即拉历史（手动跑后 task.unreadRuns 变化 → 重拉：展开态能看到新 run 行）
   useEffect(() => {
@@ -191,15 +214,43 @@ function TaskRow({
             跑
           </Button>
           {isSystem ? (
-            // system 只读（停/删仅经 admin UI 的启停；v1 seed 保持禁用态展示）——删除不可用
-            <Button
-              variant="outline"
-              className="h-7 px-2 text-xs"
-              onClick={() => void setTaskEnabled(task.id, !task.enabled).then(onChanged)}
-            >
-              {task.enabled ? <PauseIcon size={12} strokeWidth={IW} /> : <PlayIcon size={12} strokeWidth={IW} />}
-              {task.enabled ? "停" : "启"}
-            </Button>
+            // #40/ADR-0023 决策 4：admin 经 UI 全管理——编辑（蒸馏 seed=冻结形态）+ 启停 + 删除
+            // （蒸馏 seed 不可删——服务端 403 兜底，UI 不出删除钮）
+            <>
+              <Button
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={onEdit}
+                title={isDistill ? "编辑（仅触发频率）" : "编辑任务"}
+                data-testid="task-edit-btn"
+              >
+                <PencilSimpleIcon size={12} strokeWidth={IW} />
+              </Button>
+              <Button
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => void setTaskEnabled(task.id, !task.enabled).then(onChanged)}
+              >
+                {task.enabled ? <PauseIcon size={12} strokeWidth={IW} /> : <PlayIcon size={12} strokeWidth={IW} />}
+                {task.enabled ? "停" : "启"}
+              </Button>
+              {!isDistill && (
+                confirming ? (
+                  <span className="flex items-center gap-1">
+                    <button className="text-[11px] text-destructive hover:underline" onClick={() => void deleteTask(task.id).then(onChanged)} data-testid="confirm-delete">
+                      确认删除
+                    </button>
+                    <button className="text-[11px] text-muted-foreground hover:underline" onClick={() => setConfirming(false)}>
+                      取消
+                    </button>
+                  </span>
+                ) : (
+                  <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => setConfirming(true)} data-testid="delete-task">
+                    <TrashIcon size={12} strokeWidth={IW} />
+                  </Button>
+                )
+              )}
+            </>
           ) : confirming ? (
             <span className="flex items-center gap-1">
               <button className="text-[11px] text-destructive hover:underline" onClick={() => void deleteTask(task.id).then(onChanged)} data-testid="confirm-delete">

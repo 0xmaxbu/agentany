@@ -5,6 +5,9 @@ import { test, expect } from "@playwright/test";
 //    （stub 产出会话落消息）→ 未读 badge 点开即清 → 删除。
 // ② member ContextPanel「我的任务」：自己的任务（跑/停/删）+ 无 admin 入口。
 // 身份：①dev 匿名=admin（含 system seed 可见）；②member-e2e 真账号（API 登录塞 token，admin.spec 先例）。
+//
+// #40/M6-2 admin system 任务弹窗（ADR-0023）：③新建弹窗全流程（填表→提交→列表新行）
+// ④编辑弹窗改 cron（nextFire 重算生效）⑤蒸馏 seed 编辑仅 cron 可改（prompt 只读+说明）。
 
 test("admin 定时任务管理：全量列表 + 展开 + 停/启 + 手动跑 + 未读清零 + 删除", async ({ page }) => {
   // 造一个真任务（admin 身份走 REST——UI 建流在 chat 卡链路，此处聚焦管理面）
@@ -13,6 +16,7 @@ test("admin 定时任务管理：全量列表 + 展开 + 停/启 + 手动跑 + �
     data: { displayName: name, cron: "0 */4 * * *", prompt: "e2e 测试任务目标" },
   });
   expect(created.ok()).toBe(true);
+  const taskId: string = ((await created.json()) as { id: string }).id;
 
   await page.goto("/admin/tasks");
   await expect(page.locator("h1")).toHaveText("定时任务", { timeout: 10_000 });
@@ -39,6 +43,7 @@ test("admin 定时任务管理：全量列表 + 展开 + 停/启 + 手动跑 + �
   await expect(row.locator("[data-testid=task-runs] li").first()).toContainText("手动");
 
   // 未读 badge：再跑一次 → reload 出 badge → 点开（展开已开则收起再开）→ 清零
+  const runsBefore = (await (await page.request.get(`/scheduled-tasks/${taskId}/runs`)).json()) as { id: number }[];
   await row.locator("[data-testid=run-now]").click();
   await page.reload();
   await expect(page.locator("[data-testid=tasks-table] > div", { hasText: name }).first().locator("[data-testid=unread-badge]")).toBeVisible({ timeout: 5_000 });
@@ -47,7 +52,8 @@ test("admin 定时任务管理：全量列表 + 展开 + 停/启 + 手动跑 + �
   await page.reload();
   await expect(page.locator("[data-testid=tasks-table] > div", { hasText: name }).first().locator("[data-testid=unread-badge]")).toHaveCount(0, { timeout: 5_000 });
 
-  // 删除（确认内联）→ 行消失
+  // 删除（确认内联）→ 行消失（#39：删前等 run 收口——在跑 409）
+  await waitForRunFinished(page, taskId, runsBefore.length ? runsBefore[runsBefore.length - 1].id : null);
   const row3 = page.locator("[data-testid=tasks-table] > div", { hasText: name }).first();
   await row3.locator("[data-testid=delete-task]").click();
   await row3.locator("[data-testid=confirm-delete]").click();
@@ -93,7 +99,8 @@ test("member 我的任务：ContextPanel 自管（跑/停/删）+ 无 admin 入�
   await expect(item).toBeVisible();
   await page.locator("[data-testid=my-task-item]", { hasText: name }).locator("button[title='启用']").click();
 
-  // 删除（确认）→ 面板消失
+  // 删除（确认）→ 面板消失（#39：删前等 run 收口——在跑 409）
+  await waitForRunFinished(page, taskId, null);
   await page.locator("[data-testid=my-task-item]", { hasText: name }).locator("button[title='删除']").click();
   await page.locator("[data-testid=my-task-item]", { hasText: name }).locator("button", { hasText: "删" }).click();
   await expect(page.locator("[data-testid=my-task-item]", { hasText: name })).toHaveCount(0, { timeout: 5_000 });
@@ -104,4 +111,114 @@ test("member 我的任务：ContextPanel 自管（跑/停/删）+ 无 admin 入�
 
   // 清 token（串行后续 spec 回匿名态）
   await page.evaluate(() => localStorage.removeItem("agentany.token.v1"));
+});
+
+// #39 后 DELETE 撞在跑 → 409（与手动跑同口径）：删前等最新 run 收口（e2e 时序适配，非产品缺陷）。
+async function waitForRunFinished(page: import("@playwright/test").Page, taskId: string, runId: number | null): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const r = await page.request.get(`/scheduled-tasks/${taskId}/runs`);
+    if (r.ok()) {
+      const runs = (await r.json()) as { id: number; finishedAt: string | null }[];
+      const latest = runs[runs.length - 1];
+      if (latest && latest.id !== runId && latest.finishedAt != null) return;
+    }
+    await new Promise((res) => setTimeout(res, 300));
+  }
+}
+
+test("admin 新建 system 任务弹窗：填表（含权限开关）→ 提交 → 列表新行", async ({ page }) => {
+  await page.goto("/admin/tasks");
+  await expect(page.locator("h1")).toHaveText("定时任务", { timeout: 10_000 });
+
+  await page.locator("[data-testid=task-create-btn]").click();
+  const dlg = page.locator("[data-testid=task-dialog]");
+  await expect(dlg).toBeVisible();
+
+  // 范围区为固定 System（全域）徽标——无 ws 选择器
+  await expect(dlg.locator("[data-testid=scope-badge]")).toHaveText("System（全域）");
+  await expect(dlg.locator("select")).toHaveCount(0);
+
+  const name = `系统巡检-${Date.now().toString(36).slice(-5)}`;
+  await dlg.locator("[data-testid=task-form-name]").fill(name);
+  await dlg.locator("[data-testid=task-form-cron]").fill("30 6 * * 2");
+  await dlg.locator("[data-testid=task-form-prompt]").fill("巡检全部 ws 的产出目录并汇总异常");
+  // 权限开关：关写（巡检类只读）+ 关搜索（默认已关，点一下开再关回验证交互）
+  await dlg.locator("[data-testid=task-form-allowwrite]").click();
+  await dlg.locator("[data-testid=task-form-allowsearch]").click();
+  await dlg.locator("[data-testid=task-form-allowsearch]").click();
+  // allowWrite 关 → 严格语义提示可见
+  await expect(dlg.locator("[data-testid=readonly-note]")).toBeVisible();
+
+  await dlg.locator("[data-testid=task-submit]").click();
+  await expect(dlg).toHaveCount(0, { timeout: 5_000 });
+
+  // 列表新行：名称 + cron + system 徽标
+  const row = page.locator("[data-testid=tasks-table] > div", { hasText: name });
+  await expect(row.first()).toBeVisible({ timeout: 5_000 });
+  await expect(row.first()).toContainText("30 6 * * 2");
+  await expect(row.first()).toContainText("system");
+
+  // 清理（e2e 数据库复用）
+  await row.first().locator("[data-testid=delete-task]").click();
+  await page.locator("[data-testid=confirm-delete]").click();
+  await expect(page.locator("[data-testid=tasks-table] > div", { hasText: name })).toHaveCount(0, { timeout: 5_000 });
+});
+
+test("admin 编辑 system 任务弹窗：预填 + 改 cron → 行内 cron 更新", async ({ page }) => {
+  // 造一个 system 任务（REST admin 建——#39 放开面）
+  const name = `可编辑任务-${Date.now().toString(36).slice(-5)}`;
+  const created = await page.request.post("/scheduled-tasks", {
+    data: { scope: "system", displayName: name, cron: "0 5 * * 1", prompt: "初始目标" },
+  });
+  expect(created.ok()).toBe(true);
+
+  await page.goto("/admin/tasks");
+  const row = page.locator("[data-testid=tasks-table] > div", { hasText: name }).first();
+  await expect(row).toBeVisible({ timeout: 10_000 });
+
+  await row.locator("[data-testid=task-edit-btn]").click();
+  const dlg = page.locator("[data-testid=task-dialog]");
+  await expect(dlg).toBeVisible();
+  // 预填现值
+  await expect(dlg.locator("[data-testid=task-form-name]")).toHaveValue(name);
+  await expect(dlg.locator("[data-testid=task-form-cron]")).toHaveValue("0 5 * * 1");
+  await expect(dlg.locator("[data-testid=task-form-prompt]")).toHaveValue("初始目标");
+
+  // 改 cron 提交 → 行内更新（nextFireAt 服务端重算）
+  await dlg.locator("[data-testid=task-form-cron]").fill("15 7 * * 3");
+  await dlg.locator("[data-testid=task-submit]").click();
+  await expect(dlg).toHaveCount(0, { timeout: 5_000 });
+  await expect(page.locator("[data-testid=tasks-table] > div", { hasText: name }).first()).toContainText("15 7 * * 3", { timeout: 5_000 });
+
+  // 清理
+  await page.locator("[data-testid=tasks-table] > div", { hasText: name }).first().locator("[data-testid=delete-task]").click();
+  await page.locator("[data-testid=confirm-delete]").click();
+  await expect(page.locator("[data-testid=tasks-table] > div", { hasText: name })).toHaveCount(0, { timeout: 5_000 });
+});
+
+test("蒸馏 seed 编辑弹窗：仅 cron 可编辑，prompt 只读 + 说明", async ({ page }) => {
+  await page.goto("/admin/tasks");
+  const seedRow = page.locator("[data-testid=tasks-table] > div", { hasText: "经验蒸馏" });
+  await expect(seedRow).toBeVisible({ timeout: 10_000 });
+
+  await seedRow.locator("[data-testid=task-edit-btn]").click();
+  const dlg = page.locator("[data-testid=task-dialog]");
+  await expect(dlg).toBeVisible();
+
+  // 蒸馏形态：cron 可输入；prompt 只读展示 + 说明文案；displayName/权限开关不可编辑（禁用态）
+  await expect(dlg.locator("[data-testid=task-form-cron]")).toBeEnabled();
+  await expect(dlg.locator("[data-testid=task-form-prompt]")).toBeDisabled();
+  await expect(dlg.locator("[data-testid=distill-note]")).toBeVisible();
+  await expect(dlg.locator("[data-testid=task-form-name]")).toBeDisabled();
+  await expect(dlg.locator("[data-testid=task-form-allowwrite]")).toBeDisabled();
+
+  // 改 cron 可提交（唯一可改字段）
+  await dlg.locator("[data-testid=task-form-cron]").fill("20 4 * * 4");
+  await dlg.locator("[data-testid=task-submit]").click();
+  await expect(dlg).toHaveCount(0, { timeout: 5_000 });
+  await expect(page.locator("[data-testid=tasks-table] > div", { hasText: "经验蒸馏" })).toContainText("20 4 * * 4", { timeout: 5_000 });
+
+  // 蒸馏行无删除钮（冻结——不可新建第二个蒸馏、不可删）
+  await expect(page.locator("[data-testid=tasks-table] > div", { hasText: "经验蒸馏" }).locator("[data-testid=delete-task]")).toHaveCount(0);
 });

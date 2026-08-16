@@ -192,8 +192,13 @@ export interface ScheduledTask {
   nextFireAt: string;
   enabled: boolean;
   createdAt: string;
+  allowWrite?: boolean; // #39/ADR-0023：system 任务写权限（缺省开；false=全域只读，产出仅日志）
+  allowSearch?: boolean; // #39/ADR-0023：搜索工具加载开关（缺省关；工具层权限）
   unreadRuns?: number;
 }
+
+/** 蒸馏 seed 任务 id（服务端 execute.ts DISTILL_TASK_ID 同契约——唯一冻结特判：仅 cron 可改）。 */
+export const DISTILL_TASK_ID = "t_seed_distill";
 export interface TaskRun {
   id: number;
   taskId: string;
@@ -227,6 +232,29 @@ export async function deleteTask(taskId: string): Promise<Response> {
 }
 export async function markTaskViewed(taskId: string): Promise<void> {
   await apiFetch(`/scheduled-tasks/${taskId}/view`, { method: "POST" });
+}
+
+/** #40：admin 建 system 任务（ADR-0023——workspaceId 恒 null、无产出会话，服务端定）。 */
+export async function createSystemTask(body: {
+  displayName: string; cron: string; prompt: string; allowWrite?: boolean; allowSearch?: boolean;
+}): Promise<ScheduledTask> {
+  const r = await apiFetch("/scheduled-tasks", {
+    method: "POST", headers: jsonHeaders,
+    body: JSON.stringify({ ...body, scope: "system" }),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `createSystemTask: ${r.status}`);
+  return r.json();
+}
+
+/** #40：admin 改任务（system 全字段；蒸馏 seed 仅 cron——服务端闸，前端表单同口径收窄）。 */
+export async function updateTask(taskId: string, patch: {
+  displayName?: string; cron?: string; prompt?: string; allowWrite?: boolean; allowSearch?: boolean;
+}): Promise<ScheduledTask> {
+  const r = await apiFetch(`/scheduled-tasks/${taskId}`, {
+    method: "PATCH", headers: jsonHeaders, body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `updateTask: ${r.status}`);
+  return r.json();
 }
 
 export async function abortConversation(conversationId: string): Promise<void> {
