@@ -82,14 +82,14 @@ describe("POST /scheduled-tasks（建任务 tracer）", () => {
     expect(deps.store.getConversation(task.outputConversationId)!.workspaceId).toBe("ws_company");
   });
 
-  test("scope=system 经 API 直建 → 400/403 拒（仅 seed/代码可建）", async () => {
+  test("scope=system 经 API 直建：member 403（#39/ADR-0023 决策 4——admin 放开，member 仍拒）", async () => {
     const app = createApp(makeDeps());
-    const { admin } = await mkUsers(app);
+    const { member } = await mkUsers(app);
     const res = await app.request("/scheduled-tasks", {
-      method: "POST", headers: admin,
+      method: "POST", headers: member,
       body: JSON.stringify(taskBody({ scope: "system" })),
     });
-    expect([400, 403]).toContain(res.status);
+    expect(res.status).toBe(403); // 旧语义（400/403 拒 admin 也拒）已随 ADR-0021 决策 7 修订作废
   });
 
   test("频率下限：相邻火点 <1h（*/30 分钟）→ 422", async () => {
@@ -373,8 +373,10 @@ describe("管理闭环（#27）：runs 历史 + 未读数点开即清 + 启停�
     expect(((await adminStop.json()) as any).enabled).toBe(false);
     const adminStart = await app.request(`/scheduled-tasks/${seed.id}/enable`, { method: "PATCH", headers: admin, body: JSON.stringify({ enabled: true }) });
     expect(((await adminStart.json()) as any).enabled).toBe(true);
-    // admin 改 system → 403（system scope 拒改——只许停/启/删，不许改内容）
+    // admin 改 system cron → 200（#39/ADR-0023 决策 4 修订：seed 仅 cron 可改，其余字段 403）
     const adminPatch = await app.request(`/scheduled-tasks/${seed.id}`, { method: "PATCH", headers: admin, body: JSON.stringify({ cron: "0 */5 * * *" }) });
-    expect(adminPatch.status).toBe(403);
+    expect(adminPatch.status).toBe(200);
+    const adminPatchFrozen = await app.request(`/scheduled-tasks/${seed.id}`, { method: "PATCH", headers: admin, body: JSON.stringify({ prompt: "x" }) });
+    expect(adminPatchFrozen.status).toBe(403);
   });
 });

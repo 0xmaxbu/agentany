@@ -19,6 +19,7 @@ export interface RunPiOptions {
   extraEnv?: Record<string, string | undefined>; // per-turn 注入（bridge nonce/url 等，#11）
   loopbackPorts?: number[]; // 沙箱 loopback 窄放行（bridge RPC，#11）
   appendSystemPrompt?: string[]; // --append-system-prompt（可多次；#15 chat 基础 system / #17 PROJECT.md）
+  sandboxAllow?: { rw: string[]; ro: string[] }; // #39/ADR-0023：显式沙箱白名单覆盖（默认推导 [cwd,sessionDir] rw）
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -95,17 +96,21 @@ async function spawnPiCore(opts: RunPiStreamOptions): Promise<RunPiResult> {
   // 其余（.env/DB/源码/家目录/其它项目）不可达、网络全禁。逃生阀 AGENTANY_NO_SANDBOX=1 直通。
   // 扩展父目录加入 ro：pi 经 -e 加载的扩展（含其同侧 import，如 chat-bridge→bridge-core）需可读。
   // skills/ 下扩展已被 repoSkillsDir() 覆盖；chat/extensions/ 等非 skills 扩展靠此处放行（ticket #12）。
+  // #39/ADR-0023：sandboxAllow 显式覆盖（system 任务全域白名单）；默认路径 ro 逐 skill 目录放行
+  // （#37 后真相源在 knowledge/skills/<name>——逐目录而非其父，knowledge/ 根（experience/learnings/
+  // distill-state）对 pi 不可见，学习域排除）。
   const extDirs = Array.from(new Set((opts.extensions ?? []).map(dirname)));
+  const skillPaths = repoSkillPaths();
   const plan = wrapSpawn({
     argv: [piBin, ...buildArgs(opts)],
     cwd,
     env: childEnv(opts.extraEnv),
     net: "deny",
     loopbackPorts: opts.loopbackPorts,
-    allow: {
+    allow: opts.sandboxAllow ?? {
       rw: [cwd, opts.sessionDir].filter((p): p is string => !!p),
       // ro 放行 skill 目录真相源：repoSkillPaths 的根（#37/Spec-3 后=knowledge 副本优先，回落代码仓）
-      ro: [dirname(repoSkillPaths()[0] ?? repoSkillsDir()), ...extDirs],
+      ro: [dirname(skillPaths[0] ?? repoSkillsDir()), ...extDirs],
     },
   });
   const proc = spawn(plan.argv[0], plan.argv.slice(1), {

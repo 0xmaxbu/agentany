@@ -23,6 +23,8 @@ export interface ScheduledTaskRow {
   nextFireAt: string;
   enabled: boolean;
   createdAt: string;
+  allowWrite: boolean; // #39/ADR-0023：system 任务写权限（缺省开；false=全域只读，rw 仅 sessionDir）
+  allowSearch: boolean; // #39/ADR-0023：搜索工具加载开关（缺省关；工具层权限非网络层）
 }
 
 export interface TaskRunRow {
@@ -49,14 +51,17 @@ export class ScheduledTaskStore {
   constructor(private db: BunSQLiteDatabase<any>, private workflowStore?: WorkflowStore) {}
 
   createTask(p: {
+    id?: string; // 测试/seed 造固定 id 行（如蒸馏 t_seed_distill）
     scope: TaskScope; workspaceId: string | null; displayName: string; cron: string; prompt: string;
     outputConversationId: string | null; creatorId: string; nextFireAt: string;
+    allowWrite?: boolean; allowSearch?: boolean;
   }): ScheduledTaskRow {
     const row: ScheduledTaskRow = {
-      id: "t_" + globalThis.crypto.randomUUID(),
+      id: p.id ?? "t_" + globalThis.crypto.randomUUID(),
       scope: p.scope, workspaceId: p.workspaceId, displayName: p.displayName, cron: p.cron,
       prompt: p.prompt, outputConversationId: p.outputConversationId, creatorId: p.creatorId,
       nextFireAt: p.nextFireAt, enabled: true, createdAt: now(),
+      allowWrite: p.allowWrite ?? true, allowSearch: p.allowSearch ?? false,
     };
     this.db.insert(scheduledTasks).values(row).run();
     return row;
@@ -82,6 +87,7 @@ export class ScheduledTaskStore {
         id: taskId, scope: "workspace", workspaceId: p.workspaceId, displayName: p.displayName,
         cron: p.cron, prompt: p.prompt, outputConversationId: convId, creatorId: p.creatorId,
         nextFireAt: p.firstFireAt, enabled: true, createdAt: now(),
+        allowWrite: true, allowSearch: false, // workspace 任务不消费（缺省值显式落列）
       }).run();
       row = this.getTask(taskId);
     });
@@ -136,10 +142,10 @@ export class ScheduledTaskStore {
     this.db.update(scheduledTasks).set({ nextFireAt }).where(eq(scheduledTasks.id, id)).run();
   }
 
-  updateTask(id: string, patch: { displayName?: string; cron?: string; prompt?: string; nextFireAt?: string }): ScheduledTaskRow | undefined {
+  updateTask(id: string, patch: { displayName?: string; cron?: string; prompt?: string; nextFireAt?: string; allowWrite?: boolean; allowSearch?: boolean }, allowSystem = false): ScheduledTaskRow | undefined {
     const cur = this.getTask(id);
     if (!cur) return undefined;
-    if (cur.scope === "system") throw new SystemTaskProtected(id);
+    if (cur.scope === "system" && !allowSystem) throw new SystemTaskProtected(id); // #39：admin 路由传 true（chat/LLM 侧仍默认拒）
     this.db.update(scheduledTasks).set(patch).where(eq(scheduledTasks.id, id)).run();
     return this.getTask(id);
   }

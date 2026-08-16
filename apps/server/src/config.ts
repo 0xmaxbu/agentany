@@ -61,6 +61,11 @@ export const workspaceSessionDir = (workspaceId: string): string =>
 export const generalWorkspacePath = (): string => resolve(dataDir(), "general", "workspace");
 export const generalSessionDir = (): string => resolve(dataDir(), "general", "pi-sessions");
 
+// #39/ADR-0023：system 任务专属 session 目录（data/tasks/<taskId>/pi-sessions）。
+// 不复用 generalSessionDir——那是 chat 会话共用区，任务 pi 会 ls 到其它成员会话历史（历史域排除）。
+export const taskSessionDir = (taskId: string): string =>
+  resolve(dataDir(), "tasks", taskId, "pi-sessions");
+
 // 仓库根（skill/extension 绝对路径解析用）。
 export const repoSkillsPath = (name: string): string => `${REPO_ROOT}skills/${name}`;
 export const repoExtensionPath = (sub: string): string => `${REPO_ROOT}skills/${sub}`;

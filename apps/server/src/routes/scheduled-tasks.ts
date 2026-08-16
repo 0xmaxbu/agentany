@@ -1,6 +1,7 @@
 // 定时任务路由（#25 建任务 tracer + #26 手动调用 + #27 管理闭环）。
 // 权限口径：member=自己的任务（他人 404 不泄漏）；system 任务 member 一律 403 硬拒
-// （ADR-0021 决策 7——chat LLM 删/停蒸馏同样被这道服务端闸挡住）；admin 全量可管。
+// （ADR-0021 决策 7 修订/#39：admin 经 API 全管理 system——建/改含权限双列、删须无在跑 409；
+// chat LLM 工具侧仍拒，见 bridge /task/*）。
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import type { RunDeps } from "../runs";
@@ -8,12 +9,14 @@ import { userRoleOf, principalOf, userIdOf, type AppEnv } from "../auth/middlewa
 import { resolveRequestWorkspace } from "../workspaces/guard";
 import { InvalidCron, TooFrequent, validateCronAndFirstFire } from "../scheduled-tasks/cron";
 import { SystemTaskProtected, type ScheduledTaskRow, type TaskRunRow } from "../scheduled-tasks/store";
+import { DISTILL_TASK_ID } from "../scheduled-tasks/execute";
 import { jsonBody } from "../http";
 
 const toTask = (t: ScheduledTaskRow): Record<string, unknown> => ({
   id: t.id, scope: t.scope, workspaceId: t.workspaceId, displayName: t.displayName,
   cron: t.cron, prompt: t.prompt, outputConversationId: t.outputConversationId,
   creatorId: t.creatorId, nextFireAt: t.nextFireAt, enabled: t.enabled, createdAt: t.createdAt,
+  allowWrite: t.allowWrite, allowSearch: t.allowSearch,
 });
 
 /** 任务可见性：admin 全量；member 仅 creatorId=自己（system 行对 member 一律不可见——含 seed）。 */
@@ -47,6 +50,7 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
 
   // 建（#24 故事 1/2/11）：登录即可（member 自建自批，ADR-0021 决策 5——无 admin 审批步）。
   // CommandPolicy 门在切片 2 的 bridge 层（LLM 建流）；API 层此处只挡格式/频率/scope。
+  // #39/ADR-0023 决策 4：scope=system 放开为 admin-only（member 仍 403）——无产出会话、workspaceId 恒 null。
   app.post("/scheduled-tasks", async (c) => {
     const body = await jsonBody(c);
     const displayName: unknown = body.displayName;
@@ -55,10 +59,17 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
     if (typeof displayName !== "string" || displayName.length === 0) return c.json({ error: "displayName required" }, 400);
     if (typeof prompt !== "string" || prompt.length === 0) return c.json({ error: "prompt required" }, 400);
     if (typeof cron !== "string") return c.json({ error: "cron required" }, 400);
-    if (body.scope === "system") return c.json({ error: "system tasks are seeded, not created via API" }, 403);
-    // ws 解析与建会话同口径：缺省公司 ws；提供则格式→存在性/权限。
-    const r = resolveRequestWorkspace(deps.workspaceStore, body.workspaceId, principalOf(c));
-    if (!r.ok) return c.json({ error: r.error }, r.status);
+    // 权限双列（#39）：缺省 allowWrite=true/allowSearch=false；类型错 400
+    let allowWrite = true;
+    let allowSearch = false;
+    if (body.allowWrite !== undefined) {
+      if (typeof body.allowWrite !== "boolean") return c.json({ error: "allowWrite must be boolean" }, 400);
+      allowWrite = body.allowWrite;
+    }
+    if (body.allowSearch !== undefined) {
+      if (typeof body.allowSearch !== "boolean") return c.json({ error: "allowSearch must be boolean" }, 400);
+      allowSearch = body.allowSearch;
+    }
     let firstFire: string;
     try {
       firstFire = validateCronAndFirstFire(cron);
@@ -67,6 +78,19 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
       if (errRes) return errRes;
       throw e;
     }
+    // system 分支（admin-only）：headless——无产出会话、workspaceId=null（逻辑全域，ADR-0023 决策 1）
+    if (body.scope === "system") {
+      if (userRoleOf(c) !== "admin") return c.json({ error: "system tasks are admin-only" }, 403);
+      const task = ts().createTask({
+        scope: "system", workspaceId: null, displayName, cron, prompt,
+        outputConversationId: null, creatorId: userIdOf(c),
+        nextFireAt: firstFire, allowWrite, allowSearch,
+      });
+      return c.json(toTask(task), 201);
+    }
+    // ws 解析与建会话同口径：缺省公司 ws；提供则格式→存在性/权限。
+    const r = resolveRequestWorkspace(deps.workspaceStore, body.workspaceId, principalOf(c));
+    if (!r.ok) return c.json({ error: r.error }, r.status);
     const task = ts().createWorkspaceTask({
       displayName, cron, prompt,
       workspaceId: r.workspaceId, creatorId: userIdOf(c),
@@ -112,20 +136,36 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
   });
 
   // 改任务（#24 故事「对话改任务」的 API 面；切片 2 chat 流复用）：cron 变更重算 nextFireAt。
-  // system 拒改（admin 也不行——只许停/启/删，内容是代码 seed 的真相）。
+  // #39/ADR-0023 决策 4：system 放开为 admin 可改（member 已在 loadTask 403）——含权限双列。
+  // 蒸馏 seed 冻结：仅 cron（蒸馏链不消费 prompt，改了不生效的控件=欺骗用户；不可删）。
   app.patch("/scheduled-tasks/:id", async (c) => {
     const { task, err } = loadTask(c);
     if (!task) return err!;
-    if (task.scope === "system") return c.json({ error: "system tasks cannot be edited" }, 403);
+    const isSystem = task.scope === "system";
+    const isSeed = isSystem && task.id === DISTILL_TASK_ID;
     const body = await jsonBody(c);
-    const patch: { displayName?: string; cron?: string; prompt?: string } = {};
+    const patch: { displayName?: string; cron?: string; prompt?: string; allowWrite?: boolean; allowSearch?: boolean } = {};
     if (body.displayName !== undefined) {
+      if (isSeed) return c.json({ error: "distill seed is frozen: only cron is editable" }, 403);
       if (typeof body.displayName !== "string" || body.displayName.length === 0) return c.json({ error: "invalid displayName" }, 400);
       patch.displayName = body.displayName;
     }
     if (body.prompt !== undefined) {
+      if (isSeed) return c.json({ error: "distill seed is frozen: only cron is editable" }, 403);
       if (typeof body.prompt !== "string" || body.prompt.length === 0) return c.json({ error: "invalid prompt" }, 400);
       patch.prompt = body.prompt;
+    }
+    if (body.allowWrite !== undefined) {
+      if (isSeed) return c.json({ error: "distill seed is frozen: only cron is editable" }, 403);
+      if (!isSystem) return c.json({ error: "allowWrite applies to system tasks only" }, 400);
+      if (typeof body.allowWrite !== "boolean") return c.json({ error: "allowWrite must be boolean" }, 400);
+      patch.allowWrite = body.allowWrite;
+    }
+    if (body.allowSearch !== undefined) {
+      if (isSeed) return c.json({ error: "distill seed is frozen: only cron is editable" }, 403);
+      if (!isSystem) return c.json({ error: "allowSearch applies to system tasks only" }, 400);
+      if (typeof body.allowSearch !== "boolean") return c.json({ error: "allowSearch must be boolean" }, 400);
+      patch.allowSearch = body.allowSearch;
     }
     if (body.cron !== undefined) {
       if (typeof body.cron !== "string") return c.json({ error: "invalid cron" }, 400);
@@ -139,7 +179,7 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
       patch.cron = body.cron;
     }
     if (Object.keys(patch).length === 0) return c.json({ error: "nothing to update" }, 400);
-    ts().updateTask(task.id, patch);
+    ts().updateTask(task.id, patch, userRoleOf(c) === "admin");
     if (patch.cron) ts().recomputeNextFire(task.id); // cron 变了才重算（displayName/prompt 不动调度）
     return c.json(toTask(ts().getTask(task.id)!));
   });
@@ -161,10 +201,15 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
   });
 
   // 删（#24 故事 8）：member 自己的（runs/files 级联清）；system 仅 admin。
+  // #39/ADR-0023 决策 4：删除撞在跑 → 409（与手动跑同口径）；蒸馏 seed 不可删（冻结）。
   app.delete("/scheduled-tasks/:id", (c) => {
     const u = principalOf(c);
     const { task, err } = loadTask(c);
     if (!task) return err!;
+    if (task.scope === "system" && task.id === DISTILL_TASK_ID) {
+      return c.json({ error: "distill seed cannot be deleted" }, 403);
+    }
+    if (deps.scheduler?.isRunning(task.id)) return c.json({ error: "task is running" }, 409);
     try {
       const ok = ts().deleteTask(task.id, u.role === "admin");
       return ok ? c.json({ deleted: true }) : c.json({ error: "task not found" }, 404);

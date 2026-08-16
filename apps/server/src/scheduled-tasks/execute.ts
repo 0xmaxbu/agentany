@@ -6,8 +6,8 @@
 // 不能 start_workflow/ask_user，loopback 无端口）；错误转为产出会话内的可读说明。
 // system 任务（#32/M4-5）走 headless：无产出会话，pi 一次性跑（makeRunPi 路径，
 // 同 taskId 固定 session 跨执行连续），产出=task_runs 日志（note 记失败详情，管理页可读）。
-import { repoExtensionPath } from "../config";
-import { makeRunPi } from "../pi/runPi-factory";
+import { repoExtensionPath, generalWorkspacePath, workspaceWorkspacePath, taskSessionDir, repoSkillPaths } from "../config";
+import { runPi } from "../pi/runPi";
 import { runTurn, type TurnSend } from "../chat/turn";
 import type { ConversationQueues } from "../chat/queue";
 import type { EventBus, Frame } from "../chat/eventbus";
@@ -17,6 +17,7 @@ import { runDistill } from "../knowledge/distill";
 import type { RunDeps } from "../runs";
 import type { ScheduledTaskRow, TaskRunTrigger } from "./store";
 import { WRITE_TOOLS, wsRelativePath } from "./files";
+import { COMPANY_WORKSPACE_ID, type WorkspaceStore } from "../workspaces/store";
 
 // 蒸馏 seed 任务 id（迁移 0013 种的 system 任务——executeTask 以此特判走蒸馏链）。
 export const DISTILL_TASK_ID = "t_seed_distill";
@@ -25,6 +26,20 @@ export const DISTILL_TASK_ID = "t_seed_distill";
 export const TASK_EXTENSIONS: string[] = [
   repoExtensionPath("tavily-search/extensions/web-search.ts"),
 ];
+
+/**
+ * #39/ADR-0023 决策 1：全域=全部 ws 的 workspace 目录（公司 ws→general 路径 + 其余→
+ * data/workspaces/<id>/workspace），执行时动态解析（新建 ws 自动纳入）。
+ * DB/knowledge/pi-sessions 三域不在列（deny 侧默认拒——不进白名单即不可见）。
+ */
+export function fullDomainWorkspaceDirs(workspaceStore?: WorkspaceStore): string[] {
+  const dirs = [generalWorkspacePath()]; // 公司 ws（ws_company 锚 general 路径）
+  for (const w of workspaceStore?.listAllWorkspaces() ?? []) {
+    if (w.id === COMPANY_WORKSPACE_ID) continue; // 已含（general 路径）
+    dirs.push(workspaceWorkspacePath(w.id));
+  }
+  return Array.from(new Set(dirs));
+}
 
 // 任务 turn 的 system 追加：无人值守语境（无桥接工具、无交互语义）。
 const TASK_SYSTEM_PROMPT = `你是 agentany 的定时任务执行器，正在无人值守地执行一个周期任务。
@@ -60,10 +75,24 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
           const r = await runDistill(deps, deps.runPiFactory);
           deps.taskStore!.finishRun(runId, { status: r.ok ? "ok" : "failed", note: r.note });
         } else {
-          const runPi = (deps.runPiFactory ?? makeRunPi)({
-            extensions: TASK_EXTENSIONS, scope: "general", workspaceId: null, sessionId: `task-${task.id}`,
+          // #39/ADR-0023：通用 system 任务=全域白名单 + 任务级权限开关。
+          // 全域=全部 ws workspace 目录（动态解析）；allowWrite=false → 全 ro、rw 仅任务 sessionDir
+          // （沙箱全盘禁写下唯一可写——/tmp 也不可写）；allowSearch=false → 不加载搜索扩展（工具层）。
+          // sessionDir=data/tasks/<id>/pi-sessions（任务专属——不与 chat 会话共用区混放，历史域排除）。
+          const wsDirs = fullDomainWorkspaceDirs(deps.workspaceStore);
+          const sessionDir = taskSessionDir(task.id);
+          const extensions = task.allowSearch ? TASK_EXTENSIONS : [];
+          await runPi({
+            prompt: task.prompt,
+            sessionId: `task-${task.id}`,
+            sessionDir,
+            cwd: generalWorkspacePath(), // pi 启动目录锚公司 ws（跨 ws 经绝对路径触达）
+            extensions,
+            sandboxAllow: {
+              rw: task.allowWrite ? [...wsDirs, sessionDir] : [sessionDir],
+              ro: task.allowWrite ? [...repoSkillPaths()] : [...wsDirs, ...repoSkillPaths()],
+            },
           });
-          await runPi({ prompt: task.prompt });
           deps.taskStore!.finishRun(runId, { status: "ok" });
         }
       } catch (e) {

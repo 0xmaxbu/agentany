@@ -120,6 +120,13 @@
       "when": 1786961000000,
       "tag": "0016_feedback_author",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1787136000000,
+      "tag": "0017_system_task_permissions",
+      "breakpoints": true
     }
   ]
 }

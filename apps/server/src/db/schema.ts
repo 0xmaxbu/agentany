@@ -148,6 +148,9 @@ export const scheduledTasks = sqliteTable(
     nextFireAt: text("nextFireAt").notNull(), // ISO——调度扫描键
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     createdAt: text("createdAt").notNull(),
+    // #39/ADR-0023 决策 3：system 任务任务级最小权限（workspace 任务不消费——值仍落列但不参与执行）。
+    allowWrite: integer("allowWrite", { mode: "boolean" }).notNull().default(true),
+    allowSearch: integer("allowSearch", { mode: "boolean" }).notNull().default(false),
   },
   (t) => ({
     // dueTasks 扫描：enabled AND nextFireAt（索引覆盖 WHERE + ORDER BY）
