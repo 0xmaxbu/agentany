@@ -83,6 +83,7 @@ export interface QuestionRow {
   prompt: string;
   options: unknown; // 反序列化 string[]（labels）
   values: unknown; // ADR-0025（#46）：反序列化 AskOption[] = 显式 {label,value} 快照（ask 强制卡）
+  context: string | undefined; // ADR-0025 决策 5（code-review F4）：决策辅助 markdown（从 input 提取下行；前端渲染归后续）
   resumeSchema: unknown; // 反序列化手搓 schema
   multiple: number; // 0/1
   status: "pending" | "answered";
@@ -186,8 +187,10 @@ export class WorkflowStore {
   // ── ADR-0025（#41/T1）：终态零 LLM 简报 ──
 
   /**
-   * 终态 + brief + 简报消息 + 会话 touch **同一 SQLite 事务**（崩溃封堵决策 3：区间归零，终态与简报同现）。
-   * 消息只写有会话的 run（conversationId 非空 + content 非空）；返消息 id（无会话 → 0）。
+   * 终态 + brief + 简报消息 + briefMessageId 回填 + 会话 touch **同一 SQLite 事务**（崩溃封堵决策 3）。
+   * code-review P4 修复：回填原是事务外第二条语句——崩在两写之间（消息已落、id 未回填），重启 reconcile
+   * 会再插一条重复简报；现并入同事务，窗口归零。幂等 guard：briefMessageId 已非空 → 全程 no-op、返已有 id。
+   * 消息只写有会话的 run（conversationId 非空 + content 非空）；返消息 id（未发 → 0）。
    */
   setTerminalBrief(p: {
     runId: string;
@@ -198,10 +201,9 @@ export class WorkflowStore {
   }): number {
     let messageId = 0;
     this.db.transaction((tx) => {
-      tx.update(workflowRuns)
-        .set({ status: p.status, brief: p.brief, updatedAt: now() })
-        .where(eq(workflowRuns.runId, p.runId))
-        .run();
+      const row = tx.select({ briefMessageId: workflowRuns.briefMessageId }).from(workflowRuns)
+        .where(eq(workflowRuns.runId, p.runId)).get();
+      if (row?.briefMessageId != null) { messageId = row.briefMessageId; return; } // 已发过：no-op（幂等）
       if (p.conversationId && p.messageContent) {
         const r = tx
           .insert(messages)
@@ -211,16 +213,15 @@ export class WorkflowStore {
         messageId = r?.id ?? 0;
         tx.update(conversations).set({ updatedAt: now() }).where(eq(conversations.id, p.conversationId)).run();
       }
+      tx.update(workflowRuns)
+        .set({ status: p.status, brief: p.brief, briefMessageId: messageId > 0 ? messageId : null, updatedAt: now() })
+        .where(eq(workflowRuns.runId, p.runId))
+        .run();
     });
     return messageId;
   }
 
-  /** 简报消息 id 回填（发信后幂等；null=未发——启动对账补发锚）。 */
-  backfillBriefMessage(runId: string, messageId: number | null): void {
-    this.db.update(workflowRuns).set({ briefMessageId: messageId }).where(eq(workflowRuns.runId, runId)).run();
-  }
-
-  /** ADR-0025 决策 6（#46/T3）：挂起强制卡——suspended 重确认 + createQuestion(kind=ask, values=快照) **同一事务**
+  /** ADR-0025 决策 6（#46/T3）：挂起强制卡——suspended 重确认 + 插 ask 卡(kind=ask, values=快照) **同一事务**
    *   （挂起落库与卡片同现，崩溃零窗口）。返 questionId。 */
   suspendWithAskCard(p: {
     runId: string;
@@ -234,16 +235,11 @@ export class WorkflowStore {
     let qid = 0;
     this.db.transaction((tx) => {
       tx.update(workflowRuns).set({ status: "suspended", updatedAt: now() }).where(eq(workflowRuns.runId, p.runId)).run();
-      const r = tx
-        .insert(hitlQuestions)
-        .values({
-          conversationId: p.conversationId, runId: p.runId, kind: "ask", input: J(p.input),
-          prompt: p.prompt, options: J(p.options) as string, values: J(p.values),
-          resumeSchema: J(p.resumeSchema), multiple: 0, status: "pending", createdAt: now(),
-        })
-        .returning({ id: hitlQuestions.id })
-        .get();
-      qid = r?.id ?? 0;
+      qid = this.insertQuestion(tx, {
+        conversationId: p.conversationId, runId: p.runId, kind: "ask", input: J(p.input),
+        prompt: p.prompt, options: J(p.options) as string, values: J(p.values),
+        resumeSchema: J(p.resumeSchema), multiple: 0, status: "pending", createdAt: now(),
+      });
     });
     return qid;
   }
@@ -469,23 +465,34 @@ export class WorkflowStore {
   }
 
   // ── HITL 提问（ticket #16 ask_user + #18 审批门）──
+
+  /** hitl_questions 插入收敛点（code-review S2）：createQuestion（裸库）与 suspendWithAskCard（事务内）
+   *  共用同一字段集——两处 10 行 insert 曾近乎全同，字段增删只改这里。
+   *  fail-fast：插入失败不静默返 0（否则 ask_user/审批门会渲染 id=0 假卡，点批准必 404）。 */
+  private insertQuestion(
+    exec: BunSQLiteDatabase | Parameters<Parameters<BunSQLiteDatabase["transaction"]>[0]>[0],
+    v: typeof hitlQuestions.$inferInsert,
+  ): number {
+    const r = (exec as BunSQLiteDatabase) // tx 与库的 insert 同构（drizzle 事务泛型不便于精确表达，单点 cast）
+      .insert(hitlQuestions)
+      .values(v)
+      .returning({ id: hitlQuestions.id })
+      .get();
+    if (!r) throw new Error(`insertQuestion: insert returned no row (prompt=${String(v.prompt).slice(0, 40)})`);
+    return r.id;
+  }
+
   createQuestion(p: {
     conversationId: string; runId?: string | null; prompt: string; options: unknown;
     values?: unknown; resumeSchema?: unknown; multiple?: boolean;
     kind?: "ask" | "approval" | "task"; workflowId?: string; input?: unknown; decidedBy?: string;
   }): number {
-    const r = this.db
-      .insert(hitlQuestions)
-      .values({
-        conversationId: p.conversationId, runId: p.runId ?? null, kind: p.kind ?? "ask",
-        workflowId: p.workflowId ?? null, input: J(p.input), prompt: p.prompt,
-        options: J(p.options) as string, values: J(p.values), resumeSchema: J(p.resumeSchema),
-        multiple: p.multiple ? 1 : 0, status: "pending", decidedBy: p.decidedBy ?? null, createdAt: now(),
-      })
-      .returning({ id: hitlQuestions.id })
-      .get();
-    if (!r) throw new Error("createQuestion: insert returned no row"); // fail-fast：插入失败不静默返 0（否则 ask_user/审批门会渲染 id=0 假卡，点批准必 404）
-    return r.id;
+    return this.insertQuestion(this.db, {
+      conversationId: p.conversationId, runId: p.runId ?? null, kind: p.kind ?? "ask",
+      workflowId: p.workflowId ?? null, input: J(p.input), prompt: p.prompt,
+      options: J(p.options) as string, values: J(p.values), resumeSchema: J(p.resumeSchema),
+      multiple: p.multiple ? 1 : 0, status: "pending", decidedBy: p.decidedBy ?? null, createdAt: now(),
+    });
   }
 
   listQuestions(conversationId: string, opts?: { includeAnswered?: boolean; kind?: "ask" | "approval" | "task" }): QuestionRow[] {
@@ -573,9 +580,14 @@ export class WorkflowStore {
   }
 
   private toQuestionRow(r: any): QuestionRow {
+    const input = P(r.input);
+    // F4（code-review）：ask 卡决策辅助 context 从 input 提取（suspendWithAskCard 以 {context} 暂挂）。
+    const context = !!input && typeof input === "object" && typeof (input as { context?: unknown }).context === "string"
+      ? (input as { context: string }).context
+      : undefined;
     return {
       id: r.id, conversationId: r.conversationId, runId: r.runId, kind: r.kind ?? "ask",
-      workflowId: r.workflowId, input: P(r.input), prompt: r.prompt,
+      workflowId: r.workflowId, input, context, prompt: r.prompt,
       options: P(r.options), values: P(r.values), resumeSchema: P(r.resumeSchema), multiple: r.multiple,
       status: r.status as "pending" | "answered", answer: P(r.answer), decidedBy: r.decidedBy,
       createdAt: r.createdAt, answeredAt: r.answeredAt,

@@ -4,14 +4,17 @@
 // **纯代码不调 pi**（保住无 pi 测试路径）；动态问句/上下文素材由上游 pi 步结构化产出。
 import type { Schema } from "./schema";
 import { schema } from "./schema";
-import type { AskOption, StepDef, StepResult } from "./defineWorkflow";
+import type { AskOption, StepContext, StepDef, StepResult } from "./defineWorkflow";
+
+/** 步骤 ctx 的决策辅助子集（code-review S3：context/mapAnswer 签名共用，不再两处内联三字段组）。 */
+type AskCtx = Pick<StepContext, "cwd" | "workspaceId" | "runId">;
 
 export interface AskStepDef<TInput = any> {
   question: string | ((input: TInput) => string);
   /** 运行期问句缺失/错型兜底（决策 5：不崩、不静默）。 */
   questionFallback?: string;
   /** 决策辅助 markdown（可读文件预渲染——上游步产出素材由 fn 拼装）。 */
-  context?: string | ((input: TInput, ctx: { cwd: string; workspaceId: string; runId: string }) => string | Promise<string>);
+  context?: string | ((input: TInput, ctx: AskCtx) => string | Promise<string>);
   /** 显式映射 {label,value}；缺省从 resumeSchema 顶层单 enum 派生（label=值）。
    *   resumeSchema 一并给（且可派生）时：选项数须与可映射值数一致（定义期断言）。 */
   options?: AskOption[];
@@ -20,7 +23,7 @@ export interface AskStepDef<TInput = any> {
   resumeSchema?: Schema;
   /** resumed 产出（缺省 {...input, answer}）；__next 由 route 附（若无 route 也可在产出里写）。
    *   第三个参收 ctx（工作流步骤常用 cwd 解析默认产出路径）。 */
-  mapAnswer?: (input: TInput, answer: unknown, ctx: { cwd: string; workspaceId: string; runId: string }) => unknown;
+  mapAnswer?: (input: TInput, answer: unknown, ctx: AskCtx) => unknown;
   /** 答案路由（ADR-0025：synthetic redirect 循环用 route 表达）；返步 id 或不返（默认链）。 */
   route?: (answer: unknown) => string | null | undefined;
 }

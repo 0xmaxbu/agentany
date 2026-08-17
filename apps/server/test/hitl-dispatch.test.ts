@@ -167,7 +167,7 @@ describe("dispatch · ask 卡（选项点击确定性 resume）", () => {
     await new Promise((res) => setTimeout(res, 150));
     const q = ctx.store.getQuestion(qid)!;
     expect(q.status).toBe("answered");
-    expect((q.answer as any).decision).toBe("accept"); // 选项 0 ↔ enum[0]，确定性
+    expect((q.answer as any).decision).toBe("accept"); // label→value 快照查表，确定性
     const after = ctx.store.getRun(runId)!;
     expect(["running", "suspended", "completed"]).toContain(after.status); // 已 resume
   });
@@ -242,9 +242,9 @@ describe("deterministicResumeData（#47/T5：快照查表 vs enum 对位）", ()
     expect(deterministicResumeData(q, 0)).toEqual({ selected: "x" });
     expect(deterministicResumeData(q, 1)).toBe(42);
   });
-  test("无快照 → enum 对位（ADR-0022 兼容旧手写卡）", () => {
+  test("无快照 → undefined（enum 对位已随旧手写卡退役——run 绑定卡恒由引擎直建带 values 快照）", () => {
     const q = makeQ({ resumeSchema: { _t: "object", shape: { decision: { _t: "enum", vals: ["accept", "redirect"] }, focus: { _t: "optional", inner: { _t: "string" } } } } });
-    expect(deterministicResumeData(q, 1)).toEqual({ decision: "redirect" });
+    expect(deterministicResumeData(q, 1)).toBeUndefined(); // 不可映射 → slide LLM 轮
   });
   test("无快照无 enum → undefined（slide）", () => {
     const q = makeQ({ resumeSchema: { _t: "object", shape: { plan: { _t: "string" } } } });

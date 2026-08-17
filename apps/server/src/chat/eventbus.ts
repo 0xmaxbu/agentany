@@ -8,7 +8,7 @@
 export type Frame =
   | { type: "user_message"; id: number; content: string; taskId?: string; cardAnswered?: boolean }
   // taskId=#29 定时任务投递标志（前端展示；executeTask 自起 event turn，route 不经过此发布）
-  // cardAnswered=#48/T6 程序化轮旗标（卡应答被确定性收口——route 不 i入队 LLM turn）
+  // cardAnswered=#48/T6 程序化轮旗标（卡应答被确定性收口——route 不入队 LLM turn）
   | { type: "done"; messageId?: number; aborted?: boolean }
   // #20 block 三帧：消息=blocks 序列（text/thinking/tool_use/tool_result）；f3 前与 delta/done 双发。
   | { type: "block_start"; blockId: string; kind: "text" | "thinking" | "tool_use" | "tool_result"; meta?: Record<string, unknown> }
@@ -24,7 +24,7 @@ export type Frame =
   | { type: "run_failed"; runId: string; note?: string }
   | { type: "step_started"; runId: string; stepId: string }
   | { type: "step_completed"; runId: string; stepId: string; status: string; output?: unknown; payload?: unknown; resumeSchema?: unknown }
-  | { type: "hitl_request"; questionId: number; runId: string | null; prompt: string; options: string[]; resumeSchema?: unknown; multiple?: number; kind?: "ask" | "approval" | "task"; workflowId?: string }
+  | { type: "hitl_request"; questionId: number; runId: string | null; prompt: string; options: string[]; resumeSchema?: unknown; multiple?: number; kind?: "ask" | "approval" | "task"; workflowId?: string; context?: string } // context=ADR-0025 决策 5 决策辅助 markdown（code-review F4 透出；前端渲染归后续）
   | { type: "hitl_answered"; questionId: number; answer: unknown; kind?: "ask" | "approval" | "task"; runId?: string };
 export type FrameHandler = (f: Frame) => void;
 

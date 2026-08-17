@@ -98,6 +98,27 @@ describe("#16/#17 每轮注入（经内联 turn 通路，runTurn/compose 承担�
     expect(joined).toContain("resume_workflow"); // 判答指令
   });
 
+  test("自主卡（runId null）注入引导续答而非 resume——无 run 可续，不教 resume_workflow", async () => {
+    const store = newStore();
+    store.createQuestion({ conversationId: "c1", runId: null, prompt: "澄清：目标预算区间？", options: ["<10w", ">50w"] });
+    let capturedAppend: string[] | undefined;
+    const deps = fullDeps(store, { runPiStreamFactory: (): ConfiguredRunPiStream => async (call) => {
+      capturedAppend = (call as any).appendSystemPrompt; await stubStream()(call); return { text: "x", messages: [], toolResults: [] };
+    } });
+    const queues = new ConversationQueues();
+    const eventBus = new EventBus();
+    eventBus.subscribe("c1", () => {});
+    triggerTurn(deps, queues, eventBus, "c1");
+    await delayUntil(() => capturedAppend !== undefined);
+    // 自主卡注入独立分支：给问题上下文（pi 才知道用户在答什么），但不引导 resume（runId 空、调了必 400）
+    const el = capturedAppend!.find((s) => s.startsWith("[待处理提问]") && !s.startsWith("[待处理提问] 工作流"));
+    expect(el).toBeDefined();
+    expect(el!).toContain("澄清：目标预算区间？");
+    expect(el!).not.toContain('resume_workflow("'); // 不教调用（「无需调用」说明语允许出现词面）
+    // run 绑定注入元素不受影响（前缀可区分——e2e stub 同款过滤）
+    expect(capturedAppend!.filter((s) => s.startsWith("[待处理提问] 工作流"))).toHaveLength(0);
+  });
+
   test("无 pending question → appendSystemPrompt 不含 [待处理提问] 元素", async () => {
     const store = newStore();
     let capturedAppend: string[] | undefined;

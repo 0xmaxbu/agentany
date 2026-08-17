@@ -48,7 +48,7 @@ const emitText = (call: { onBlock?: (b: import("./blocks").StreamBlock) => void 
 const stubRunPiFactory = (): ConfiguredRunPi => async () => ({ text: "", messages: [], toolResults: [] });
 
 // chat 用 scripted stub factory：按 prompt/#17 注入段分支，fetch 真 bridge 驱动全链。
-// runId 多源正则（事件 prompt `(r_xxx)` / [挂起工作流] run r_xxx / [待处理提问] 工作流 r_xxx）。
+// runId 提取正则（[挂起工作流] run r_xxx / [待处理提问] 工作流 r_xxx——run_* 事件 turn 已随 T6 退役）。
 const runIdFrom = (s: string): string | null => {
   const m = s.match(/r_[A-Za-z0-9-]+/);
   return m ? m[0] : null;
@@ -81,13 +81,6 @@ const scriptedStubFactory = (): ConfiguredRunPiStream => async (call): Promise<R
     b({ op: "end", blockId: "r_t1" });
     emitText(call, "看完了，一切正常。");
     return { text: "看完了，一切正常。", messages: [], toolResults: [] };
-  }
-  if (call.prompt.includes("挂起待决策")) {
-    // run_suspended 事件 turn → 建提问卡（ask_user）
-    const runId = runIdFrom(call.prompt) ?? runIdFrom(append);
-    emitText(call, "工作流挂起，需要你决策。");
-    if (runId) await post("/ask_user", { runId, prompt: "选哪个？", options: ["accept", "redirect"] });
-    return { text: "工作流挂起，需要你决策。", messages: [], toolResults: [] };
   }
   if (call.prompt.includes("已完成")) {
     emitText(call, "工作流已完成，这是总结。");

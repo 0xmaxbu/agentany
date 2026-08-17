@@ -84,6 +84,24 @@ describe("ask 工厂 · 定义与映射", () => {
     expect(sus.__suspend.payload.question).toBe("请继续（工作流待决策）");
   });
 
+  test("context 决策辅助：串直传 / fn(input, ctx) 拼装，非串忽略", async () => {
+    const literal = ask({ question: "q", options: [{ label: "a", value: 1 }], context: "## 对比\nA 稳" });
+    const sus1 = (await literal.execute(ctx({ input: { brand: "x" } }))) as any;
+    expect(sus1.__suspend.payload.context).toBe("## 对比\nA 稳");
+
+    const fn = ask({
+      question: "q",
+      options: [{ label: "a", value: 1 }],
+      context: (input, c) => `品牌 ${input.brand}（run ${c.runId}，ws ${c.workspaceId}）`,
+    });
+    const sus2 = (await fn.execute(ctx({ input: { brand: "x" }, runId: "r-ctx", workspaceId: "ws_9" }))) as any;
+    expect(sus2.__suspend.payload.context).toBe("品牌 x（run r-ctx，ws ws_9）");
+
+    const bad = ask({ question: "q", options: [{ label: "a", value: 1 }], context: () => 42 as unknown as string });
+    const sus3 = (await bad.execute(ctx())) as any;
+    expect(sus3.__suspend.payload.context).toBeUndefined(); // 错型不进 payload
+  });
+
   test("resumed 缺省（无 mapAnswer/route）→ {...input, answer}", async () => {
     const step = ask({ question: "q", options: [{ label: "a", value: 1 }] });
     const out = await step.execute(ctx({ input: { v: 7 }, resumed: 1 }));
@@ -131,11 +149,13 @@ describe("registry · 挂起强制卡（ADR-0025 决策 6）", () => {
     const req = frames.find((f) => f.type === "hitl_request");
     expect(req.kind).toBe("ask");
     expect(req.options).toEqual(["接受", "偏移 +1 重跑"]);
+    expect(req.context).toContain("s1-out@off0"); // F4：决策辅助 markdown 随帧透出（前端渲染归后续）
     const qid = req.questionId;
     const q = store.getQuestion(qid)!;
     expect(q.kind).toBe("ask");
     expect(q.prompt).toBe("第一步结果已产出，如何决策？");
     expect(q.options).toEqual(["接受", "偏移 +1 重跑"]);
+    expect(q.context).toContain("s1-out@off0"); // GET /hitl 恢复口径同源（input 提取）
     expect(q.values).toEqual([
       { label: "接受", value: { decision: "accept" } },
       { label: "偏移 +1 重跑", value: { decision: "redirect" } },

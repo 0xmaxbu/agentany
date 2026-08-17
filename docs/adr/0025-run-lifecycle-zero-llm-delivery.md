@@ -42,7 +42,7 @@ run 完成/失败/挂起的通知原本都走「TurnTrigger 起 LLM 事件 turn 
 
 - pi session 压缩丢 runId 时用户说「重跑刚才的」→ pi 无记忆；read_run 单查覆盖大多数场景，list-runs 工具留未来。
 - run 卡刷新不恢复（无 GET runs 端点）——与 #19 序列号债务同堆，由 ADR-0026 P2 清偿。
-- 简报直投需新整条消息帧形态（block_start+end 合成）；e2e 契约类名（`.bubble.assistant` 等）不变。
+- 简报直投需新整条消息帧形态（block_start/delta/end 三帧合成——`block_delta` 是文本块唯一内容载体，缺则空泡；code-review 勘误，原文误作两帧）；e2e 契约类名（`.bubble.assistant` 等）不变。
 
 ## 后果
 

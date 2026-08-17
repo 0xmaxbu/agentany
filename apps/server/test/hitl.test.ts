@@ -133,7 +133,7 @@ describe("store · 审批 question（#18）", () => {
 });
 
 describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
-  test("/ask_user on suspended run → 引擎已同事务直建强制卡 → already_asked（幂等指同一卡，不重复建）", async () => {
+  test("挂起 → 引擎同事务直建强制卡；/ask_user 带 runId → 400（run 绑定卡归引擎，bridge 仅自主卡）", async () => {
     const { store, eventBus, registry } = bridgeSetup();
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
     const token = issueNonce("c-hitl");
@@ -148,11 +148,8 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
       expect(engReq.options).toEqual(["接受", "偏移 +1 重跑"]); // synthetic ask 步显式 options
       expect(engReq.resumeSchema).toBeTruthy();
 
-      const resp = await askUser(port, token, r.runId); // 手动再问 → 幂等 already_asked（引同一引擎卡）
-      expect(resp.status).toBe(200);
-      const data: any = await resp.json();
-      expect(data.status).toBe("already_asked");
-      expect(data.questionId).toBe(engReq.questionId);
+      const resp = await askUser(port, token, r.runId); // 旧「补卡」路径已退役 → 拒绝
+      expect(resp.status).toBe(400);
       expect(store.listQuestions("c-hitl", { includeAnswered: true })).toHaveLength(1); // 不建第二卡
       expect(store.getPendingByRun(r.runId)?.kind).toBe("ask");
     } finally { stop(); _clearNonces(); }
@@ -182,27 +179,6 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
     } finally { stop(); _clearNonces(); }
   });
 
-  test("/ask_user 幂等: 同 run 再问 → already_asked（不重复建、无新帧）", async () => {
-    const { store, eventBus, registry } = bridgeSetup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
-    const token = issueNonce("c-hitl");
-    const frames: any[] = [];
-    eventBus.subscribe("c-hitl", (f) => frames.push(f));
-    try {
-      const r = startHitl(registry);
-      await delayUntil(() => registry.read(r.runId)?.status === "suspended");
-      const r1 = await (await askUser(port, token, r.runId)).json() as any;
-      await delayUntil(() => frames.some((f) => f.type === "hitl_request"));
-      const before = frames.length;
-      const r2 = await (await askUser(port, token, r.runId)).json() as any;
-      expect(r2.status).toBe("already_asked");
-      expect(r2.questionId).toBe(r1.questionId); // 同一 question
-      expect(store.listQuestions("c-hitl", { includeAnswered: true })).toHaveLength(1);
-      await delay(20);
-      expect(frames.length).toBe(before); // 无新 hitl_request
-    } finally { stop(); _clearNonces(); }
-  });
-
   test("/run/resume 首答: accept → completed + markAnswered + hitl_answered", async () => {
     const { store, eventBus, registry } = bridgeSetup();
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
@@ -212,7 +188,6 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
     try {
       const r = startHitl(registry);
       await delayUntil(() => registry.read(r.runId)?.status === "suspended");
-      await askUser(port, token, r.runId);
       const resp = await resumeRun(port, token, r.runId, { decision: "accept" });
       expect(resp.status).toBe(200);
       expect((await resp.json() as any).status).toBe("running"); // ADR-0025 决策 11：即时 verdict，续跑 detached
@@ -236,7 +211,6 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
     try {
       const r = startHitl(registry);
       await delayUntil(() => registry.read(r.runId)?.status === "suspended");
-      await askUser(port, token, r.runId);
       await resumeRun(port, token, r.runId, { decision: "accept" });
       await delayUntil(() => frames.some((f) => f.type === "hitl_answered"));
       const beforeAns = frames.filter((f) => f.type === "hitl_answered").length;
@@ -250,26 +224,15 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
 });
 
 describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
-  test("/ask_user 状态 guard: run 非 suspended → 409", async () => {
+  test("/ask_user 带 runId → 400（run 绑定卡归引擎直建；suspended/running/他 conv 一律拒）", async () => {
     const { store, eventBus, registry } = bridgeSetup();
     store.createRun({ runId: "r-run", workflowId: "synthetic-3step", workspaceId: "ws_company", conversationId: "c-hitl", input: {} }); // 默认 running
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
     const token = issueNonce("c-hitl");
     try {
       const resp = await askUser(port, token, "r-run");
-      expect(resp.status).toBe(409);
-    } finally { stop(); _clearNonces(); }
-  });
-
-  test("/ask_user 跨会话 guard: run 属别的会话 → 403", async () => {
-    const { store, eventBus, registry } = bridgeSetup();
-    store.createConversation({ id: "c-other", workspaceId: "ws_company", userId: "u" });
-    store.createRun({ runId: "r-other", workflowId: "synthetic-3step", workspaceId: "ws_company", conversationId: "c-other", input: {} });
-    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
-    const token = issueNonce("c-hitl"); // c-hitl 的 nonce
-    try {
-      const resp = await askUser(port, token, "r-other"); // run 属 c-other
-      expect(resp.status).toBe(403);
+      expect(resp.status).toBe(400); // 旧「runId 补卡」路径已退役（ADR-0025 决策 7 严格执行）
+      expect(((await resp.json()) as any).error).toContain("engine");
     } finally { stop(); _clearNonces(); }
   });
 
@@ -280,7 +243,6 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
     try {
       const r = startHitl(registry);
       await delayUntil(() => registry.read(r.runId)?.status === "suspended");
-      await askUser(port, token, r.runId);
       const resp = await resumeRun(port, token, r.runId, { decision: "bogus" }); // 不在 enum
       expect(resp.status).toBe(409);
       expect(store.getPendingByRun(r.runId)?.status).toBe("pending"); // 保持 pending
@@ -310,18 +272,18 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
       expect(q2.kind).toBe("ask");
       expect(q2.options).toEqual(["接受", "偏移 +1 重跑"]);
       expect((q2.values as any[])[1].value).toEqual({ decision: "redirect" }); // 快照不失效
-      const ask2 = await askUser(port, token, r.runId); // 手动再 ask → already_asked（引擎卡已存在，幂等）
-      expect((await ask2.json() as any).status).toBe("already_asked");
+      const ask2 = await askUser(port, token, r.runId); // 带 runId → 400（不建第三卡）
+      expect(ask2.status).toBe(400);
       expect(store.listQuestions("c-hitl", { includeAnswered: true })).toHaveLength(2); // q1 answered + q2 pending
     } finally { stop(); _clearNonces(); }
   });
 });
 
 describe("GET /conversations/:id/hitl · 刷新恢复（#16）", () => {
-  test("返回 pending + answered（按 id 排）", async () => {
+  test("返回 pending + answered（按 id 排）；ask 卡的决策辅助 context 一并透出", async () => {
     const store = new WorkflowStore(openDbMigrated(":memory:"));
     store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
-    store.createQuestion({ conversationId: "c1", runId: "r1", prompt: "q1", options: ["A"] });
+    store.createQuestion({ conversationId: "c1", runId: "r1", prompt: "q1", options: ["A"], input: { context: "## 候选对比\nA 更稳" } });
     store.createQuestion({ conversationId: "c1", runId: "r2", prompt: "q2", options: ["B"] });
     store.markPendingAnsweredByRun("r2", { decision: "B" });
     const app = createApp(fullDeps(store));
@@ -331,6 +293,7 @@ describe("GET /conversations/:id/hitl · 刷新恢复（#16）", () => {
     expect(list).toHaveLength(2);
     expect(list.map((q: any) => q.runId)).toEqual(["r1", "r2"]);
     expect(list[0].status).toBe("pending");
+    expect(list[0].context).toBe("## 候选对比\nA 更稳"); // F4：context 从 input 提取下行（前端渲染归后续）
     expect(list[1].status).toBe("answered");
     expect(list[1].answer).toEqual({ decision: "B" });
   });

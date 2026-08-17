@@ -190,7 +190,8 @@ export class RunRegistry {
         if (row.conversationId) this.deps.eventBus.publish(row.conversationId, frame);
       };
       if (row.status === "completed") {
-        this.deliverBrief(publish, row.runId, row, "completed", { log: this.deps.store.getLog(row.runId), note: undefined });
+        // 补发文案用列里 brief（单一真相）——不重溯 log 派生（code-review：与原发保字面一致）
+        this.deliverBrief(publish, row.runId, row, "completed", { log: this.deps.store.getLog(row.runId), note: undefined, briefOverride: row.brief ?? undefined });
       } else {
         this.deliverBrief(publish, row.runId, row, "failed", { log: [], note: row.brief as string });
       }
@@ -254,14 +255,16 @@ export class RunRegistry {
   }
 
   // 挂起强制卡（ADR-0025 决策 6：run_suspended 引擎直建，chat LLM 失去建 run 绑定卡权限）：ask 契约
-  // 同事务写卡（values=快照）→ hitl_request 帧；无伴生消息（挂起卡持久恢复已有 GET /hitl）。
-  // 老式挂起（payload 无 question——旧 DB 残留/未迁移 step）→ 不建卡（T6 前仍走事件 turn pi 转述）。
+  // 同事务写卡（values=快照）→ hitl_request 帧（含决策辅助 context）；无伴生消息（挂起卡持久恢复已有 GET /hitl）。
+  // payload 无 question = 手写 __suspend 步的畸形产出（类型外数据）→ 不建卡；恢复由 [挂起工作流] 注入
+  // + resume_workflow 兜底（T6 后事件 turn 已死，无转述路径）。
   private deliverAskCard(publish: (f: Frame) => void, runId: string, run: RunRow | undefined, outcome: Extract<RunOutcome, { status: "suspended" }>): void {
     const payload = outcome.payload as { question?: unknown; options?: unknown[]; context?: unknown } | null | undefined;
     if (!payload || typeof payload.question !== "string" || !run?.conversationId) return;
     const options = Array.isArray(payload.options) ? (payload.options as { label: string; value: unknown }[]) : [];
     // resumeSchema：outcome 兜底 log（历史路径/健壮性——卡必须自含校验契约）
     const resumeSchema = outcome.resumeSchema ?? this.deps.store.getLog(runId).at(-1)?.resumeSchema ?? null;
+    const context = typeof payload.context === "string" ? payload.context : undefined;
     const questionId = this.deps.store.suspendWithAskCard({
       runId,
       conversationId: run.conversationId,
@@ -269,25 +272,27 @@ export class RunRegistry {
       options: options.map((o) => o.label),
       values: options, // 快照（显式 {label,value}；value 只服务端消费）
       resumeSchema,
-      input: typeof payload.context === "string" ? { context: payload.context } : null,
+      input: context !== undefined ? { context } : null,
     });
     publish({
       type: "hitl_request", questionId, runId, kind: "ask",
       prompt: payload.question, options: options.map((o) => o.label), resumeSchema,
+      ...(context !== undefined ? { context } : {}),
     });
   }
 
   /**
-   * 终态简报投递（ADR-0025 决策 2/3）：同事务写 brief + 简报消息 + touch（setTerminalBrief）→
-   * 回填 brief_message_id → 推 run_completed(brief, artifacts) + 简报 text 块三帧
-   * （block_start/delta/end，无 done——非轮；内容 linkify）。无会话的 run 只写 brief 列不落消息。
+   * 终态简报投递（ADR-0025 决策 2/3）：setTerminalBrief **同事务**写终态 + brief + 简报消息 + touch +
+   * briefMessageId 回填（code-review P4：回填并进事务，崩溃窗口归零；幂等 guard 在 store 层）→
+   * 推 run_completed(brief, artifacts) + 简报 text 块三帧（block_start/delta/end，无 done——非轮；内容 linkify）。
+   * 无会话的 run 只写 brief 列不落消息。briefOverride（reconcile 补发用）＝列里真相，跳过重派生。
    */
   private deliverBrief(
     publish: (f: Frame) => void,
     runId: string,
     run: RunRow | undefined,
     terminal: "completed" | "failed",
-    src: { log: ReturnType<WorkflowStore["getLog"]>; note: string | undefined },
+    src: { log: ReturnType<WorkflowStore["getLog"]>; note: string | undefined; briefOverride?: string },
   ): void {
     if (!run) {
       // 行被删/不存在：仍发边界帧（展示流不受影响），不写库。
@@ -296,9 +301,9 @@ export class RunRegistry {
       return;
     }
     const last = src.log[src.log.length - 1];
-    const brief = terminal === "completed"
+    const brief = src.briefOverride ?? (terminal === "completed"
       ? extractBrief(last?.output) ?? stepListFallback(src.log)
-      : extractNoteBrief(src.note);
+      : extractNoteBrief(src.note));
     const artifacts = terminal === "completed" ? extractArtifacts(last?.output) : [];
     const msg = buildBriefMessage({
       workflowId: run.workflowId, terminal, brief, artifacts, workspaceId: run.workspaceId,
@@ -306,7 +311,6 @@ export class RunRegistry {
     const messageId = this.deps.store.setTerminalBrief({
       runId, status: terminal, brief, messageContent: msg, conversationId: run.conversationId,
     });
-    this.deps.store.backfillBriefMessage(runId, messageId > 0 ? messageId : null);
 
     if (terminal === "completed") publish({ type: "run_completed", runId, brief, artifacts });
     else publish({ type: "run_failed", runId, note: src.note });

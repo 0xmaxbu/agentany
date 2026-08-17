@@ -17,7 +17,7 @@ export interface SuspendedRunInfo {
   resumeSchema: unknown;
 }
 export interface PendingAsk {
-  runId: string;
+  runId: string | null; // null=自主卡（无 resume 语义——compose 侧走续答引导分支）
   prompt: string;
   options: string[];
   resumeSchema: unknown;
@@ -50,11 +50,12 @@ export function composeSystemPrompt(p: PromptParts): string[] {
     );
   }
 
-  // #16 pending ask 判答格式（迁自 turn.ts，逐字保留——turn-inline 内容断言依赖）。
+  // #16 pending ask 判答格式（run 绑定分支迁自 turn.ts，逐字保留——turn-inline 内容断言依赖）；
+  // 自主卡（runId null，code-review F3b）：给问题上下文但**不引导 resume**（无 run 可续，调了必 400）。
   for (const q of p.pendingAsks) {
-    out.push(
-      `[待处理提问] 工作流 ${q.runId} 正在等待用户决策。\n提问：${q.prompt}\n选项：${q.options.join(" / ")}\n续跑契约：${JSON.stringify(q.resumeSchema)}\n若用户本次消息是对此提问的回答，请将回答归一化为符合续跑契约的对象，并调用 resume_workflow("${q.runId}", resumeData)。若无关，正常回应用户。`,
-    );
+    out.push(q.runId
+      ? `[待处理提问] 工作流 ${q.runId} 正在等待用户决策。\n提问：${q.prompt}\n选项：${q.options.join(" / ")}\n续跑契约：${JSON.stringify(q.resumeSchema)}\n若用户本次消息是对此提问的回答，请将回答归一化为符合续跑契约的对象，并调用 resume_workflow("${q.runId}", resumeData)。若无关，正常回应用户。`
+      : `[待处理提问] 澄清（你此前向用户提出的问题，不绑定工作流）。\n提问：${q.prompt}\n选项：${q.options.join(" / ")}\n若用户本次消息是对此提问的回答，请据此继续对话，无需调用 resume_workflow。若无关，正常回应用户。`);
   }
 
   return out;

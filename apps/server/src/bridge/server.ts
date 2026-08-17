@@ -78,28 +78,20 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     return c.json(r);
   });
 
-  // /ask_user（#16 + ADR-0025 决策 7，#47/T5）：ask_user 工具经此。
-  // **双源通用化**：runId **可空** → 无 runId 即自主提问卡（LLM 任何时候不确定即问，runId null 无 resume 语义，
-  // 点选滑 LLM 轮归一化）；有 runId（挂起 run 补卡）→ 跨会话 guard + 幂等 already_asked 保留。
-  // 强制卡不走 bridge（引擎挂起同事务直建）。立即返 {asked}（不阻塞 turn）。
+  // /ask_user（#16 + ADR-0025 决策 7，#47/T5 → code-review 收紧）：ask_user 工具经此，**仅建自主卡**。
+  // 自主卡：runId null、无 resume 语义（LLM 任何时候不确定即问；点选滑 LLM 轮归一化）。
+  // run 绑定卡归引擎——挂起同事务直建，bridge 一律拒（旧「runId 补卡 + suspended/already_asked」路径已退役，
+  // 产品未发布零兼容）。立即返 {asked}（不阻塞 turn）。
   app.post("/ask_user", async (c) => {
     if (!store || !eventBus) return c.json({ error: "hitl unavailable" }, 503);
     const convId = nonceConversation(bearerToken(c.req.header("authorization"))!);
     if (!convId) return c.json({ error: "no conversation for nonce" }, 400);
     const body = await jsonBody(c);
     const { runId, prompt, options, resumeSchema, multiple } = body as { runId?: string; prompt?: string; options?: string[]; resumeSchema?: unknown; multiple?: boolean };
+    if (runId) return c.json({ error: "run-bound ask cards are engine-created on suspend; call ask_user without runId for an autonomous card" }, 400);
     if (typeof prompt !== "string" || !Array.isArray(options)) return c.json({ error: "prompt, options required" }, 400);
-    if (runId) {
-      const run = store.getRun(runId);
-      if (!run) return c.json({ error: "run not found" }, 404);
-      if (run.conversationId !== convId) return c.json({ error: "forbidden" }, 403); // 跨会话 guard
-      if (run.status !== "suspended") return c.json({ error: "run not suspended" }, 409); // 绑定的 run 须可 resume
-      const existing = store.getPendingByRun(runId);
-      if (existing) return c.json({ status: "already_asked", questionId: existing.id }); // 幂等：同 run 已有 pending
-    }
-    const rs = resumeSchema ?? (runId ? store.getLog(runId).at(-1)?.resumeSchema : undefined); // 自动取（有 runId 时）
-    const id = store.createQuestion({ conversationId: convId, runId: runId ?? null, prompt, options, resumeSchema: rs, multiple, kind: "ask" });
-    const frame: Frame = { type: "hitl_request", questionId: id, runId: runId ?? null, prompt, options, resumeSchema: rs, multiple: multiple ? 1 : 0, kind: "ask" };
+    const id = store.createQuestion({ conversationId: convId, runId: null, prompt, options, resumeSchema, multiple, kind: "ask" });
+    const frame: Frame = { type: "hitl_request", questionId: id, runId: null, prompt, options, resumeSchema, multiple: multiple ? 1 : 0, kind: "ask" };
     eventBus.publish(convId, frame);
     return c.json({ status: "asked", questionId: id });
   });

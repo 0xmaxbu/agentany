@@ -38,6 +38,32 @@ describe("store · sweep 写「异常终止」brief", () => {
   });
 });
 
+describe("store · setTerminalBrief 原子回填（code-review P4：事务外回填=重启重复简报窗口）", () => {
+  test("简报消息与 briefMessageId 同事务落库——不依赖第二个调用", () => {
+    const store = new WorkflowStore(openDbMigrated(":memory:"));
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+    store.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    const mid = store.setTerminalBrief({
+      runId: "r1", status: "completed", brief: "done",
+      messageContent: "📋 工作流 w 完成：done", conversationId: "c1",
+    });
+    expect(mid).toBeGreaterThan(0);
+    // 此前 briefMessageId 靠事务外 backfill——崩在两写之间，重启 reconcile 会再插一条重复简报
+    expect(store.getRun("r1")!.briefMessageId).toBe(mid);
+  });
+
+  test("幂等 guard：已发简报的 run 再 setTerminalBrief → 不插第二条、返已有 id", () => {
+    const store = new WorkflowStore(openDbMigrated(":memory:"));
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+    store.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    const p = { runId: "r1", status: "completed", brief: "done", messageContent: "📋 工作流 w 完成：done", conversationId: "c1" } as const;
+    const m1 = store.setTerminalBrief(p);
+    const m2 = store.setTerminalBrief(p); // 重放（reconcile/双发路径）
+    expect(m2).toBe(m1);
+    expect(store.listMessages("c1").filter((m) => m.role === "assistant")).toHaveLength(1);
+  });
+});
+
 describe("registry · reconcile 幂等补发", () => {
   test("终态 run brief_message_id IS NULL → 补发简报消息 + 回填；重跑只补一次", async () => {
     const { store, eventBus, registry } = newRegistry();
@@ -69,6 +95,19 @@ describe("registry · reconcile 幂等补发", () => {
     expect(n).toBe(1);
     const msgs = store.listMessages("c1").filter((m) => m.role === "assistant");
     expect(msgs[0].content).toContain("异常终止");
+  });
+
+  test("补发文案用 row.brief（列是单一真相），不重溯 log 派生", async () => {
+    const { store, registry } = newRegistry();
+    store.createRun({ runId: "r-b", workflowId: "brand-research", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    store.appendLog("r-b", { stepId: "report", status: "completed", output: { brief: "log 重派生文案" } });
+    store.setTerminalBrief({ runId: "r-b", status: "completed", brief: "列里真相", messageContent: "", conversationId: "c1" });
+
+    expect(registry.reconcileBriefMessages()).toBe(1);
+    const msgs = store.listMessages("c1").filter((m) => m.role === "assistant");
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toContain("列里真相");
+    expect(msgs[0].content).not.toContain("log 重派生文案");
   });
 
   test("对账排除已删会话的 run（conversationId 已解绑）", () => {

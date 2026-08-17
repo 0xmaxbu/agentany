@@ -151,14 +151,14 @@ const approvalHandler: KindHandler = async ({ deps, q, content, userId, publish 
   return { handled: true, skipTurn: true };
 };
 
-// ── ask（ADR-0025 决策 7/10，#47/T5）：run 绑定卡 + 点击命中可确定性映射 → 程序化 resume（零 LLM）；
-//   自主卡（runId 空）/ 老手写卡（无 value 无 enum）/ 打字 → slide 滑 LLM 轮（卡保 pending，注入仍在）──
+// ── ask（ADR-0025 决策 7/10，#47/T5）：run 绑定卡 + 点击命中 values 快照 → 程序化 resume（零 LLM）；
+//   自主卡（runId 空）/ 快照缺值 / 打字 → slide 滑 LLM 轮（卡保 pending，注入仍在）──
 const askHandler: KindHandler = async ({ deps, q, content, publish }) => {
   const idx = optionIndex(q.options as string[], content);
   if (idx < 0) return { handled: false }; // 打字（非选项文本）→ 滑 LLM 轮（pi 归一化，答案消费者是 pi）
   if (!q.runId) return { handled: false }; // 自主卡：无绑定 run、无 resume 语义 → 滑 LLM 轮
-  const resumeData = deterministicResumeData(q, idx); // 快照 value 优先，enum 对位兼容（决策 5/6）
-  if (resumeData === undefined) return { handled: false }; // 老手写卡无 value 无 enum → slide（卡保 pending）
+  const resumeData = deterministicResumeData(q, idx); // values 快照查表（旧 enum 对位已退役）
+  if (resumeData === undefined) return { handled: false }; // 无快照不可映射 → slide（卡保 pending）
   let outcome: ResumeOutcome;
   try {
     outcome = await deps.runRegistry!.resume(q.runId, resumeData);
@@ -173,25 +173,15 @@ const askHandler: KindHandler = async ({ deps, q, content, publish }) => {
   return { handled: true, skipTurn: true };
 };
 
-/** 确定性映射（决策 5/6，#47/T5）：显式 {label,value} **快照查表** 优先（value 即 resumeData）；回落 enum 对位
- * （ADR-0022 决策 4 兼容旧手写卡——resumeSchema 顶层单 enum 属性按序对位 → {[prop]: vals[idx]}）。
- * 不可映射（无 value 无 enum）→ undefined（滑 LLM）。 */
+/** 确定性映射（决策 5/6，#47/T5）：显式 {label,value} **快照查表**（value 即 resumeData）。
+ *  旧「enum 对位」回落（ADR-0022 决策 4）已随旧手写卡形态退役——产品未发布零兼容负担，
+ *  run 绑定卡恒由引擎同事务直建、恒带 values 快照。无快照 → undefined（滑 LLM 轮，pi 归一化）。 */
 export function deterministicResumeData(q: QuestionRow, idx: number): unknown | undefined {
   if (Array.isArray(q.values) && q.values.length > idx) {
     const v = (q.values[idx] as { value?: unknown }).value;
     if (v !== undefined) return v; // label→value 命中（快照；卡自包含，重启/改 workflow 定义不失效）
   }
-  const resumeSchema = q.resumeSchema;
-  if (!resumeSchema || typeof resumeSchema !== "object") return undefined;
-  const s = resumeSchema as { _t?: string; shape?: Record<string, { _t?: string; vals?: unknown[] }> };
-  if (s._t !== "object" || !s.shape) return undefined;
-  const entries = Object.entries(s.shape);
-  const enums = entries.filter(([, def]) => def._t === "enum" && Array.isArray(def.vals));
-  if (enums.length !== 1) return undefined;
-  if (!entries.every(([, def]) => def._t === "enum" || def._t === "optional")) return undefined;
-  const [prop, def] = enums[0];
-  if ((def.vals as unknown[]).length <= idx) return undefined;
-  return { [prop]: (def.vals as unknown[])[idx] };
+  return undefined;
 }
 
 const HANDLERS: Record<string, KindHandler> = {

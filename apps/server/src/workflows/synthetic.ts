@@ -21,7 +21,9 @@ export const synthetic = defineWorkflow({
   .step("review", ask({
     // #46/T3 ADR-0025 决策 5：挂起点收编为 ask 步——显式 {label,value}（enable redirect 循环用 route）。
     // 定义期断言：2 选项 vs resumeSchema 顶层 enum 2 值 一致（pass）。
+    // context（决策辅助 markdown，code-review F4 全链透出）：把 s1 产出摆进卡里。
     question: () => "第一步结果已产出，如何决策？",
+    context: (input) => `当前产出：${(input as { value?: string }).value ?? "（无）"}`,
     options: [
       { label: "接受", value: { decision: "accept" } },
       { label: "偏移 +1 重跑", value: { decision: "redirect" } },
