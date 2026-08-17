@@ -79,7 +79,8 @@ export const hitlQuestions = sqliteTable("hitl_questions", {
   workflowId: text("workflowId"), // #18 approval：待审批的工作流（ask 卡为空）
   input: text("input"), // #18 approval：待审批的 input（JSON）—— approve 后用它 createRun
   prompt: text("prompt").notNull(),
-  options: text("options").notNull(), // JSON string[]
+  options: text("options").notNull(), // JSON string[]（labels）
+  values: text("values"), // ADR-0025（#46）：JSON AskOption[] = 显式 {label,value} 快照——卡自包含，点选查表确定性 resume；重启/改 workflow 定义不失效
   resumeSchema: text("resumeSchema"), // JSON 手搓可序列化 schema（schema.ts，非 zod；pi/前端可读 enum vals 当候选）
   multiple: integer("multiple").default(0).notNull(), // 0/1（v1 只单选）
   status: text("status").notNull().default("pending"), // pending | answered

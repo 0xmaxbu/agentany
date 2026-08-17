@@ -133,7 +133,7 @@ describe("store · 审批 question（#18）", () => {
 });
 
 describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
-  test("/ask_user happy: suspended run → asked + hitl_request + resumeSchema 自动取 + DB pending", async () => {
+  test("/ask_user on suspended run → 引擎已同事务直建强制卡 → already_asked（幂等指同一卡，不重复建）", async () => {
     const { store, eventBus, registry } = bridgeSetup();
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
     const token = issueNonce("c-hitl");
@@ -142,17 +142,19 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
     try {
       const r = startHitl(registry);
       await delayUntil(() => registry.read(r.runId)?.status === "suspended");
-      const resp = await askUser(port, token, r.runId);
+      await delayUntil(() => frames.some((f) => f.type === "hitl_request")); // ADR-0025 决策 6：挂起即直建卡
+      const engReq: any = frames.find((f) => f.type === "hitl_request");
+      expect(engReq.kind).toBe("ask");
+      expect(engReq.options).toEqual(["接受", "偏移 +1 重跑"]); // synthetic ask 步显式 options
+      expect(engReq.resumeSchema).toBeTruthy();
+
+      const resp = await askUser(port, token, r.runId); // 手动再问 → 幂等 already_asked（引同一引擎卡）
       expect(resp.status).toBe(200);
       const data: any = await resp.json();
-      expect(data.status).toBe("asked");
-      expect(data.questionId).toBeGreaterThan(0);
-      await delayUntil(() => frames.some((f) => f.type === "hitl_request"));
-      const req: any = frames.find((f) => f.type === "hitl_request");
-      expect(req.runId).toBe(r.runId);
-      expect(req.options).toEqual(["accept", "redirect"]);
-      expect(req.resumeSchema).toBeTruthy(); // 自动取（synthetic review 的 enum 手搓 schema）
-      expect(store.getPendingByRun(r.runId)?.prompt).toBe("选哪个？");
+      expect(data.status).toBe("already_asked");
+      expect(data.questionId).toBe(engReq.questionId);
+      expect(store.listQuestions("c-hitl", { includeAnswered: true })).toHaveLength(1); // 不建第二卡
+      expect(store.getPendingByRun(r.runId)?.kind).toBe("ask");
     } finally { stop(); _clearNonces(); }
   });
 
@@ -262,7 +264,7 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
     } finally { stop(); _clearNonces(); }
   });
 
-  test("redirect 循环: resume redirect → run 再 suspend + q1 answered + 可建 q2", async () => {
+  test("redirect 循环: resume redirect → 引擎自动再建强制卡 q2 → q1 answered + q2 pending（不重复卡）", async () => {
     const { store, eventBus, registry } = bridgeSetup();
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
     const token = issueNonce("c-hitl");
@@ -271,17 +273,22 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
     try {
       const r = startHitl(registry);
       await delayUntil(() => registry.read(r.runId)?.status === "suspended");
-      await askUser(port, token, r.runId);
+      await delayUntil(() => frames.some((f) => f.type === "hitl_request")); // 引擎卡 q1 已直建
+      const q1id = frames.find((f) => f.type === "hitl_request").questionId as number;
+
       const resp = await resumeRun(port, token, r.runId, { decision: "redirect" });
       expect(resp.status).toBe(200);
       expect((await resp.json() as any).status).toBe("running"); // ADR-0025 决策 11：即时 verdict（回 s1→review 再 suspend 是后续）
       await delayUntil(() => registry.read(r.runId)?.status === "suspended"); // 循环再挂起
-      await delayUntil(() => frames.some((f) => f.type === "hitl_answered")); // q1 answered
-      expect(store.listQuestions("c-hitl", { includeAnswered: true }).filter((q) => q.status === "answered")).toHaveLength(1);
-      expect(store.getPendingByRun(r.runId)).toBeUndefined(); // q1 已答，无 pending
-      const ask2 = await askUser(port, token, r.runId); // 再 ask → 建 q2（幂等不挡）
-      expect((await ask2.json() as any).status).toBe("asked");
-      expect(store.listQuestions("c-hitl", { includeAnswered: true })).toHaveLength(2);
+      await delayUntil(() => store.getQuestion(q1id)!.status === "answered"); // q1 answered
+
+      const q2 = store.getPendingByRun(r.runId)!; // 引擎循环再直建 q2（含 redirect 的显式 value 快照）
+      expect(q2.kind).toBe("ask");
+      expect(q2.options).toEqual(["接受", "偏移 +1 重跑"]);
+      expect((q2.values as any[])[1].value).toEqual({ decision: "redirect" }); // 快照不失效
+      const ask2 = await askUser(port, token, r.runId); // 手动再 ask → already_asked（引擎卡已存在，幂等）
+      expect((await ask2.json() as any).status).toBe("already_asked");
+      expect(store.listQuestions("c-hitl", { includeAnswered: true })).toHaveLength(2); // q1 answered + q2 pending
     } finally { stop(); _clearNonces(); }
   });
 });

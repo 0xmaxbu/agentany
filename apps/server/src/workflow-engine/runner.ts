@@ -128,7 +128,9 @@ export async function run(
       });
       store.updateRunStatus(runId, "suspended");
       onProgress?.({ type: "step_completed", stepId: st.stepId, status: "suspended", payload: sus.payload, resumeSchema: sus.resumeSchema });
-      return { status: "suspended", runId, stepId: st.stepId, payload: sus.payload };
+      // resumeSchema 必须随 outcome（首挂起曾缺失——事件转述走的 loadState 路径有、run() 直挂路径漏了；
+      // ask-card 的 resumeSchema 校验依赖它）
+      return { status: "suspended", runId, stepId: st.stepId, payload: sus.payload, resumeSchema: sus.resumeSchema };
     }
     store.appendLog(runId, { stepId: st.stepId, status: "completed", input: st.input, output: result });
     onProgress?.({ type: "step_completed", stepId: st.stepId, status: "completed", output: result });

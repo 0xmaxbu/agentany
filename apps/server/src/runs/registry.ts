@@ -220,17 +220,42 @@ export class RunRegistry {
   }
 
   // outcome（clean 结局：completed/suspended/failed）→ 生命周期投递。
-  // ADR-0025（#41/T1）：completed/failed **零 LLM 直投**——同事务写终态+brief+简报消息+touch，
-  // 回填 brief_message_id → 发 run_completed(brief, artifacts) + 简报 text 块（无 done——非轮）。suspended 由 T3 接。
+  // ADR-0025（#41/T1 + #46/T3）：completed/failed **零 LLM 直投**（同事务终态+brief+简报消息+touch + 简报块）；
+  // suspended → ask 契约直投强制卡（同事务挂起+卡片，无伴生消息）。
   private publishOutcome(publish: (f: Frame) => void, runId: string, outcome: RunOutcome): void {
     const run = this.deps.store.getRun(runId);
     if (outcome.status === "completed") {
       this.deliverBrief(publish, runId, run, "completed", { log: this.deps.store.getLog(runId), note: undefined });
     } else if (outcome.status === "failed") {
       this.deliverBrief(publish, runId, run, "failed", { log: [], note: outcome.note });
-    } else {
+    } else if (outcome.status === "suspended") {
       publish({ type: "run_suspended", runId, stepId: outcome.stepId, payload: outcome.payload, resumeSchema: outcome.resumeSchema });
+      this.deliverAskCard(publish, runId, run, outcome);
     }
+  }
+
+  // 挂起强制卡（ADR-0025 决策 6：run_suspended 引擎直建，chat LLM 失去建 run 绑定卡权限）：ask 契约
+  // 同事务写卡（values=快照）→ hitl_request 帧；无伴生消息（挂起卡持久恢复已有 GET /hitl）。
+  // 老式挂起（payload 无 question——旧 DB 残留/未迁移 step）→ 不建卡（T6 前仍走事件 turn pi 转述）。
+  private deliverAskCard(publish: (f: Frame) => void, runId: string, run: RunRow | undefined, outcome: Extract<RunOutcome, { status: "suspended" }>): void {
+    const payload = outcome.payload as { question?: unknown; options?: unknown[]; context?: unknown } | null | undefined;
+    if (!payload || typeof payload.question !== "string" || !run?.conversationId) return;
+    const options = Array.isArray(payload.options) ? (payload.options as { label: string; value: unknown }[]) : [];
+    // resumeSchema：outcome 兜底 log（历史路径/健壮性——卡必须自含校验契约）
+    const resumeSchema = outcome.resumeSchema ?? this.deps.store.getLog(runId).at(-1)?.resumeSchema ?? null;
+    const questionId = this.deps.store.suspendWithAskCard({
+      runId,
+      conversationId: run.conversationId,
+      prompt: payload.question,
+      options: options.map((o) => o.label),
+      values: options, // 快照（显式 {label,value}；value 只服务端消费）
+      resumeSchema,
+      input: typeof payload.context === "string" ? { context: payload.context } : null,
+    });
+    publish({
+      type: "hitl_request", questionId, runId, kind: "ask",
+      prompt: payload.question, options: options.map((o) => o.label), resumeSchema,
+    });
   }
 
   /**

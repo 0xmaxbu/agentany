@@ -1,6 +1,7 @@
 // 3 步合成工作流：验证线性 + HITL 循环 + 终结（spike-b 那个）。
 // 纯程序步（不调 runPi）→ 引擎测试与 HTTP e2e 都无需真 pi；runPi 真链路另测。
 import { defineWorkflow } from "../workflow-engine/defineWorkflow";
+import { ask } from "../workflow-engine/ask";
 import { schema } from "../workflow-engine/schema";
 
 export const synthetic = defineWorkflow({
@@ -17,27 +18,27 @@ export const synthetic = defineWorkflow({
       return { value: `s1-out@off${offset}`, offset };
     },
   })
-  .step("review", {
-    // HITL：首跑 suspend 问 accept/redirect；resume 据 decision 走分支。
-    async execute({ input, resumed }) {
-      if (resumed) {
-        if (resumed.decision === "redirect") {
-          // 循环：命令式回 s1，带 +1 offset（演示循环携带新数据）
-          return { __next: "s1", offset: (((input as any)?.offset as number) ?? 0) + 1, focus: resumed.focus ?? null };
-        }
-        return { accepted: true, value: (input as any)?.value }; // accept → 默认链 → s2
-      }
-      return {
-        __suspend: {
-          payload: { produced: (input as any)?.value, offset: ((input as any)?.offset as number) ?? 0 },
-          resumeSchema: schema.object({
-            decision: schema.enum("accept", "redirect"),
-            focus: schema.optional(schema.string()),
-          }),
-        },
-      };
-    },
-  })
+  .step("review", ask({
+    // #46/T3 ADR-0025 决策 5：挂起点收编为 ask 步——显式 {label,value}（enable redirect 循环用 route）。
+    // 定义期断言：2 选项 vs resumeSchema 顶层 enum 2 值 一致（pass）。
+    question: () => "第一步结果已产出，如何决策？",
+    options: [
+      { label: "接受", value: { decision: "accept" } },
+      { label: "偏移 +1 重跑", value: { decision: "redirect" } },
+    ],
+    resumeSchema: schema.object({
+      decision: schema.enum("accept", "redirect"),
+      focus: schema.optional(schema.string()),
+    }),
+    mapAnswer: (input, answer) => ({
+      ...(input as object),
+      accepted: (answer as any).decision === "accept",
+      focus: (answer as any).focus ?? null,
+      // redirect：把 +1 offset 传给 s1 的 input（s1 回读 input.offset）——循环携带新数据
+      offset: (answer as any).decision === "redirect" ? ((input as any)?.offset as number ?? 0) + 1 : (input as any)?.offset,
+    }),
+    route: (answer) => ((answer as any)?.decision === "redirect" ? "s1" : undefined),
+  }))
   .step("s2", {
     // 终结
     async execute({ input }) {

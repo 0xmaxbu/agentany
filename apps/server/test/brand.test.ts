@@ -64,11 +64,13 @@ describe("brand-strategy-analysis · HITL 3 步 + revise 循环", () => {
     store.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input: { brand, region } });
     const ctx = stubCtx(cwd);
 
-    // 1. start → select-angles suspend（带 angles）
+    // 1. start → select-angles suspend（ask 契约：question/options/context 预渲染）
     let r: any = await run(brandStrategyAnalysis, store, runId, ctx);
     expect(r.status).toBe("suspended");
     expect((r as any).stepId).toBe("select-angles");
-    expect(((r as any).payload as any).angles.length).toBe(2);
+    expect(((r as any).payload as any).question).toContain("请选择要深化的切入角度");
+    expect(((r as any).payload as any).options).toHaveLength(2); // 显式 {label,value}
+    expect(((r as any).payload as any).context).toContain("2 个"); // angles 预渲染进 context
 
     // 2. resume select → generate → approve suspend
     r = await resume(brandStrategyAnalysis, store, runId, { selected: "1" }, ctx);

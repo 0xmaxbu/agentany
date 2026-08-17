@@ -2,6 +2,7 @@
 // select-angles（读 angles.json→suspend）→ generate-report（agent 写报告）→ approve-report（suspend，revise→循环）。
 // 步间数据 echo-forward（每步输出带 brand/region/anglesPath/selected），保证 revise 循环不丢上下文。
 import { defineWorkflow } from "../workflow-engine/defineWorkflow";
+import { ask } from "../workflow-engine/ask";
 import { schema } from "../workflow-engine/schema";
 import { slugify } from "../config";
 import { readFile } from "node:fs/promises";
@@ -10,6 +11,22 @@ import { join, resolve, sep } from "node:path";
 // h2：brand/region 进文件路径前 slugify。
 const brandDir = (cwd: string, brand: string, region: string) =>
   join(cwd, "brand-research", `${slugify(brand)}-${slugify(region)}`);
+
+// anglesPath 解析（缺省 brand-research/<brand>-<region>/angles.json；caller 可控输入必须落在工作区内——防跨项目读）。
+const resolveAnglesPath = (cwd: string, input: unknown): { anglesPath: string; brand: string; region: string } => {
+  const brand = String((input as any).brand);
+  const region = String((input as any).region ?? "全国");
+  const rawAngles = (input as any).anglesPath;
+  let anglesPath = join(brandDir(cwd, brand, region), "angles.json");
+  if (typeof rawAngles === "string" && rawAngles.length > 0) {
+    const resolved = resolve(cwd, rawAngles);
+    if (resolved !== cwd && !resolved.startsWith(cwd + sep)) {
+      throw new Error(`anglesPath escapes project workspace: ${rawAngles}`);
+    }
+    anglesPath = resolved;
+  }
+  return { anglesPath, brand, region };
+};
 
 export const brandStrategyAnalysis = defineWorkflow({
   id: "brand-strategy-analysis",
@@ -22,47 +39,37 @@ export const brandStrategyAnalysis = defineWorkflow({
   }),
   extensions: [],
 })
-  .step("select-angles", {
-    async execute({ input, resumed, cwd }) {
-      const brand = String((input as any).brand);
-      const region = String((input as any).region ?? "全国");
-      const rawAngles = (input as any).anglesPath;
-      let anglesPath = join(brandDir(cwd, brand, region), "angles.json");
-      if (typeof rawAngles === "string" && rawAngles.length > 0) {
-        // h2 路径卫生：caller 可控 anglesPath 必须解析后落在项目工作区内（防跨项目 / 任意文件读）。
-        const resolved = resolve(cwd, rawAngles);
-        if (resolved !== cwd && !resolved.startsWith(cwd + sep)) {
-          throw new Error(`anglesPath escapes project workspace: ${rawAngles}`);
-        }
-        anglesPath = resolved;
-      }
-
-      if (resumed) {
-        // resume → 默认链 generate-report；透传上下文 + 用户选择
-        return {
-          selected: String((resumed as any).selected),
-          feedback: (resumed as any).feedback ?? null,
-          brand, region, anglesPath,
-        };
-      }
-      // 首跑（纯读、无副作用、不调 runPi）：读 angles → suspend
+  .step("select-angles", ask({
+    // #46/T3 ADR-0025 决策 5：显式 {label,value} 锁常见点击（"all"/"1,3,5"），截图打字路径仍走宽 schema 归一化。
+    question: (input) => `「${String((input as any).brand)}」调研完成，请选择要深化的切入角度：`,
+    context: async (input, { cwd }) => {
+      const { anglesPath } = resolveAnglesPath(cwd, input);
       let angles: unknown[] = [];
       try {
         angles = JSON.parse(await readFile(anglesPath, "utf8"));
       } catch {
         /* 无 angles.json → 空（前端提示先跑 brand-research）*/
       }
-      return {
-        __suspend: {
-          payload: { angles, anglesPath, brand, region },
-          resumeSchema: schema.object({
-            selected: schema.string(), // "all" 或 "1,3,5"
-            feedback: schema.optional(schema.string()),
-          }),
-        },
-      };
+      if (!Array.isArray(angles) || angles.length === 0) {
+        return `（暂无可选角度——${anglesPath} 不存在或为空，请先运行「品牌战略升级·调研」）`;
+      }
+      return `已读候选角度（${angles.length} 个）：\n${angles
+        .map((a, i) => `${i + 1}. ${String((a as any).title ?? (a as any).id ?? i + 1)}`)
+        .join("\n")}`;
     },
-  })
+    resumeSchema: schema.object({
+      selected: schema.string(), // 自由形（"all" 或 "1,3,5"）——打字路径须接受任意选择
+      feedback: schema.optional(schema.string()),
+    }),
+    options: [
+      { label: "全部角度", value: { selected: "all" } },
+      { label: "角度 1、3、5", value: { selected: "1,3,5" } },
+    ],
+    mapAnswer: (input, answer, { cwd }) => {
+      const { anglesPath, brand, region } = resolveAnglesPath(cwd, input);
+      return { ...(input as object), anglesPath, brand, region, selected: String((answer as any)?.selected), feedback: (answer as any)?.feedback ?? null };
+    },
+  }))
   .step("generate-report", {
     async execute({ input, runPi, cwd }) {
       const brand = String((input as any).brand);
@@ -86,32 +93,23 @@ export const brandStrategyAnalysis = defineWorkflow({
       return { reportPath, summary: r.text, brand, region, anglesPath, selected };
     },
   })
-  .step("approve-report", {
-    async execute({ input, resumed }) {
-      const ctx = {
-        reportPath: (input as any).reportPath,
-        summary: (input as any).summary,
-        brand: (input as any).brand,
-        region: (input as any).region,
-        anglesPath: (input as any).anglesPath,
-        selected: (input as any).selected,
-      };
-      if (resumed) {
-        if ((resumed as any).decision === "revise") {
-          // 循环回 generate-report，带 comments + 透传上下文（echo-forward）
-          return { __next: "generate-report", comments: (resumed as any).comments ?? "", ...ctx };
-        }
-        return { approved: true, reportPath: ctx.reportPath };
-      }
-      return {
-        __suspend: {
-          payload: { reportPath: ctx.reportPath, excerpt: ctx.summary },
-          resumeSchema: schema.object({
-            decision: schema.enum("approve", "revise"),
-            comments: schema.optional(schema.string()),
-          }),
-        },
-      };
-    },
-  })
+  .step("approve-report", ask({
+    // #46/T3 ADR-0025 决策 5：打回修订循环用 route 表达（answer.decision==="revise" → generate-report）。
+    question: () => "战略升级报告已生成，是否通过验收？",
+    context: (input) => `报告：${String((input as any).reportPath)}\n\n执行摘要：${String((input as any).summary ?? "")}`,
+    options: [
+      { label: "批准", value: { decision: "approve" } },
+      { label: "打回修订", value: { decision: "revise" } },
+    ],
+    resumeSchema: schema.object({
+      decision: schema.enum("approve", "revise"),
+      comments: schema.optional(schema.string()),
+    }),
+    mapAnswer: (input, answer) => ({
+      ...(input as object), // echo-forward（reportPath/brand/region/selected 随行，revise 循环不丢上下文）
+      approved: (answer as any).decision === "approve",
+      comments: (answer as any).comments ?? "",
+    }),
+    route: (answer) => ((answer as any)?.decision === "revise" ? "generate-report" : undefined),
+  }))
   .commit();

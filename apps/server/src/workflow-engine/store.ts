@@ -81,7 +81,8 @@ export interface QuestionRow {
   workflowId: string | null; // #18 approval：待审批工作流（ask 卡为空）
   input: unknown; // #18 approval：待审批 input（反序列化；approve 后用它 createRun）
   prompt: string;
-  options: unknown; // 反序列化 string[]
+  options: unknown; // 反序列化 string[]（labels）
+  values: unknown; // ADR-0025（#46）：反序列化 AskOption[] = 显式 {label,value} 快照（ask 强制卡）
   resumeSchema: unknown; // 反序列化手搓 schema
   multiple: number; // 0/1
   status: "pending" | "answered";
@@ -217,6 +218,34 @@ export class WorkflowStore {
   /** 简报消息 id 回填（发信后幂等；null=未发——启动对账补发锚）。 */
   backfillBriefMessage(runId: string, messageId: number | null): void {
     this.db.update(workflowRuns).set({ briefMessageId: messageId }).where(eq(workflowRuns.runId, runId)).run();
+  }
+
+  /** ADR-0025 决策 6（#46/T3）：挂起强制卡——suspended 重确认 + createQuestion(kind=ask, values=快照) **同一事务**
+   *   （挂起落库与卡片同现，崩溃零窗口）。返 questionId。 */
+  suspendWithAskCard(p: {
+    runId: string;
+    conversationId: string;
+    prompt: string;
+    options: unknown; // labels string[]
+    values: unknown; // AskOption[] 快照（显式 {label,value}）
+    resumeSchema?: unknown;
+    input?: unknown; // ask 卡暂挂 context 等决策素材（前端零改造，留待卡渲染）
+  }): number {
+    let qid = 0;
+    this.db.transaction((tx) => {
+      tx.update(workflowRuns).set({ status: "suspended", updatedAt: now() }).where(eq(workflowRuns.runId, p.runId)).run();
+      const r = tx
+        .insert(hitlQuestions)
+        .values({
+          conversationId: p.conversationId, runId: p.runId, kind: "ask", input: J(p.input),
+          prompt: p.prompt, options: J(p.options) as string, values: J(p.values),
+          resumeSchema: J(p.resumeSchema), multiple: 0, status: "pending", createdAt: now(),
+        })
+        .returning({ id: hitlQuestions.id })
+        .get();
+      qid = r?.id ?? 0;
+    });
+    return qid;
   }
 
   reset(): void {
@@ -425,7 +454,7 @@ export class WorkflowStore {
   // ── HITL 提问（ticket #16 ask_user + #18 审批门）──
   createQuestion(p: {
     conversationId: string; runId?: string | null; prompt: string; options: unknown;
-    resumeSchema?: unknown; multiple?: boolean;
+    values?: unknown; resumeSchema?: unknown; multiple?: boolean;
     kind?: "ask" | "approval" | "task"; workflowId?: string; input?: unknown; decidedBy?: string;
   }): number {
     const r = this.db
@@ -433,7 +462,7 @@ export class WorkflowStore {
       .values({
         conversationId: p.conversationId, runId: p.runId ?? null, kind: p.kind ?? "ask",
         workflowId: p.workflowId ?? null, input: J(p.input), prompt: p.prompt,
-        options: J(p.options) as string, resumeSchema: J(p.resumeSchema),
+        options: J(p.options) as string, values: J(p.values), resumeSchema: J(p.resumeSchema),
         multiple: p.multiple ? 1 : 0, status: "pending", decidedBy: p.decidedBy ?? null, createdAt: now(),
       })
       .returning({ id: hitlQuestions.id })
@@ -530,7 +559,7 @@ export class WorkflowStore {
     return {
       id: r.id, conversationId: r.conversationId, runId: r.runId, kind: r.kind ?? "ask",
       workflowId: r.workflowId, input: P(r.input), prompt: r.prompt,
-      options: P(r.options), resumeSchema: P(r.resumeSchema), multiple: r.multiple,
+      options: P(r.options), values: P(r.values), resumeSchema: P(r.resumeSchema), multiple: r.multiple,
       status: r.status as "pending" | "answered", answer: P(r.answer), decidedBy: r.decidedBy,
       createdAt: r.createdAt, answeredAt: r.answeredAt,
     };

@@ -20,8 +20,21 @@ export interface StepContext<TInput = any> {
   log: (...args: unknown[]) => void;
 }
 
+// ADR-0025（#46/T3）：挂起点收编为 ask 契约——显式 {label,value} 映射（value 即 resumeData，点击=确定性派发）；
+// 引擎挂起时同事务直建强制卡。SuspendSpec.payload 由 any 收紧（breaking，单仓自研无兼容期）。
+export interface AskOption {
+  label: string;
+  value: unknown; // 服务端消费（resumeData 候选）；前端只收 label 不下行 value
+}
+
+export interface AskPayload {
+  question: string;
+  options: AskOption[]; // 已解析（显式或 enum 派生）——引擎贴卡用，上游者不改
+  context?: string; // 预渲染 markdown（决策辅助）
+}
+
 export interface SuspendSpec {
-  payload: any;
+  payload: AskPayload;
   resumeSchema: Schema;
 }
 

@@ -11,6 +11,8 @@ export const schema = {
   number: (): Schema => ({ _t: "number" }),
   boolean: (): Schema => ({ _t: "boolean" }),
   enum: (...vals: unknown[]): Schema => ({ _t: "enum", vals }),
+  /** 可接受任意字面值的 schema（显式卡片选项的 resumeSchema：value 即 resumeData；复用 enum 的 includes 判定）。 */
+  values: (...vals: unknown[]): Schema => ({ _t: "enum", vals }),
   optional: (inner: Schema): Schema => ({ _t: "optional", inner }),
   object: (shape: Record<string, Schema>): Schema => ({ _t: "object", shape }),
 };

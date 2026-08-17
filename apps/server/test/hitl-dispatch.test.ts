@@ -146,22 +146,21 @@ describe("dispatch · approval 卡（收编 #18）", () => {
 });
 
 describe("dispatch · ask 卡（选项点击确定性 resume）", () => {
-  test("点选项 → options 与 resumeSchema.enum 按序对位 → 确定性构造 resumeData + registry.resume + markAnswered", async () => {
-    // synthetic-3step suspend 步 s1：resumeSchema {decision: enum[accept,redirect], focus?}
+  test("挂起即引擎直建强制卡；点选项 → 确定性 resume + markAnswered", async () => {
+    // synthetic-3step 的 review 是 ask 步：挂起同事务直建强制卡（options + values 快照 + resumeSchema）
     const reg = ctx.deps.runRegistry!;
     const start = reg.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
-    await new Promise((res) => setTimeout(res, 50));
     expect(start.status).toBe("running");
     const runId = (start as any).runId as string;
-    await new Promise((res) => setTimeout(res, 100)); // 等 suspend
-    const run = ctx.store.getRun(runId)!;
-    expect(run.status).toBe("suspended");
-    const log = ctx.store.getLog(runId);
-    const resumeSchema = log[log.length - 1].resumeSchema as any;
-    const qid = ctx.store.createQuestion({
-      conversationId: "c1", kind: "ask", runId, prompt: "选一个",
-      options: ["接受", "重定向"], resumeSchema,
-    });
+    await new Promise((res) => setTimeout(res, 150)); // 等 suspend + 引擎直建卡
+    expect(ctx.store.getRun(runId)!.status).toBe("suspended");
+
+    const qid = ctx.store.getPendingByRun(runId)!.id; // 引擎强制卡（非手动建）
+    const card = ctx.store.getQuestion(qid)!;
+    expect(card.kind).toBe("ask");
+    expect(card.options).toEqual(["接受", "偏移 +1 重跑"]);
+    expect(card.resumeSchema).toBeTruthy();
+
     const tok = await ctx.login("m1");
     await ctx.send("c1", tok, "接受", qid);
     await new Promise((res) => setTimeout(res, 150));

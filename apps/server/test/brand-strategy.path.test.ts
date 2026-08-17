@@ -28,14 +28,15 @@ async function startWith(store: WorkflowStore, input: unknown) {
 }
 
 describe("brand-strategy-analysis · anglesPath 路径卫生", () => {
-  test("默认从工作区读 angles.json → suspend 含 angles", async () => {
+  test("默认从工作区读 angles.json → suspend（ask 契约 context 预渲染）", async () => {
     const store = newStore();
     const dir = join(CWD, "brand-research", "acme-全国");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "angles.json"), JSON.stringify([{ id: 1, title: "t" }]));
     const { res } = await startWith(store, { brand: "acme" });
     expect(res.status).toBe("suspended");
-    expect((res as any).payload.angles).toEqual([{ id: 1, title: "t" }]);
+    expect((res as any).payload.question).toContain("请选择要深化的切入角度");
+    expect((res as any).payload.context).toContain("1. t"); // angles 预渲染进 context
   });
 
   test("anglesPath 指向工作区【外】的有效 JSON → failed（防跨区/任意文件读）", async () => {
@@ -59,7 +60,7 @@ describe("brand-strategy-analysis · anglesPath 路径卫生", () => {
     writeFileSync(join(CWD, "custom-angles.json"), JSON.stringify([{ id: 9 }]));
     const { res } = await startWith(store, { brand: "acme", anglesPath: "custom-angles.json" });
     expect(res.status).toBe("suspended");
-    expect((res as any).payload.angles).toEqual([{ id: 9 }]);
+    expect((res as any).payload.context).toContain("1. 9"); // 由 {id:9}（无 title → id）预渲染
   });
 });
 
