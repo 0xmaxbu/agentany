@@ -30,6 +30,7 @@
 | 工作流定义 (Workflow Definition) | 工作流**「是什么」**：它的步骤、输入/输出契约、所需能力、允许的角色。一个定义可被**多次运行**（不变）。 |
 | 工作流运行 (Workflow Run) | 工作流**「跑了一回」**的具体实例：带输入、每步产出、状态（运行中/挂起/完成/失败）。HITL 工作流的一次运行可中途**挂起**、等人输入后**续跑**（甚至跨进程）。 |
 | 全自动工作流 vs HITL 工作流 | 工作流按是否需人介入分两种：**全自动**的跑到底、人工只验收（不足可定向重跑，如「调研」）；**HITL**的中途挂起等人输入再续（如「战略升级分析」选角度）。决定一个工作流能否被无门程序化触发（如「新建项目」自动跑调研） |
+| 运行简报 (Run Brief) | 工作流运行的**终态产出物**（≤200 字符契约，首句直说结果，产物路径可点预览）：run 完成/失败时引擎确定性直投为会话消息，不经 LLM 转述。末步产出 `brief` 字段，缺省兜底为步骤列表摘要（ADR-0025）。 |
 | 角色 (Role) | 用户的**功能身份**（v1：admin | member 单值）。admin 管用户/workspace；**可见性不由角色控制**——workspace 访问看名单/allUsers，会话看创建者（ADR-0018）。 |
 | 执行 (Execution) | 一次 agent 调用（**工作流运行** or **对话**），有过程、可收反馈、可被提取经验。工作流运行和对话都是「执行」的形态（ADR-0008）。 |
 | 反馈 (Feedback) | 用户对一次「执行」的评价/批注（文本 + 可选评分），是经验提取的原料。**多态挂载**（`message` / `workflow_run` / `chat`，同表同接口；行带作者 authorId，回显按人过滤）。 |
@@ -47,13 +48,17 @@
 | Pi 会话 (Pi session) | Pi 自己的跨轮记忆文件（`--session-id`+`--session-dir` 存盘），按 sessionId 定位。**不同于「会话(Conversation)」**——一个 Conversation 确定性派生一个 Pi session（`chat-<conversationId>`），但 Pi session 是技术物件、Conversation 是产品概念。工作流运行也各派生一个（`run-<runId>`）。 |
 | 块 (Block) | 消息内容的原子单位（ADR-0019）：一条消息 = blocks 序列，四件套 `text`/`thinking`/`tool_use`/`tool_result`。历史（pi session 读取）与实时（SSE 三帧）同构——同一 Block 形状、同一渲染组件。前端消息模型的单一真相（取代旧「纯文本 content」）。 |
 | 块三帧 (Block frames) | 实时块流的三种 SSE 帧（ADR-0019）：`block_start`（含 kind/meta）、`block_delta`（增量）、`block_end`（关块）。blockId 标识**块**；turn 边界仍由 `done` 帧表达（块边界 ≠ turn 边界）。legacy `delta` 帧已删（双发收口）。 |
+| 轮 (Turn) | 与系统的**一次完整交互**：一次输入 → 一次产出。输入双源（用户输入 / 系统消息）× 处理双径（LLM / 确定性），一次输入恰为一轮。系统的核心价值在**产出**而非输入——产出物是一等协议公民（ADR-0025）。 |
+| 系统消息 (System Message) | **输入方是系统**的消息（run 事件、cron 触发）。不是「没有输入」，而是系统作为对话参与方发起的轮（ADR-0025）。 |
+| 事实事件 (Durable event) | 落投递日志、可重放的事件（消息定稿/简报/卡/run 状态）。重放按投影等价重建（ADR-0026）。 |
+| 瞬态帧 (Transient frame) | 传输细节（`block_delta` token 增量）：内存直推、永不落日志，重放以整块合成。IM 等通道只消费事实事件、不收 token 流（ADR-0026）。 |
 | 归档会话 (Archived conversation) | 从主列表移除但**可查可恢复**的会话（ADR-0020，archivedAt 软态）：历史只读、禁止发消息；创建者可归档/恢复，删除（不可逆全链清理）仅 admin。区别于「删除」——归档是整理，删除是清除。 |
 | 归档 Workspace (Archived workspace) | admin 的整理动作（#手风琴）：workspace 从所有用户侧栏隐藏，但**其会话可看可发**（非封禁——区别于归档会话的只读）；admin 可恢复；公司 workspace 不可归档。 |
 | chat 界面 (Chat surface) | agentany 的主产品面：用户在此对话、上传资料、触发能力。闲聊流式走 SSE（ADR-0003），单进程 Hono + React/Vite 托管。 |
 | 基础通用工具 (Basic universal tool) | 每个 chat turn 默认开启的工具扩展（如搜索 `tavily-search/web-search`），无需用户/工作流显式声明。其余工具型 skill 走自动发现、pi 按需用。 |
 | 自动发现 (Auto-discovery) | pi 的标准能力发现：每次运行自动扫全部 repo skills（ADR-0005），模型按需调用。工作流经**桥接工具**同样被 pi 自动发现、从 NL 触发（ADR-0009）。 |
 | 桥接工具 (Bridge tool) | 注册给 pi 的工具（`start_workflow`/`resume_workflow`），让 pi 在对话里从 NL 触发/续跑服务端工作流。薄桥：pi 子进程 → localhost HTTP → 工作流引擎（ADR-0009）。 |
-| 交互工具 (Interaction tool) | chat 界面提供给 pi、用于与用户交互的工具（v1：`ask_user` 单/多选；后期加更多）。pi 用它把 HITL 挂起/澄清等结构化提问渲染成 chat 里的选择 UI（ADR-0009）。 |
+| 交互工具 (Interaction tool) | chat 的**通用提问工具** `ask_user`，双源（ADR-0025）：**自主提问**（LLM 不确定时自己调，不绑 run，答案经 pi 归一化）与**强制提问**（run 挂起时引擎据挂起契约直建卡，enum 对位由代码保证）。客户端统一渲染选择卡，不问出处。 |
 | 项目记忆 (Project memory) | workspace 工作区的 `AGENTS.md`（L2）——pi 每轮自动加载，承载 engagement/品牌背景与关键决策，给 pi 稳定的**workspace 级持久记忆**、抗会话压缩丢失。不同于会话 transcript（L1，会话内）与 skill 经验（L3，repo 级）。 |
 | 系统 (System) | 承载**全局、跨项目配置**（安全姿态 `SECURITY_POSTURE`、运行参数、全局开关等）的实体；对所有项目/会话生效，与「项目级」配置对立。是独立实体、非范围限定词（ADR-0013）。 |
 | 系统作用域 (System scope) | **服务端代码装配跨 workspace 数据的权限**（非 pi 的读写特权）：跨 ws 数据（如蒸馏要读的各 ws pi session）由服务端装配成最小切片供任务 pi 只读；pi 全程无跨 ws 读写能力（ADR-0021）。不是 workspace——无名单/权限语义，是正交的全局维度。 |

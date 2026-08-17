@@ -23,6 +23,8 @@ chat 界面是 agentany 的**主产品面**（非技术内部用户在此对话�
 - **交互工具**：chat 界面给 pi 供 `ask_user({prompt, options[], select:"single"|"multi"})`，在 chat 渲染单/多选 UI；用户选 → 工具返选择 → pi 用之（如填 resumeSchema）。**后期加更多交互工具**。
 - **长 agent 步异步（X）**：工具立即返 `{status:"running", stepId}`，run 服务端续跑、SSE 把 run-log 流进 chat；下一个 suspend/完成**触发新一轮 pi turn** 中介。engine 在每个 step 边界交还控制权，与 ADR-0007 step-boundary 吻合。**嵌套 pi** 是自然结果（chat-pi →桥接→ 引擎 agent 步再起一个 pi），各自独立 session。
 
+> **修订（ADR-0025，2026-08-17）**：「suspend/完成**触发新一轮 pi turn** 中介」条款**废止**——run 三终态（完成/失败/挂起）均**零 LLM 直投**（运行简报 / 强制提问卡，引擎确定性发布）。`ask_user` 从「HITL 挂起渲染工具」改为**通用双源提问工具**（自主提问不绑 run）。事件 turn 仅存定时任务投递（系统消息 × LLM 象限）。
+
 **管理菜单 v1（Q8=a）**：**只读列表**。列 skills（name+description+类型[工具/方法论]）+ workflows（id+name+description+inputSchema）。启停/编辑后续配合 auth。
 
 **上传资料（Q9=a）**：上传进会话所属项目工作区 `data/projects/<projectId>/workspace/uploads/`，消息存附件引用。pi cwd 已是工作区 → agent **零额外接线**能读、触发的工作流同 cwd 直接消费。切片 2+。
