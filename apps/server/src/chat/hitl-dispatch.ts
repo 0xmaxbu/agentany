@@ -1,11 +1,13 @@
-// 统一卡应答 dispatch（#28 重构，收编 #18 审批门 + #28 任务卡确认）：
+// 统一卡应答 dispatch（#28 重构，收编 #18 审批门 + #28 任务卡确认 + #46/T5 ask 卡三态）：
 // 消息绑定 questionId（POST /messages inReplyTo）→ 按 kind 的 handler 确定性执行。
-// 设计动机：专用确认路由（/approvals/:id/decide、/scheduled-tasks/confirm/:id）每卡型一套
-// （路由+CAS+帧），第三种卡还得再抄——收敛为「一条消息通道 + kind handler 注册表」。
 // 漂移根除：确认信号不再经 LLM 判答（ask 卡打字回答仍走老判答路——那是语义归一化功能）。
-// 答案仍以普通消息落库（对话历史可见）；卡 answered 行的 answer 记确定性结果。
+// ADR-0025 决策 10（#47/T5）：跳轮判定一句话——**答案的消费者是引擎（resume 副作用）则跳轮，
+// 是 pi（对话语义）则不跳**；卡=确定性收口，自由文本=LLM 归一化。
+// 落卡形态整体删除：旧 hitl-dispatch 的 deterministicResumeData===undefined → markTaskCardDecided 分支
+// 已废（answered 后注入消失 + pi 不读 messages → resume 无人职守）；强制卡恒有快照、自主卡滑 LLM。
 import type { RunDeps } from "../runs";
 import type { QuestionRow } from "../workflow-engine/store";
+import type { ResumeOutcome } from "../workflow-engine/runner";
 import { SystemTaskProtected } from "../scheduled-tasks/store";
 import type { Frame } from "./eventbus";
 import { validateCronAndFirstFire } from "../scheduled-tasks/cron";
@@ -13,12 +15,15 @@ import { validateCronAndFirstFire } from "../scheduled-tasks/cron";
 export interface DispatchResult {
   handled: boolean; // true=卡被确定性收口；false=无卡/不可处理（消息照常走对话流）
   error?: string; // handled 内部副作用失败（调用方记日志，不阻塞消息）
+  /** #47/T5：程序化轮旗标（T6 路由据此跳过 LLM turn）。true=已/可确定性收口（含已答双击幂等 ack），
+   *  不另起 LLM 轮，免 429；undefined=滑 LLM 轮（答案消费者是 pi）。 */
+  skipTurn?: boolean;
 }
 
 /**
- * 处理一条带 inReplyTo 的消息对卡的应答。幂等：卡非 pending → handled:false（不重复执行）。
- * 安全：卡必须在「当前会话」（消息所在 conv）；task/approval 的确认权=卡主（conv 创建者），
- * 消息路由的会话守卫已保证发送者可见该会话，但 admin 也能进会话——故再校验 conv.userId。
+ * 处理一条带 inReplyTo 的消息对卡的应答。安全：卡必须在「当前会话」（消息所在 conv）；
+ * task/approval 的确认权=卡主（conv 创建者）；已 answered 的卡（双击）→ 幂等 ack（skipTurn，
+ * 不重复执行、不二次起轮——ADR-0025 决策 10）。
  */
 export async function dispatchCardAnswer(
   deps: RunDeps,
@@ -28,7 +33,8 @@ export async function dispatchCardAnswer(
   userId: string,
 ): Promise<DispatchResult> {
   const q = deps.store.getQuestion(questionId);
-  if (!q || q.conversationId !== conversationId || q.status !== "pending") return { handled: false };
+  if (!q || q.conversationId !== conversationId) return { handled: false };
+  if (q.status !== "pending") return { handled: false, skipTurn: true }; // 已答双击：消息落库、不二次派发/起轮
   const conv = deps.store.getConversation(conversationId);
   if (!conv) return { handled: false };
 
@@ -43,7 +49,7 @@ export async function dispatchCardAnswer(
   try {
     return await handler({ deps, q, content, userId, convId: conversationId, publish });
   } catch (e) {
-    return { handled: true, error: (e as Error).message };
+    return { handled: true, skipTurn: true, error: (e as Error).message };
   }
 }
 
@@ -74,7 +80,7 @@ const taskHandler: KindHandler = async ({ deps, q, content, publish }) => {
   if (!confirm) {
     deps.store.markTaskCardDecided(q.id, { decision: "cancel", message: content });
     publish({ type: "hitl_answered", questionId: q.id, kind: "task", answer: { decision: "cancel" } });
-    return { handled: true };
+    return { handled: true, skipTurn: true };
   }
 
   if (input.update) {
@@ -83,21 +89,21 @@ const taskHandler: KindHandler = async ({ deps, q, content, publish }) => {
     try {
       row = deps.taskStore!.updateTask(taskId, patch);
     } catch (e) {
-      if (e instanceof SystemTaskProtected) return { handled: true, error: "system task protected" };
+      if (e instanceof SystemTaskProtected) return { handled: true, skipTurn: true, error: "system task protected" };
       throw e;
     }
     if (!row) {
       deps.store.markTaskCardDecided(q.id, { decision: "cancel", message: "task no longer exists" });
       publish({ type: "hitl_answered", questionId: q.id, kind: "task", answer: { decision: "cancel" } });
-      return { handled: true, error: "task no longer exists" };
+      return { handled: true, skipTurn: true, error: "task no longer exists" };
     }
     if (patch.cron) deps.taskStore!.recomputeNextFire(taskId);
     deps.store.markTaskCardDecided(q.id, { decision: "confirm", taskId });
     publish({ type: "hitl_answered", questionId: q.id, kind: "task", answer: { decision: "confirm", taskId } });
-    return { handled: true };
+    return { handled: true, skipTurn: true };
   }
 
-  if (!input.displayName || !input.cron || !input.prompt) return { handled: true, error: "card payload incomplete" };
+  if (!input.displayName || !input.cron || !input.prompt) return { handled: true, skipTurn: true, error: "card payload incomplete" };
   const conv = deps.store.getConversation(q.conversationId)!;
   const task = deps.taskStore!.createWorkspaceTask({
     displayName: input.displayName, cron: input.cron, prompt: input.prompt,
@@ -106,7 +112,7 @@ const taskHandler: KindHandler = async ({ deps, q, content, publish }) => {
   });
   deps.store.markTaskCardDecided(q.id, { decision: "confirm", taskId: task.id });
   publish({ type: "hitl_answered", questionId: q.id, kind: "task", answer: { decision: "confirm", taskId: task.id } });
-  return { handled: true };
+  return { handled: true, skipTurn: true };
 };
 
 // ── approval（#18 收编）：options[0]=批准 options[1]=拒绝（既有契约：index 对位）──
@@ -117,14 +123,14 @@ const approvalHandler: KindHandler = async ({ deps, q, content, userId, publish 
     const row = deps.store.markApprovalDecided(q.id, { decision: "deny" }, userId);
     if (!row) return { handled: false }; // CAS 失败（并发已决）
     publish({ type: "hitl_answered", questionId: q.id, kind: "approval", answer: { decision: "deny" } });
-    return { handled: true };
+    return { handled: true, skipTurn: true };
   }
   // approve：CAS 占位 → createRun（approved:true 跳 policy）→ 回填；失败回滚可重试
   const claimed = deps.store.markApprovalDecided(q.id, { decision: "approve" }, userId);
   if (!claimed) return { handled: false };
   if (!deps.runRegistry) {
     deps.store.reopenApproval(q.id);
-    return { handled: true, error: "run registry unavailable" };
+    return { handled: true, skipTurn: true, error: "run registry unavailable" };
   }
   let runId: string;
   try {
@@ -133,49 +139,49 @@ const approvalHandler: KindHandler = async ({ deps, q, content, userId, publish 
     });
     if (outcome.status !== "running") {
       deps.store.reopenApproval(q.id);
-      return { handled: true, error: `unexpected start outcome: ${outcome.status}` };
+      return { handled: true, skipTurn: true, error: `unexpected start outcome: ${outcome.status}` };
     }
     runId = outcome.runId;
   } catch (e) {
     deps.store.reopenApproval(q.id);
-    return { handled: true, error: `failed to start: ${(e as Error).message}` };
+    return { handled: true, skipTurn: true, error: `failed to start: ${(e as Error).message}` };
   }
   deps.store.backfillApprovalRunId(q.id, runId);
   publish({ type: "hitl_answered", questionId: q.id, kind: "approval", runId, answer: { decision: "approve" } });
-  return { handled: true };
+  return { handled: true, skipTurn: true };
 };
 
-// ── ask（工作流判答）：点选项=确定性；打字不带 inReplyTo 走老路（pi 归一化）──
-// 约定（ADR-0022）：options 与 resumeSchema 顶层单 enum 属性按序对位（工作流作者按序给标签）；
-// 非对位形（多属性/无 enum）→ 只 markAnswered(选项原文)，resume 留给 pi 下轮归一化。
+// ── ask（ADR-0025 决策 7/10，#47/T5）：run 绑定卡 + 点击命中可确定性映射 → 程序化 resume（零 LLM）；
+//   自主卡（runId 空）/ 老手写卡（无 value 无 enum）/ 打字 → slide 滑 LLM 轮（卡保 pending，注入仍在）──
 const askHandler: KindHandler = async ({ deps, q, content, publish }) => {
   const idx = optionIndex(q.options as string[], content);
-  if (idx < 0) return { handled: false };
-  const resumeData = deterministicResumeData(q.resumeSchema, idx);
-  if (resumeData === undefined) {
-    // 复杂 schema：答案落卡（pi 注入看到 answered 卡 + 原文答案，归一化后 resume_workflow）
-    const row = deps.store.markTaskCardDecided(q.id, content);
-    if (!row) return { handled: false };
-    publish({ type: "hitl_answered", questionId: q.id, answer: content });
-    return { handled: true };
-  }
-  let outcome;
+  if (idx < 0) return { handled: false }; // 打字（非选项文本）→ 滑 LLM 轮（pi 归一化，答案消费者是 pi）
+  if (!q.runId) return { handled: false }; // 自主卡：无绑定 run、无 resume 语义 → 滑 LLM 轮
+  const resumeData = deterministicResumeData(q, idx); // 快照 value 优先，enum 对位兼容（决策 5/6）
+  if (resumeData === undefined) return { handled: false }; // 老手写卡无 value 无 enum → slide（卡保 pending）
+  let outcome: ResumeOutcome;
   try {
-    outcome = await deps.runRegistry!.resume(q.runId!, resumeData);
+    outcome = await deps.runRegistry!.resume(q.runId, resumeData);
   } catch (e) {
-    return { handled: true, error: `resume failed: ${(e as Error).message}` };
+    return { handled: true, skipTurn: true, error: `resume failed: ${(e as Error).message}` };
   }
-  if ("rejected" in outcome) return { handled: true, error: `resume rejected: ${outcome.error}` }; // 保持 pending 供重试
-  if ("idempotent" in outcome) return { handled: true };
-  const row = deps.store.markPendingAnsweredByRun(q.runId!, resumeData);
-  if (row) publish({ type: "hitl_answered", questionId: row.id, answer: resumeData });
-  return { handled: true };
+  if ("rejected" in outcome) return { handled: true, skipTurn: true, error: `resume rejected: ${outcome.error}` }; // 保持 pending 供重试
+  if ("idempotent" in outcome) return { handled: true, skipTurn: true }; // 重复点击/已答：不二次起轮（幂等 ack）
+  // clean（ADR-0025 决策 11：即时 running，续跑 detached）→ 答案已确定性派发：markAnswered + hitl_answered
+  const row = deps.store.markPendingAnsweredByRun(q.runId, resumeData);
+  if (row) publish({ type: "hitl_answered", questionId: q.id, answer: resumeData, kind: "ask", runId: q.runId });
+  return { handled: true, skipTurn: true };
 };
 
-/** 约定映射：手搓 schema（schema.ts 可序列化形：{_t:"object", shape:{prop:{_t:"enum", vals:[...]}}}）
- * 顶层恰一个 enum 属性、其余属性全 optional（resume 时可省略）→ { [prop]: vals[idx] }。
- * 否则 undefined（不可确定性映射，留给 pi 归一化）。 */
-export function deterministicResumeData(resumeSchema: unknown, idx: number): unknown | undefined {
+/** 确定性映射（决策 5/6，#47/T5）：显式 {label,value} **快照查表** 优先（value 即 resumeData）；回落 enum 对位
+ * （ADR-0022 决策 4 兼容旧手写卡——resumeSchema 顶层单 enum 属性按序对位 → {[prop]: vals[idx]}）。
+ * 不可映射（无 value 无 enum）→ undefined（滑 LLM）。 */
+export function deterministicResumeData(q: QuestionRow, idx: number): unknown | undefined {
+  if (Array.isArray(q.values) && q.values.length > idx) {
+    const v = (q.values[idx] as { value?: unknown }).value;
+    if (v !== undefined) return v; // label→value 命中（快照；卡自包含，重启/改 workflow 定义不失效）
+  }
+  const resumeSchema = q.resumeSchema;
   if (!resumeSchema || typeof resumeSchema !== "object") return undefined;
   const s = resumeSchema as { _t?: string; shape?: Record<string, { _t?: string; vals?: unknown[] }> };
   if (s._t !== "object" || !s.shape) return undefined;

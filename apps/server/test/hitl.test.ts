@@ -158,6 +158,30 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
     } finally { stop(); _clearNonces(); }
   });
 
+  test("/ask_user 自主（#47/T5）：无 runId → 自主卡（runId null，无 resume 语义）", async () => {
+    const { store, eventBus, registry } = bridgeSetup();
+    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    const token = issueNonce("c-hitl");
+    const frames: any[] = [];
+    eventBus.subscribe("c-hitl", (f) => frames.push(f));
+    try {
+      const resp = await fetch(`http://127.0.0.1:${port}/ask_user`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "澄清：目标预算区间？", options: ["<10w", "10-50w", ">50w"] }),
+      });
+      expect(resp.status).toBe(200);
+      const data: any = await resp.json();
+      expect(data.status).toBe("asked");
+      // 自主卡：runId 空、无 resume 语义（点选将滑 LLM 轮——dispatch 层另行覆盖）
+      const q = store.getQuestion(data.questionId)!;
+      expect(q.runId).toBeNull();
+      expect(q.kind).toBe("ask");
+      const req: any = frames.find((f) => f.type === "hitl_request");
+      expect(req.runId).toBeNull();
+      expect(req.options).toEqual(["<10w", "10-50w", ">50w"]);
+    } finally { stop(); _clearNonces(); }
+  });
+
   test("/ask_user 幂等: 同 run 再问 → already_asked（不重复建、无新帧）", async () => {
     const { store, eventBus, registry } = bridgeSetup();
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });

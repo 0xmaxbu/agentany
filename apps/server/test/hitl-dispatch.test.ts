@@ -12,6 +12,7 @@ import { ScheduledTaskStore } from "../src/scheduled-tasks/store";
 import { EventBus } from "../src/chat/eventbus";
 import { ConversationQueues } from "../src/chat/queue";
 import { RunRegistry } from "../src/runs/registry";
+import { deterministicResumeData } from "../src/chat/hitl-dispatch";
 import type { RunDeps } from "../src/runs";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
 
@@ -182,7 +183,8 @@ describe("dispatch · ask 卡（选项点击确定性 resume）", () => {
     expect(ctx.store.getQuestion(qid)!.status).toBe("pending"); // 未被 dispatch
   });
 
-  test("复杂 schema（非单 enum 对位）→ 只 markAnswered(选项)，resume 留给 pi 归一化", async () => {
+  test("复杂 schema（无 value 无 enum）点选 → slide：卡保持 pending、不落卡（pi 下轮归一化）", async () => {
+    // ADR-0025 决策 10：落卡形态删除——不可确定性映射 → handled:false 滑 LLM 轮（不 markDecided）
     const qid = ctx.store.createQuestion({
       conversationId: "c1", kind: "ask", runId: "r_y", prompt: "q",
       options: ["方案A", "方案B"],
@@ -192,8 +194,61 @@ describe("dispatch · ask 卡（选项点击确定性 resume）", () => {
     await ctx.send("c1", tok, "方案A", qid);
     await new Promise((res) => setTimeout(res, 30));
     const q = ctx.store.getQuestion(qid)!;
-    expect(q.status).toBe("answered");
-    expect(q.answer).toBe("方案A"); // 原文答案——pi 下轮注入后归一化 resume
+    expect(q.status).toBe("pending"); // slide：卡保持 pending，[待处理提问] 注入仍在，pi 下轮归一化
+    expect(q.answer).toBeNull();
+  });
+
+  test("自主卡（runId null）点选 → slide（无 resume 语义，卡保 pending）", async () => {
+    const qid = ctx.store.createQuestion({
+      conversationId: "c1", kind: "ask", runId: null, prompt: "澄清：目标市场？",
+      options: ["是", "否"],
+    });
+    const tok = await ctx.login("m1");
+    await ctx.send("c1", tok, "是", qid);
+    await new Promise((res) => setTimeout(res, 30));
+    const q = ctx.store.getQuestion(qid)!;
+    expect(q.status).toBe("pending"); // 答案消费者是 pi（对话语义）→ 不跳轮
+    expect(q.answer).toBeNull();
+  });
+
+  
+  test("双击已答强制卡 → 幂等 ack：消息照常落库、不二次派发/起轮", async () => {
+    const reg = ctx.deps.runRegistry!;
+    const start = reg.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const runId = (start as any).runId as string;
+    await new Promise((res) => setTimeout(res, 150));
+    const qid = ctx.store.getPendingByRun(runId)!.id;
+    const tok = await ctx.login("m1");
+    await ctx.send("c1", tok, "接受", qid);
+    await new Promise((res) => setTimeout(res, 100));
+    const once = ctx.store.getQuestion(qid)!;
+    expect(once.status).toBe("answered");
+    await ctx.send("c1", tok, "接受", qid); // 双击
+    await new Promise((res) => setTimeout(res, 30));
+    const twice = ctx.store.getQuestion(qid)!;
+    expect(twice.status).toBe("answered");
+    expect(twice.answer).toEqual(once.answer); // 不二次派发
+    expect(twice.answeredAt).toBe(once.answeredAt); // 不二次写
+  });
+});
+
+describe("deterministicResumeData（#47/T5：快照查表 vs enum 对位）", () => {
+  function makeQ(over: Partial<Parameters<typeof ctx.store.createQuestion>[0]> = {}): any {
+    const store = ctx.store;
+    return store.getQuestion(store.createQuestion({ conversationId: "c1", prompt: "q", options: ["a", "b"], ...over }));
+  }
+  test("显式 value 快照命中 → 返对应 value（label→value 查表）", () => {
+    const q = makeQ({ values: [{ label: "a", value: { selected: "x" } }, { label: "b", value: 42 }] });
+    expect(deterministicResumeData(q, 0)).toEqual({ selected: "x" });
+    expect(deterministicResumeData(q, 1)).toBe(42);
+  });
+  test("无快照 → enum 对位（ADR-0022 兼容旧手写卡）", () => {
+    const q = makeQ({ resumeSchema: { _t: "object", shape: { decision: { _t: "enum", vals: ["accept", "redirect"] }, focus: { _t: "optional", inner: { _t: "string" } } } } });
+    expect(deterministicResumeData(q, 1)).toEqual({ decision: "redirect" });
+  });
+  test("无快照无 enum → undefined（slide）", () => {
+    const q = makeQ({ resumeSchema: { _t: "object", shape: { plan: { _t: "string" } } } });
+    expect(deterministicResumeData(q, 0)).toBeUndefined();
   });
 });
 
