@@ -50,7 +50,7 @@ export function composeSystemPrompt(p: PromptParts): string[] {
     );
   }
 
-  // #16 pending ask 判答格式（迁自 turn.ts，逐字保留——turn-trigger 内容断言依赖）。
+  // #16 pending ask 判答格式（迁自 turn.ts，逐字保留——turn-inline 内容断言依赖）。
   for (const q of p.pendingAsks) {
     out.push(
       `[待处理提问] 工作流 ${q.runId} 正在等待用户决策。\n提问：${q.prompt}\n选项：${q.options.join(" / ")}\n续跑契约：${JSON.stringify(q.resumeSchema)}\n若用户本次消息是对此提问的回答，请将回答归一化为符合续跑契约的对象，并调用 resume_workflow("${q.runId}", resumeData)。若无关，正常回应用户。`,

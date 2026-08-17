@@ -12,7 +12,7 @@ import { collectExperience } from "../knowledge/repo";
 import type { RunDeps } from "../runs";
 import type { Frame } from "./eventbus";
 
-export type TurnFrame = Frame; // 判别式联合（eventbus.Frame）；alias 保 turn-trigger import
+export type TurnFrame = Frame; // 判别式联合（eventbus.Frame）
 export type TurnSend = (frame: Frame) => void;
 
 // chat turn 的基础 system 追加（--append-system-prompt）：角色 + 工具清单 + 判答指引。

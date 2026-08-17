@@ -1,12 +1,14 @@
-// chat 切片② 路由（ADR-0009 / ticket #13）：建会话 / 历史 / 持久流 / POST 消息(202 ACK) / abort。
+// chat 切片② 路由（ADR-0009 / ticket #13，#48/T6 修订）：建会话 / 历史 / 持久流 / POST 消息(202 ACK) / abort。
 // 事件驱动：POST /messages 不再返流，回 202 + 投 EventBus；前端经 GET /stream 长连订阅所有帧。
+// #48/T6（ADR-0025 决策 9）：**user_message → HTTP turn 内联进 POST 路由**（不再绕经 EventBus 订阅一跳）——
+// 谁消费输入谁起轮；run_* 事件不再驱动任何 turn（TurnTrigger 整类退役）；enqueueEventTurn 保留给定时任务。
 // ADR-0018 鉴权：会话一律创建者私有（+admin）——canAccessConversation 全家守卫；建会话须 canAccessWorkspace。
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { RunDeps } from "../runs";
 import { ConversationQueues } from "../chat/queue";
 import { EventBus, type Frame } from "../chat/eventbus";
-import { TurnTrigger } from "../chat/turn-trigger";
+import { runTurn } from "../chat/turn";
 import { canAccessConversation, resolveRequestWorkspace } from "../workspaces/guard";
 import { userIdOf, principalOf, userRoleOf, type AppEnv } from "../auth/middleware";
 import { ROLE } from "../auth/store";
@@ -24,7 +26,6 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
   // FIFO 单实例：prod 由 index 注入共享（chat 与 #29 任务执行同实例——同会话严格串行）；测试缺省自建。
   const queues = deps.conversationQueues ?? new ConversationQueues();
   const eventBus = deps.eventBus ?? new EventBus(); // 共享单例（prod 由 index 注入；bridge run 事件经此到持久流）
-  const turnTrigger = new TurnTrigger({ deps, queues, eventBus });
 
   // 会话存在 + 当前用户可访问（创建者/admin）→ conv；否则 null（路由统一 404，不泄漏存在）。
   const loadIfVisible = (id: string, u: { id: string; role: "admin" | "member" }) => {
@@ -47,7 +48,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
       userId: userIdOf(c),
       title,
     });
-    turnTrigger.attach(conv.id); // 会话建立即订阅 EventBus（user_message → 起 turn；#13 扇出到 TurnTrigger）
+    // #48/T6：无 TurnTrigger 订阅——user→turn 由 POST /messages 内联（谁消费输入谁起轮）
     return c.json(conv, 201);
   });
 
@@ -134,9 +135,10 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     });
   });
 
-  // POST 消息 → 202 ACK + 投 EventBus（不再返流）。429 由 TurnTrigger 同步判（满即不入队）。
-  // inReplyTo（可选 questionId）：统一卡应答（#28 重构）——task/approval 卡确定性收口（零 LLM 二跳）、
-  // ask 卡点选项确定性 resume；不带/不匹配 → 纯对话消息（老判答路不变）。
+  // POST 消息 → 202 ACK + 投 EventBus。inReplyTo（可选 questionId）：统一卡应答——task/approval/ask 卡确定性收口
+  // （零 LLM 二跳）；不带/不匹配 → 纯对话消息（LLM turn 老判答路不变）。
+  // #48/T6（ADR-0025 决策 9/10）：**dispatch 前置判跳轮旗标 → 程序化轮（卡收口）不入队、免 429**；
+  //   429 预检仅作用于将入队的 LLM 轮（满→429 不入队，消息未落）；user→turn **内联**（不再绕 EventBus 订阅一跳）。
   app.post("/conversations/:id/messages", async (c) => {
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
@@ -148,16 +150,26 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const inReplyTo: unknown = body.inReplyTo;
     const questionId = typeof inReplyTo === "number" && Number.isInteger(inReplyTo) ? inReplyTo : undefined;
     if (inReplyTo !== undefined && questionId === undefined) return c.json({ error: "inReplyTo must be an integer questionId" }, 400);
-    if (!queues.wouldAcceptHttpTurn(id)) return c.json({ error: "conversation busy (queue full)" }, 429); // 同步 429 预检（不入队）
-    const userMsgId = deps.store.appendMessage({ conversationId: id, role: "user", content }); // 立即落库
-    deps.store.touchConversation(id); // updatedAt = 列表排序锚（#20）
-    turnTrigger.attach(id); // 幂等兜底：后端重启后旧会话的 attached 内存态丢失——不补则 user_message 无人响应（turn 永不起）
-    // 先发 user_message（用户 turn 先入 FIFO），再 dispatch 卡应答（resume 派生的 completed 事件 turn 排后）——
-    // 对话顺序 = 用户点选在前、系统总结在后（点选项=发消息的语义：答案属于对话流）。
-    eventBus.publish(id, { type: "user_message", id: userMsgId, content }); // 扇出：持久流显示用户消息 + TurnTrigger 起 turn（answered 卡注入态更新，pi 不再重复判答）
+    // 前置 dispatch：卡应答的跳轮判定先于任何 429/入队（确定性收口路径永不因队列满被拒——净修复）。
+    // slide（handled:false）不改状态 → 走 LLM 轮老路（429 预检照旧）。
+    let skipTurn = false;
     if (questionId !== undefined) {
       const r = await dispatchCardAnswer(deps, id, questionId, content, userIdOf(c));
       if (r.error) console.warn(`[hitl-dispatch] question=${questionId}:`, r.error);
+      skipTurn = !!r.skipTurn;
+    }
+    if (!skipTurn && !queues.wouldAcceptHttpTurn(id)) return c.json({ error: "conversation busy (queue full)" }, 429);
+    const userMsgId = deps.store.appendMessage({ conversationId: id, role: "user", content }); // 立即落库（LLM 路径在 429 后）
+    deps.store.touchConversation(id); // updatedAt = 列表排序锚（#20）
+    // 扇出：持久流显示用户消息（cardAnswered=程序化轮旗标，前端可据此免 LLM 占位）
+    eventBus.publish(id, { type: "user_message", id: userMsgId, content, ...(skipTurn ? { cardAnswered: true } : {}) });
+    if (!skipTurn) {
+      // 内联 user→turn（#48/T6，不再绕 EventBus 订阅一跳）；429 已预检，双保险失败仍 error 帧
+      const ok = queues.enqueueHttpTurn(id, (signal) => {
+        const send = (fr: Frame) => eventBus.publish(id, fr);
+        return runTurn(deps, id, content, send, signal);
+      });
+      if (!ok) eventBus.publish(id, { type: "error", message: "conversation busy (queue full)" });
     }
     return c.json({ accepted: true }, 202);
   });

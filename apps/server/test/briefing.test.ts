@@ -10,8 +10,9 @@ import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
 import { EventBus } from "../src/chat/eventbus";
 import { RunRegistry } from "../src/runs/registry";
+import { ConversationQueues } from "../src/chat/queue";
 import type { RunDeps } from "../src/runs";
-import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
+import type { ConfiguredRunPi, ConfiguredRunPiStream } from "../src/pi/runPi-factory";
 import { READ_FOOTER, READ_TRUNCATE } from "../src/runs/briefing";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -124,6 +125,121 @@ describe("T1 简报直投 · failed", () => {
     const msgs = store.listMessages("c1");
     expect(msgs[msgs.length - 1].content).toBe("📋 工作流 brand-research 失败：boom");
     expect(frames.some((f) => f.type === "block_start")).toBeTrue();
+  });
+});
+
+// #48/T6（ADR-0025 决策 9/10）：路由重构 e2e——POST /messages 全链（重启 run → 挂起强制卡 → 点卡程序化轮，
+// 零 LLM / 免 429 / 双击幂等 / 自主卡滑 LLM / run 事件不再起 turn）。计数 stub 测 LLM turn 数。
+describe("T6 #48 路由重构 · （真 HTTP POST + 计数 runPiStream）", () => {
+  function routeSetup() {
+    const store = new WorkflowStore(openDbMigrated(":memory:"));
+    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "dev-user", title: "t" }); // 有 title → 跳过自动命名（不占 LLM 计数）
+    const eventBus = new EventBus();
+    const queues = new ConversationQueues();
+    const runRegistry = new RunRegistry({ store, eventBus, runPiFactory: okStub });
+    let llmTurns = 0;
+    const factory = (): ConfiguredRunPiStream => async (call) => {
+      llmTurns++;
+      call.onBlock?.({ op: "start", blockId: `b${llmTurns}`, kind: "text" });
+      call.onBlock?.({ op: "delta", blockId: `b${llmTurns}`, delta: "ok" });
+      call.onBlock?.({ op: "end", blockId: `b${llmTurns}` });
+      return { text: "ok", messages: [], toolResults: [] };
+    };
+    const deps: RunDeps = {
+      store, userStore: new UserStore(openDbMigrated(":memory:")), streamRegistry: new StreamRegistry(),
+      workspaceStore: new WorkspaceStore(openDbMigrated(":memory:")),
+      eventBus, conversationQueues: queues, runRegistry, runPiStreamFactory: factory,
+    };
+    const app = createApp(deps);
+    const send = (content: string, inReplyTo?: number) =>
+      app.request(`/conversations/c1/messages`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(inReplyTo === undefined ? { content } : { content, inReplyTo }),
+      });
+    return { store, eventBus, queues, app, runRegistry, llmCount: () => llmTurns, send };
+  }
+
+  test("run 终态不再起事件 turn（零 LLM 直投）：synthetic 一路 completed 计数 0", async () => {
+    const { eventBus, runRegistry, llmCount } = routeSetup();
+    const frames: any[] = [];
+    eventBus.subscribe("c1", (f) => frames.push(f));
+    const started = runRegistry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const runId = (started as any).runId as string;
+    await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
+    await runRegistry.resume(runId, { decision: "accept" });
+    await delayUntil(() => frames.some((f) => f.type === "run_completed"));
+    expect(llmCount()).toBe(0); // 无事件 turn（旧行为会 +1 转述）
+  });
+
+  test("挂起强制卡点选 → 程序化轮：零 LLM、免入队、cardAnswered 旗标、resume 续跑 + 简报", async () => {
+    const { store, eventBus, queues, runRegistry, llmCount, send } = routeSetup();
+    const frames: any[] = [];
+    eventBus.subscribe("c1", (f) => frames.push(f));
+    const started = runRegistry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const runId = (started as any).runId as string;
+    await delayUntil(() => frames.some((f) => f.type === "hitl_request"));
+    const qid = store.getPendingByRun(runId)!.id;
+
+    const r = await send("接受", qid);
+    expect(r.status).toBe(202);
+    await delayUntil(() => store.getRun(runId)!.status === "completed");
+    expect(llmCount()).toBe(0); // 点卡不产生 LLM turn（程序化轮）
+    const clicked = frames.find((f) => f.type === "user_message" && f.content === "接受");
+    expect(clicked).toBeTruthy();
+    expect(clicked.cardAnswered).toBeTrue(); // 跳轮旗标（前端免 LLM 占位）
+    expect(store.getQuestion(qid)!.status).toBe("answered");
+    const msgs = store.listMessages("c1");
+    expect(msgs.at(-1)!.content.startsWith("📋 工作流 synthetic-3step 完成：")).toBeTrue(); // 续跑完成 → 简报
+  });
+
+  test("双击已答卡 → 幂等 ack（第二次不二次起轮、不二次派发）", async () => {
+    const { store, eventBus, runRegistry, llmCount, send } = routeSetup();
+    const frames: any[] = [];
+    eventBus.subscribe("c1", (f) => frames.push(f));
+    const started = runRegistry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const runId = (started as any).runId as string;
+    await delayUntil(() => frames.some((f) => f.type === "hitl_request"));
+    const qid = store.getPendingByRun(runId)!.id;
+    await send("接受", qid);
+    await delayUntil(() => store.getRun(runId)!.status === "completed");
+    const once = store.getQuestion(qid)!;
+    const r2 = await send("接受", qid); // 双击
+    expect(r2.status).toBe(202);
+    expect(llmCount()).toBe(0); // 幂等 ack：不二次起轮
+    expect(store.getQuestion(qid)!.answeredAt).toBe(once.answeredAt); // 不二次写
+  });
+
+  test("自主卡点选 → 滑 LLM 轮（计数 +1，卡保 pending）", async () => {
+    const { store, runRegistry, llmCount, send } = routeSetup();
+    const autoId = store.createQuestion({
+      conversationId: "c1", kind: "ask", runId: null, prompt: "澄清：目标市场？", options: ["是", "否"],
+    });
+    const before = llmCount();
+    const r = await send("是", autoId);
+    expect(r.status).toBe(202);
+    await delayUntil(() => llmCount() === before + 1); // 答案消费者是 pi → 滑 LLM 轮
+    expect(store.getQuestion(autoId)!.status).toBe("pending"); // 卡保持 pending（[待处理提问] 注入仍在）
+  });
+
+  test("429 分轨：队列满时点卡仍 202 + resume 执行；文字消息 → 429", async () => {
+    const { store, eventBus, queues, runRegistry, send } = routeSetup();
+    const frames: any[] = [];
+    eventBus.subscribe("c1", (f) => frames.push(f));
+    const started = runRegistry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const runId = (started as any).runId as string;
+    await delayUntil(() => frames.some((f) => f.type === "hitl_request"));
+    const qid = store.getPendingByRun(runId)!.id;
+
+    // 塞满 HTTP FIFO（5 个永不 resolve 的 turn）
+    for (let i = 0; i < 5; i++) queues.enqueueHttpTurn("c1", () => new Promise(() => {}));
+    // 文字消息 → 429（LLM 轮路径被队列满拒，消息未落）
+    const text = await send("你好");
+    expect(text.status).toBe(429);
+    // 点卡 → 仍 202（程序化轮不入队、免 429——ADR-0025 决策 9 净修复）
+    const card = await send("接受", qid);
+    expect(card.status).toBe(202);
+    await delayUntil(() => store.getRun(runId)!.status === "completed");
+    expect(store.getQuestion(qid)!.status).toBe("answered");
   });
 });
 

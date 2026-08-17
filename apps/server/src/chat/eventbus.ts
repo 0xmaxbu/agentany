@@ -1,11 +1,14 @@
-// per-conversation 事件总线（ticket #13）：事件中心，扇出到持久流（前端展示）+ TurnTrigger（驱动 turn）。
+// per-conversation 事件总线（ticket #13）：事件中心，扇出到持久流（前端展示）；#48/T6 后不驱动 turn
+//（user→turn 内联在 POST 路由；run_* 零 LLM 直投只推流展示）。
 // 单进程内存；无跨进程、无持久化。发布 = 同步调所有订阅者（同 tick 顺序执行）。
 // 无订阅者时帧丢弃——故持久流须先连（前端 init 即开流）；重连期丢帧是已知缺口（#19+/序列号再补）。
 //
 // Frame = 判别式联合（按 type 收窄）—— publish/send 站点类型受检，去 as Frame 与打字错误风险。
 // 与 apps/web/src/sse.ts SSEEvent 对齐（线协议）。
 export type Frame =
-  | { type: "user_message"; id: number; content: string; taskId?: string } // taskId=#29 定时任务投递标志（TurnTrigger 跳过——executeTask 自起 event turn，防同 prompt 双跑）
+  | { type: "user_message"; id: number; content: string; taskId?: string; cardAnswered?: boolean }
+  // taskId=#29 定时任务投递标志（前端展示；executeTask 自起 event turn，route 不经过此发布）
+  // cardAnswered=#48/T6 程序化轮旗标（卡应答被确定性收口——route 不 i入队 LLM turn）
   | { type: "done"; messageId?: number; aborted?: boolean }
   // #20 block 三帧：消息=blocks 序列（text/thinking/tool_use/tool_result）；f3 前与 delta/done 双发。
   | { type: "block_start"; blockId: string; kind: "text" | "thinking" | "tool_use" | "tool_result"; meta?: Record<string, unknown> }

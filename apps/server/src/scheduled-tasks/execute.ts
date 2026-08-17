@@ -133,7 +133,7 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
     };
 
     // 任务 prompt 先落 user 消息（历史可读：产出会话里每次执行的目标原文）+ 推流。
-    // 帧 带 taskId 标志：TurnTrigger 见标志不起 HTTP turn（本函数已自起 event turn——防同 prompt 双跑，review-c1）。
+    // 帧 带 taskId 标志：纯展示（#48/T6 后 route 不经此发布——本函数经 enqueueEventTurn 自起 turn，防同 prompt 双跑）。
     const userMsgId = deps.store.appendMessage({ conversationId: convId, role: "user", content: task.prompt });
     deps.store.touchConversation(convId);
     eventBus.publish(convId, { type: "user_message", id: userMsgId, content: task.prompt, taskId: task.id });

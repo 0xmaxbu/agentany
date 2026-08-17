@@ -142,7 +142,7 @@ const db = openDbMigrated();
   if (!us.getUserByUsername("member-e2e")) await us.createUser({ username: "member-e2e", password: "member-e2e-pw-1", displayName: "E2E Member", role: "member" });
 }
 const store = new WorkflowStore(db);
-const eventBus = new EventBus(); // 【硬条件·#19】共享：bridge run 事件 → TurnTrigger 自动 turn（不传则全链断）
+const eventBus = new EventBus(); // #48/T6 后 run/chat 帧只推流展示（user→turn 内联 POST 路由；bridge run 事件经此到持久流）
 const runRegistry = new RunRegistry({ store, eventBus, runPiFactory: stubRunPiFactory });
 // #31：定时任务三表 + 调度器（手动跑走真 executeTask——runTurn 用下面的 stub streamFactory 产出确定性文本）
 const taskStore = new ScheduledTaskStore(db, store);
