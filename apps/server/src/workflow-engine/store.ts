@@ -1,6 +1,6 @@
 // Drizzle 版 WorkflowStore（替 spike-b 裸 bun:sqlite；方法同 spike-b）。
 // 这是引擎里唯一耦合 db 的文件；runner 只接收本类实例、不 import db。
-import { and, desc, eq, gt, isNull, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, isNotNull, or, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { conversations, feedback, hitlQuestions, messages, workflowRunLog, workflowRuns } from "../db/schema";
 
@@ -253,14 +253,31 @@ export class WorkflowStore {
     this.db.delete(workflowRuns).run();
   }
 
-  // ticket #14：boot sweep——把 DB 里仍 running 的 run 标 failed（v1 假设步幂等；真崩溃恢复后续）。
+  // ticket #14 + ADR-0025 决策 3（#45/T2）：boot sweep——DB 里仍 running 的 run 标 failed
+// （重启=进程没在跑了），**同步写** brief=「异常终止（进程重启）」——对账补发文案诚实（sweep 先于 reconcile）。
   markRunningAsFailed(): number {
     const r = this.db
       .update(workflowRuns)
-      .set({ status: "failed", updatedAt: now() })
+      .set({ status: "failed", brief: "异常终止（进程重启）", updatedAt: now() })
       .where(eq(workflowRuns.status, "running"))
       .run();
     return (r as any).changes ?? 0;
+  }
+
+  /** ADR-0025 决策 3（#45/T2）：终态（completed/failed）且简报未发（brief_message_id NULL）且 brief 已写的 run——
+   *  对账补发扫描键。**排除已删会话**（conversationId 已解绑/置空）。 */
+  listTerminalRunsWithoutBriefMessage(): RunRow[] {
+    const rows = this.db
+      .select()
+      .from(workflowRuns)
+      .where(and(
+        or(eq(workflowRuns.status, "completed"), eq(workflowRuns.status, "failed")),
+        isNull(workflowRuns.briefMessageId),
+        isNotNull(workflowRuns.brief),
+        isNotNull(workflowRuns.conversationId),
+      ))
+      .all();
+    return rows.map((r) => ({ ...r, status: r.status as RunStatus, input: P(r.input) }));
   }
 
   /** #17：某会话的挂起 run（带挂起步 stepId/payload/resumeSchema）。每轮 prompt 注入用。末条 log = 挂起步（runner.ts:30 同假设）。 */

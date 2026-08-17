@@ -30,7 +30,8 @@ if (sweptRuns > 0) console.log(`[scheduler] swept ${sweptRuns} unfinished run(s)
 const eventBus = new EventBus(); // 共享事件中心：持久流订阅 + bridge run 事件，同一实例
 const conversationQueues = new ConversationQueues(); // 共享 per-conv FIFO：chat 路由与任务执行同实例（#29）——产出会话被用户浏览聊天时任务 turn 仍严格串行
 const runRegistry = new RunRegistry({ store, eventBus });
-runRegistry.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed（进程没在跑了）
+runRegistry.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed + 「异常终止」brief（进程没在跑了）
+runRegistry.reconcileBriefMessages(); // ADR-0025 决策 3：sweep 之后——终态但简报未发的 run 幂等补发（崩溃区间归零）
 const deps: RunDeps = { store, userStore, streamRegistry, workspaceStore, taskStore, eventBus, conversationQueues, runRegistry };
 const scheduler = new TaskScheduler({
   store: taskStore,

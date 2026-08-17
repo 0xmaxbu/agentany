@@ -175,9 +175,28 @@ export class RunRegistry {
     return false;
   }
 
-  /** boot 调：DB 里仍 running 的 run 标 failed（重启=进程没在跑了；v1 假设步幂等）。返处理数。 */
+  /** boot 调：DB 里仍 running 的 run 标 failed（重启=进程没在跑了）——同步写「异常终止」brief（决策 3）。返处理数。 */
   sweepCrashed(): number {
     return this.deps.store.markRunningAsFailed();
+  }
+
+  /** ADR-0025 决策 3（#45/T2）boot 对账：sweep 之后扫 brief_message_id IS NULL 的终态 run 幂等补发简报消息
+   *  （同交付通道 deliverBrief：写消息 + 回填 backfill）；排除已删会话。返补发数。 */
+  reconcileBriefMessages(): number {
+    const rows = this.deps.store.listTerminalRunsWithoutBriefMessage();
+    let n = 0;
+    for (const row of rows) {
+      const publish = (frame: Frame) => {
+        if (row.conversationId) this.deps.eventBus.publish(row.conversationId, frame);
+      };
+      if (row.status === "completed") {
+        this.deliverBrief(publish, row.runId, row, "completed", { log: this.deps.store.getLog(row.runId), note: undefined });
+      } else {
+        this.deliverBrief(publish, row.runId, row, "failed", { log: [], note: row.brief as string });
+      }
+      n++;
+    }
+    return n;
   }
 
   /** #19 abort：停该会话所有 running run。有句柄→abortCtrl.abort()（杀 pi → runDetached catch 自负 status+publish run_failed，单次）；无句柄（重启 stale）→直接 failed+publish。返停数。 */
