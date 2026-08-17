@@ -16,7 +16,7 @@ export type Frame =
   | { type: "title"; title: string }
   | { type: "run_started"; runId: string; workflowId: string }
   | { type: "run_resumed"; runId: string }
-  | { type: "run_completed"; runId: string }
+  | { type: "run_completed"; runId: string; brief?: string; artifacts?: string[] } // ADR-0025：零 LLM 简报携带物
   | { type: "run_suspended"; runId: string; stepId: string; payload: unknown; resumeSchema?: unknown }
   | { type: "run_failed"; runId: string; note?: string }
   | { type: "step_started"; runId: string; stepId: string }

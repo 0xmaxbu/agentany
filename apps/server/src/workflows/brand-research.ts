@@ -30,6 +30,10 @@ export const brandResearch = defineWorkflow({
       const dir = brandDir(cwd, brand, region);
       const reportPath = join(dir, "research-report.md");
       const anglesPath = join(dir, "angles.json");
+      // ADR-0025 简报契约（#41/T1）：artifacts 用 **ws 相对路径**（/files/<ws>/<rel> 链接锚；绝对路径不下发）
+      const relDir = join("brand-research", `${slugify(brand)}-${slugify(region)}`);
+      const reportRel = join(relDir, "research-report.md");
+      const anglesRel = join(relDir, "angles.json");
 
       const prompt = [
         `按 brand-research skill 方法论调研「${brand}」（地区：${region}）：五块（行业/竞争含市占/品牌差异/品牌诊断含战略沿革根因+消费者口碑/消费者），三层证据 [F]/[P]/[I] + 来源 URL，产出 3-5 个经逻辑验证、满足独到性门槛的切入角度。`,
@@ -49,7 +53,12 @@ export const brandResearch = defineWorkflow({
       } catch {
         /* 文件可能不存在（stub runPi / 失败）*/
       }
-      return { angles, anglesSummary: r.text, reportPath, anglesPath, brand, region };
+      // ADR-0025 简报契约（#41/T1）：brief 首句直说结果（结论+关键数字），artifacts=ws 相对路径（白名单可点）
+      return {
+        angles, anglesSummary: r.text, reportPath, anglesPath, brand, region,
+        brief: `「${brand}」（${region}）调研完成：已产出 ${angles.length} 个候选角度。报告：${reportRel}`,
+        artifacts: [reportRel, anglesRel],
+      };
     },
   })
   .commit();

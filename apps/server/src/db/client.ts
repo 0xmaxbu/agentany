@@ -8,7 +8,9 @@ import * as schema from "./schema";
 import { DATA_DIR } from "../config"; // h6：单一 DATA_DIR 来源（修 db/client 与 config 不一致 bug）
 
 // apps/server/src/db/client.ts → apps/server/drizzle
-const MIGRATIONS_FOLDER = new URL("../../drizzle", import.meta.url).pathname;
+// decodeURIComponent：仓库路径含空格/非 ASCII（如 worktree 目录带空格）时 URL.pathname 返回 %20 编码——
+// 编码串不是合法文件路径，migrate() 找不到 meta/_journal.json（本 worktree 实测触发）。
+const MIGRATIONS_FOLDER = decodeURIComponent(new URL("../../drizzle", import.meta.url).pathname);
 
 export function dbFile(): string {
   return `${DATA_DIR}/db.sqlite`;

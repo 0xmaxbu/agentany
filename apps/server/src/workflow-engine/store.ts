@@ -38,6 +38,9 @@ export interface RunRow {
   input: unknown;
   createdAt: string;
   updatedAt: string;
+  // ADR-0025（#41）：terminal 简报——brief 与终态同事务写；briefMessageId 发信后回填（对账幂等锚）
+  brief: string | null;
+  briefMessageId: number | null;
 }
 
 export interface FeedbackRow {
@@ -177,6 +180,43 @@ export class WorkflowStore {
       .set({ status, updatedAt: now() })
       .where(eq(workflowRuns.runId, runId))
       .run();
+  }
+
+  // ── ADR-0025（#41/T1）：终态零 LLM 简报 ──
+
+  /**
+   * 终态 + brief + 简报消息 + 会话 touch **同一 SQLite 事务**（崩溃封堵决策 3：区间归零，终态与简报同现）。
+   * 消息只写有会话的 run（conversationId 非空 + content 非空）；返消息 id（无会话 → 0）。
+   */
+  setTerminalBrief(p: {
+    runId: string;
+    status: "completed" | "failed";
+    brief: string;
+    messageContent: string;
+    conversationId: string | null;
+  }): number {
+    let messageId = 0;
+    this.db.transaction((tx) => {
+      tx.update(workflowRuns)
+        .set({ status: p.status, brief: p.brief, updatedAt: now() })
+        .where(eq(workflowRuns.runId, p.runId))
+        .run();
+      if (p.conversationId && p.messageContent) {
+        const r = tx
+          .insert(messages)
+          .values({ conversationId: p.conversationId, role: "assistant", content: p.messageContent, createdAt: now() })
+          .returning({ id: messages.id })
+          .get();
+        messageId = r?.id ?? 0;
+        tx.update(conversations).set({ updatedAt: now() }).where(eq(conversations.id, p.conversationId)).run();
+      }
+    });
+    return messageId;
+  }
+
+  /** 简报消息 id 回填（发信后幂等；null=未发——启动对账补发锚）。 */
+  backfillBriefMessage(runId: string, messageId: number | null): void {
+    this.db.update(workflowRuns).set({ briefMessageId: messageId }).where(eq(workflowRuns.runId, runId)).run();
   }
 
   reset(): void {

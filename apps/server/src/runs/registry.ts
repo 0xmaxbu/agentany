@@ -11,7 +11,8 @@ import { makeRunPi, type ConfiguredRunPi } from "../pi/runPi-factory";
 import { resolveScopePaths, scopeOf, type Scope } from "../scope";
 import { validate } from "../workflow-engine/schema";
 import { decide } from "../security/policy";
-import type { WorkflowStore } from "../workflow-engine/store";
+import { buildBriefMessage, extractArtifacts, extractBrief, extractNoteBrief, stepListFallback, truncateForRead } from "./briefing";
+import type { WorkflowStore, RunRow } from "../workflow-engine/store";
 import type { Workflow } from "../workflow-engine/defineWorkflow";
 import type { EventBus, Frame } from "../chat/eventbus";
 import { WorkflowNotFound, InvalidInput, makeRunId } from "../runs";
@@ -126,7 +127,7 @@ export class RunRegistry {
       runId,
       status: r.status,
       steps: log.map((e) => ({ seq: e.seq, stepId: e.stepId, status: e.status })),
-      latestOutput: last?.output ?? null,
+      latestOutput: truncateForRead(last?.output ?? null), // ADR-0025 决策 8：8k 硬截断 + 尾注
     };
   }
 
@@ -151,10 +152,12 @@ export class RunRegistry {
     for (const runId of ids) {
       const h = this.handles.get(runId);
       if (h) {
-        h.abortCtrl.abort(); // runDetached catch 发一次 run_failed（不重复）
+        h.abortCtrl.abort(); // runDetached catch → publishOutcome(failed) 发一次 run_failed + 简报（不重复）
       } else {
-        this.deps.store.updateRunStatus(runId, "failed");
-        this.deps.eventBus.publish(conversationId, { type: "run_failed", runId, note: "aborted (no handle)" });
+        // 无句柄（重启 stale）：直接 failed + 投递（终态简报同通道——abort note 即简报）
+        this.publishOutcome((f) => this.deps.eventBus.publish(conversationId, f), runId, {
+          status: "failed", runId, note: "aborted (no handle)",
+        });
       }
     }
     return ids.length;
@@ -176,18 +179,64 @@ export class RunRegistry {
       outcome = await run(wf, this.deps.store, runId, ctx, onProgress);
     } catch (e) {
       const note = (e as Error)?.message ?? String(e);
-      this.deps.store.updateRunStatus(runId, "failed");
-      publish({ type: "run_failed", runId, note });
-      return { status: "failed", runId, note };
+      outcome = { status: "failed", runId, note }; // 顶抛（loadState 等）→ 同走 publishOutcome（终态简报统一）
     }
     this.publishOutcome(publish, runId, outcome);
     return outcome;
   }
 
-  // outcome（clean 结局：completed/suspended/failed）→ run_* 帧推 EventBus。rejected/idempotent 调用方自理。
+  // outcome（clean 结局：completed/suspended/failed）→ 生命周期投递。
+  // ADR-0025（#41/T1）：completed/failed **零 LLM 直投**——同事务写终态+brief+简报消息+touch，
+  // 回填 brief_message_id → 发 run_completed(brief, artifacts) + 简报 text 块（无 done——非轮）。suspended 由 T3 接。
   private publishOutcome(publish: (f: Frame) => void, runId: string, outcome: RunOutcome): void {
-    if (outcome.status === "completed") publish({ type: "run_completed", runId });
-    else if (outcome.status === "suspended") publish({ type: "run_suspended", runId, stepId: outcome.stepId, payload: outcome.payload, resumeSchema: outcome.resumeSchema });
-    else publish({ type: "run_failed", runId, note: outcome.note });
+    const run = this.deps.store.getRun(runId);
+    if (outcome.status === "completed") {
+      this.deliverBrief(publish, runId, run, "completed", { log: this.deps.store.getLog(runId), note: undefined });
+    } else if (outcome.status === "failed") {
+      this.deliverBrief(publish, runId, run, "failed", { log: [], note: outcome.note });
+    } else {
+      publish({ type: "run_suspended", runId, stepId: outcome.stepId, payload: outcome.payload, resumeSchema: outcome.resumeSchema });
+    }
+  }
+
+  /**
+   * 终态简报投递（ADR-0025 决策 2/3）：同事务写 brief + 简报消息 + touch（setTerminalBrief）→
+   * 回填 brief_message_id → 推 run_completed(brief, artifacts) + 简报 text 块三帧
+   * （block_start/delta/end，无 done——非轮；内容 linkify）。无会话的 run 只写 brief 列不落消息。
+   */
+  private deliverBrief(
+    publish: (f: Frame) => void,
+    runId: string,
+    run: RunRow | undefined,
+    terminal: "completed" | "failed",
+    src: { log: ReturnType<WorkflowStore["getLog"]>; note: string | undefined },
+  ): void {
+    if (!run) {
+      // 行被删/不存在：仍发边界帧（展示流不受影响），不写库。
+      if (terminal === "completed") publish({ type: "run_completed", runId });
+      else publish({ type: "run_failed", runId, note: src.note });
+      return;
+    }
+    const last = src.log[src.log.length - 1];
+    const brief = terminal === "completed"
+      ? extractBrief(last?.output) ?? stepListFallback(src.log)
+      : extractNoteBrief(src.note);
+    const artifacts = terminal === "completed" ? extractArtifacts(last?.output) : [];
+    const msg = buildBriefMessage({
+      workflowId: run.workflowId, terminal, brief, artifacts, workspaceId: run.workspaceId,
+    });
+    const messageId = this.deps.store.setTerminalBrief({
+      runId, status: terminal, brief, messageContent: msg, conversationId: run.conversationId,
+    });
+    this.deps.store.backfillBriefMessage(runId, messageId > 0 ? messageId : null);
+
+    if (terminal === "completed") publish({ type: "run_completed", runId, brief, artifacts });
+    else publish({ type: "run_failed", runId, note: src.note });
+    if (messageId > 0 && run.conversationId) {
+      const blockId = `b_brief_${runId}`;
+      publish({ type: "block_start", blockId, kind: "text" });
+      publish({ type: "block_delta", blockId, delta: msg });
+      publish({ type: "block_end", blockId });
+    }
   }
 }

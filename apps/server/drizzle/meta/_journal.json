@@ -127,6 +127,13 @@
       "when": 1787136000000,
       "tag": "0017_system_task_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1787210000000,
+      "tag": "0018_briefing",
+      "breakpoints": true
     }
   ]
 }

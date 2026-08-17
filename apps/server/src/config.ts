@@ -27,7 +27,9 @@ export function slugify(s: unknown): string {
 }
 
 // 本文件在 apps/server/src/config.ts → 仓库根 = ../../../
-export const REPO_ROOT = new URL("../../../", import.meta.url).pathname;
+// decodeURIComponent：仓库路径含空格/非 ASCII（worktree 目录带空格实测）时 URL.pathname 返回 %20 编码——
+// 编码串不是合法文件路径（skills/data 全断）。与 db/client.ts MIGRATIONS_FOLDER 同源修复。
+export const REPO_ROOT = decodeURIComponent(new URL("../../../", import.meta.url).pathname);
 // skills 根（沙箱只读挂载；ADR-0005 自动发现）。
 export const repoSkillsDir = (): string => `${REPO_ROOT}skills`;
 

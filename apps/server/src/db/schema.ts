@@ -10,6 +10,9 @@ export const workflowRuns = sqliteTable("workflow_runs", {
   input: text("input").notNull(), // JSON
   createdAt: text("createdAt").notNull(),
   updatedAt: text("updatedAt").notNull(),
+  // ADR-0025（#41/T1）：终态零 LLM 简报——brief 与终态同事务写；briefMessageId 发信后回填（启动对账幂等锚）
+  brief: text("brief"), // 末步产出摘要（简报正文，completed 取 output.brief / failed 取 note；缺则步骤列表兜底）
+  briefMessageId: integer("briefMessageId"), // 简报消息落库后的 messages.id；null=未发（崩溃对账补发锚）
 });
 
 export const workflowRunLog = sqliteTable("workflow_run_log", {
