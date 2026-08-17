@@ -52,14 +52,25 @@ export async function readRun(env: BridgeEnv, runId: string): Promise<string> {
   return textResult(r, `read_run ${runId}`);
 }
 
-/** POST <url>/ask_user（Bearer nonce）→ 异步建 pending 提问（立即返 {asked}，不阻塞 turn）。返 status + body。 */
-export async function askUser(env: BridgeEnv, p: { runId: string; prompt: string; options: string[]; resumeSchema?: unknown; multiple?: boolean }): Promise<string> {
+/** POST <url>/ask_user（Bearer nonce）→ 异步建自主提问卡（runId null，无 resume 语义；ADR-0025 决策 7 修订——
+ *  run 绑定卡由引擎挂起时直建，bridge 带 runId 必 400）。立即返 {asked}，不阻塞 turn。返 status + body。 */
+export async function askUser(env: BridgeEnv, p: { prompt: string; options: string[]; resumeSchema?: unknown; multiple?: boolean }): Promise<string> {
   const r = await fetch(`${env.url}/ask_user`, {
     method: "POST",
     headers: { authorization: `Bearer ${env.nonce}`, "content-type": "application/json" },
     body: JSON.stringify(p),
   });
-  return textResult(r, `ask_user ${p.runId}`);
+  return textResult(r, `ask_user ${p.prompt.slice(0, 20)}`);
+}
+
+/** POST <url>/ask_answer（Bearer nonce）→ pi 归一化答案落自主卡（决策 10 修订：回答即 solved）。返 status + body。 */
+export async function answerQuestion(env: BridgeEnv, questionId: number, answer: unknown): Promise<string> {
+  const r = await fetch(`${env.url}/ask_answer`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.nonce}`, "content-type": "application/json" },
+    body: JSON.stringify({ questionId, answer }),
+  });
+  return textResult(r, `answer_question ${questionId}`);
 }
 
 /** POST <url>/run/resume（Bearer nonce）→ 用归一化答案续跑挂起的 run。返 status + body。 */

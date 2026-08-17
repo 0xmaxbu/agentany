@@ -110,11 +110,12 @@ describe("#16/#17 每轮注入（经内联 turn 通路，runTurn/compose 承担�
     eventBus.subscribe("c1", () => {});
     triggerTurn(deps, queues, eventBus, "c1");
     await delayUntil(() => capturedAppend !== undefined);
-    // 自主卡注入独立分支：给问题上下文（pi 才知道用户在答什么），但不引导 resume（runId 空、调了必 400）
+    // 自主卡注入独立分支：给问题上下文（pi 才知道用户在答什么）+ 引导 answer_question 落卡（决策 10 修订）
     const el = capturedAppend!.find((s) => s.startsWith("[待处理提问]") && !s.startsWith("[待处理提问] 工作流"));
     expect(el).toBeDefined();
     expect(el!).toContain("澄清：目标预算区间？");
-    expect(el!).not.toContain('resume_workflow("'); // 不教调用（「无需调用」说明语允许出现词面）
+    expect(el!).toContain("answer_question"); // 打字答案的收口通道（对应 run 绑定卡的 resume_workflow）
+    expect(el!).not.toContain('resume_workflow("'); // 不教 resume（无 run 可续，调了必 400）
     // run 绑定注入元素不受影响（前缀可区分——e2e stub 同款过滤）
     expect(capturedAppend!.filter((s) => s.startsWith("[待处理提问] 工作流"))).toHaveLength(0);
   });

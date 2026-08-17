@@ -250,6 +250,50 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
     } finally { stop(); _clearNonces(); }
   });
 
+  test("/ask_answer（决策 10 修订）：自主卡打字答案经 pi 归一化落卡 → answered + hitl_answered", async () => {
+    const { store, eventBus, registry } = bridgeSetup();
+    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    const token = issueNonce("c-hitl");
+    const frames: any[] = [];
+    eventBus.subscribe("c-hitl", (f) => frames.push(f));
+    const qid = store.createQuestion({ conversationId: "c-hitl", runId: null, prompt: "澄清：预算？", options: ["<10w", ">50w"] });
+    try {
+      const resp = await fetch(`http://127.0.0.1:${port}/ask_answer`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, ...JH },
+        body: JSON.stringify({ questionId: qid, answer: { budget: "8w" } }), // pi 归一化产物
+      });
+      expect(resp.status).toBe(200);
+      expect((await resp.json() as any).status).toBe("answered");
+      const q = store.getQuestion(qid)!;
+      expect(q.status).toBe("answered");
+      expect(q.answer).toEqual({ budget: "8w" });
+      expect(frames.some((f) => f.type === "hitl_answered" && f.questionId === qid && (f.answer as any).budget === "8w")).toBe(true);
+
+      const again = await fetch(`http://127.0.0.1:${port}/ask_answer`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, ...JH },
+        body: JSON.stringify({ questionId: qid, answer: "x" }),
+      });
+      expect((await again.json() as any).status).toBe("alreadyAnswered"); // 幂等
+    } finally { stop(); _clearNonces(); }
+  });
+
+  test("/ask_answer guard：run 绑定卡 → 409（那是 resume_workflow 职责）；跨会话/不存在 → 404", async () => {
+    const { store, eventBus, registry } = bridgeSetup();
+    store.createConversation({ id: "c-other", workspaceId: "ws_company", userId: "u" });
+    const bound = store.createQuestion({ conversationId: "c-hitl", runId: "r-bound", prompt: "q", options: ["a"] });
+    const other = store.createQuestion({ conversationId: "c-other", runId: null, prompt: "q", options: ["a"] });
+    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    const token = issueNonce("c-hitl"); // c-hitl 的 nonce
+    try {
+      const r1 = await fetch(`http://127.0.0.1:${port}/ask_answer`, { method: "POST", headers: { authorization: `Bearer ${token}`, ...JH }, body: JSON.stringify({ questionId: bound, answer: "a" }) });
+      expect(r1.status).toBe(409); // run 绑定卡走 resume_workflow
+      const r2 = await fetch(`http://127.0.0.1:${port}/ask_answer`, { method: "POST", headers: { authorization: `Bearer ${token}`, ...JH }, body: JSON.stringify({ questionId: other, answer: "a" }) });
+      expect(r2.status).toBe(404); // 他会话的卡（nonce 只授权本会话）
+      const r3 = await fetch(`http://127.0.0.1:${port}/ask_answer`, { method: "POST", headers: { authorization: `Bearer ${token}`, ...JH }, body: JSON.stringify({ questionId: 99999, answer: "a" }) });
+      expect(r3.status).toBe(404);
+    } finally { stop(); _clearNonces(); }
+  });
+
   test("redirect 循环: resume redirect → 引擎自动再建强制卡 q2 → q1 answered + q2 pending（不重复卡）", async () => {
     const { store, eventBus, registry } = bridgeSetup();
     const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });

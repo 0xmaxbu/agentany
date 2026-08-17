@@ -38,14 +38,15 @@ export interface UIRun {
   steps: UIRunStep[];
   note?: string;
 }
-// ticket #16 ask 卡 + #18 审批卡（pending 显卡 + 选项按钮；answered 显答案）。
+// ticket #16 ask 卡 + #18 审批卡 + #28 任务卡（pending 显卡 + 选项按钮；answered 显问题+用户回答）。
 export interface UIQuestion {
   id: number;
-  runId: string | null; // approval 卡通过前无 run → null
-  kind: "ask" | "approval";
+  runId: string | null; // approval 卡/自主 ask 卡无 run → null
+  kind: "ask" | "approval" | "task";
   workflowId: string | null; // approval：待审批工作流
   prompt: string;
   options: string[];
+  context?: string; // ADR-0025 决策 5：ask 卡决策辅助 markdown（pending 显卡时渲染）
   status: "pending" | "answered";
   answer?: unknown;
 }
@@ -92,7 +93,7 @@ const toUIMessage = (m: { id: string | number; dbId?: number | null; role: "user
   blocks: foldToolResults(m.blocks),
   status: "complete",
 });
-const toUIQuestion = (q: Question): UIQuestion => ({ id: q.id, runId: q.runId, kind: q.kind, workflowId: q.workflowId, prompt: q.prompt, options: q.options, status: q.status, answer: q.answer });
+const toUIQuestion = (q: Question): UIQuestion => ({ id: q.id, runId: q.runId, kind: q.kind, workflowId: q.workflowId, prompt: q.prompt, options: q.options, context: q.context, status: q.status, answer: q.answer });
 import { msg } from "../lib/msg";
 // 建会话并发去重（模块级，同旧 store initPromise 模式）：React StrictMode dev 双触发复用同一 promise
 let creatingInflight: Promise<string | null> | null = null;
@@ -205,7 +206,10 @@ export const useChat = create<ChatState>((set, get) => {
         return { runs: [...s.runs, { runId: e.runId, workflowId: e.workflowId, status: "running", steps: [] }] };
       });
     } else if (e.type === "hitl_request") {
-      set((s) => ({ questions: [...s.questions, { id: e.questionId, runId: e.runId, kind: e.kind ?? "ask", workflowId: e.workflowId ?? null, prompt: e.prompt, options: e.options, status: "pending" }] }));
+      set((s) => {
+        if (s.questions.some((q) => q.id === e.questionId)) return {}; // 幂等：重连重帧不重复显卡
+        return { questions: [...s.questions, { id: e.questionId, runId: e.runId, kind: e.kind ?? "ask", workflowId: e.workflowId ?? null, prompt: e.prompt, options: e.options, context: e.context, status: "pending" }] };
+      });
     } else if (e.type === "hitl_answered") {
       set((s) => ({ questions: s.questions.map((q) => (q.id === e.questionId ? { ...q, status: "answered", answer: e.answer, runId: e.runId ?? q.runId } : q)) }));
     } else if (e.type === "run_resumed" || e.type === "run_completed" || e.type === "run_suspended" || e.type === "run_failed") {

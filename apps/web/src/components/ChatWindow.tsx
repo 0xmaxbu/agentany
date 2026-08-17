@@ -2,6 +2,8 @@
 // run/HITL 卡 ui 组件 + Tailwind；UI 禁 emoji（Phosphor 图标，strokeWidth 1.5）。
 // 契约类（e2e）：.chat/.empty/.bubble.{user,assistant,error,aborted}/.content/.cursor/.run/.hitl 不改。
 import { useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { ChatCircleDotsIcon, CheckIcon, PlayIcon, WarningIcon } from "@phosphor-icons/react";
 import { useChat } from "../store/chat";
 import { MessageBlocks } from "./MessageBlock";
@@ -11,6 +13,9 @@ import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 
 const IW = 1.5; // 图标线宽全局统一
+
+// ADR-0025 决策 10 修订：回答上卡——字符串答案（点选文本/pi 归一化）原样显示，对象答案 JSON 兜底（resumeData 等）
+const fmtAnswer = (a: unknown): string => (typeof a === "string" ? a : JSON.stringify(a));
 
 // step 状态色（语义变量驱动，双主题自适应）
 const stepClass = (status: string): string =>
@@ -111,6 +116,12 @@ export function ChatWindow() {
             </CardHeader>
             {q.status === "pending" ? (
               <CardContent>
+                {q.context && (
+                  // ADR-0025 决策 5：决策辅助 markdown（候选对比/产出摘要——用户决策依据）
+                  <div className="md mb-2 text-xs opacity-80">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{q.context}</ReactMarkdown>
+                  </div>
+                )}
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   {q.options.map((opt, i) => (
                     // 统一卡应答：所有卡（ask/approval/task）点选项=发消息+inReplyTo 绑定——服务端按 kind 确定性执行。
@@ -125,7 +136,7 @@ export function ChatWindow() {
                 <div className="mt-1 flex items-start gap-1 text-emerald-600 dark:text-emerald-400">
                   <CheckIcon size={14} weight="light" strokeWidth={IW} className="mt-0.5 shrink-0" />
                   <span>
-                    {isApproval ? "已审批" : "已回答"}：{JSON.stringify(q.answer)}
+                    {isApproval ? "已审批" : "已回答"}：{fmtAnswer(q.answer)}
                   </span>
                 </div>
               </CardContent>

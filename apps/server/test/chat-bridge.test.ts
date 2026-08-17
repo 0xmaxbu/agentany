@@ -2,7 +2,7 @@
 // 真 pi 调 ping 工具归 #19 冒烟；本票验：通道调用逻辑正确、接线对、pi 在沙箱内读得到扩展。
 import { describe, test, expect, mock } from "bun:test";
 import { spawn } from "node:child_process";
-import { readBridgeEnv, pingBridge, startWorkflow, readRun, askUser, resumeWorkflow, withBridge } from "../../../chat/extensions/bridge-core";
+import { readBridgeEnv, pingBridge, startWorkflow, readRun, askUser, answerQuestion, resumeWorkflow, withBridge } from "../../../chat/extensions/bridge-core";
 import { CHAT_EXTENSIONS } from "../src/chat/extensions";
 import { repoSkillPaths, chatExtensionPath, repoSkillsDir } from "../src/config";
 import { listWorkflows, getWorkflow } from "../src/registry";
@@ -111,20 +111,39 @@ describe("chat-bridge · bridge-core startWorkflow / readRun（ticket #14）", (
 });
 
 describe("chat-bridge · askUser / resumeWorkflow（ticket #16）", () => {
-  test("askUser → POST <url>/ask_user + Bearer + JSON body", async () => {
+  test("askUser → POST <url>/ask_user + Bearer + JSON body（自主卡：无 runId——决策 7 修订后 run 绑定卡归引擎）", async () => {
     const orig = globalThis.fetch;
     const fetchMock = mock((_input: string, _init?: RequestInit) =>
       Promise.resolve({ status: 200, json: () => Promise.resolve({ status: "asked", questionId: 1 }), text: () => Promise.resolve("") } as unknown as Response),
     );
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
-      const out = await askUser({ url: "http://localhost:3199", nonce: "n" }, { runId: "r1", prompt: "选？", options: ["A", "B"] });
+      const out = await askUser({ url: "http://localhost:3199", nonce: "n" }, { prompt: "选？", options: ["A", "B"] });
       const [url, init] = fetchMock.mock.calls[0];
       expect(url).toBe("http://localhost:3199/ask_user");
       expect((init as RequestInit).method).toBe("POST");
       expect(((init as RequestInit).headers as any).authorization).toBe("Bearer n");
-      expect(JSON.parse((init as RequestInit).body as string)).toEqual({ runId: "r1", prompt: "选？", options: ["A", "B"] });
+      expect(JSON.parse((init as RequestInit).body as string)).toEqual({ prompt: "选？", options: ["A", "B"] }); // 无 runId（带 runId 必 400）
       expect(out).toContain("asked");
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  test("answerQuestion → POST <url>/ask_answer + Bearer + JSON body（决策 10 修订：pi 归一化答案落自主卡）", async () => {
+    const orig = globalThis.fetch;
+    const fetchMock = mock((_input: string, _init?: RequestInit) =>
+      Promise.resolve({ status: 200, json: () => Promise.resolve({ status: "answered" }), text: () => Promise.resolve("") } as unknown as Response),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const out = await answerQuestion({ url: "http://localhost:3199", nonce: "n" }, 7, { budget: "8w" });
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("http://localhost:3199/ask_answer");
+      expect((init as RequestInit).method).toBe("POST");
+      expect(((init as RequestInit).headers as any).authorization).toBe("Bearer n");
+      expect(JSON.parse((init as RequestInit).body as string)).toEqual({ questionId: 7, answer: { budget: "8w" } });
+      expect(out).toContain("answered");
     } finally {
       globalThis.fetch = orig;
     }

@@ -10,7 +10,7 @@
 import type { ExtensionAPI, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
-  pingBridge, startWorkflow, readRun, askUser, resumeWorkflow, withBridge,
+  pingBridge, startWorkflow, readRun, askUser, answerQuestion, resumeWorkflow, withBridge,
   createScheduledTask, listScheduledTasks, updateScheduledTask, deleteScheduledTask, setScheduledTaskEnabled,
 } from "./bridge-core";
 
@@ -59,21 +59,36 @@ export default function chatBridge(pi: ExtensionAPI) {
     name: "ask_user",
     label: "ask_user",
     description:
-      "工作流挂起需用户决策时调用：创建结构化提问卡片（prompt + 选项按钮）。立即返回 {asked}、不阻塞；用户下一轮回答后系统自动判答并续跑。",
-    promptSnippet: "Ask the user a structured question (cards) when a workflow is suspended",
+      "需要用户补充信息或做选择时调用：创建结构化澄清卡（prompt + 选项按钮）——不绑定工作流（挂起工作流的决策卡由系统自动生成，勿用本工具）。立即返回 {asked}、不阻塞；用户回答后你继续对话（打字答案用 answer_question 落卡）。",
+    promptSnippet: "Ask the user a structured clarification question (autonomous card)",
     parameters: Type.Object({
-      runId: Type.String({ description: "挂起的 run id" }),
       prompt: Type.String({ description: "向用户的提问" }),
       options: Type.Array(Type.String(), { description: "候选选项" }),
-      resumeSchema: Type.Optional(Type.Any({ description: "续跑数据契约（可省，默认从 run 取）" })),
+      resumeSchema: Type.Optional(Type.Any({ description: "答案结构提示（引导你归一化用户回答，无续跑语义）" })),
       multiple: Type.Optional(Type.Boolean({ description: "是否多选（v1 单选）" })),
     }),
     executionMode: "sequential",
     async execute(_id, params): Promise<AgentToolResult> {
       return withBridge("ask_user", process.env, (env) => askUser(env, {
-        runId: params.runId, prompt: params.prompt, options: params.options,
+        prompt: params.prompt, options: params.options,
         resumeSchema: params.resumeSchema, multiple: params.multiple,
       }));
+    },
+  });
+
+  pi.registerTool({
+    name: "answer_question",
+    label: "answer_question",
+    description:
+      "用户消息回答了你此前用 ask_user 提出的澄清问题时调用：将回答归一化为简洁结构（或保留原文）记录到对应卡片——questionId 见 [待处理提问] 注入。仅用于不绑定工作流的澄清卡（工作流挂起卡的续跑用 resume_workflow）。",
+    promptSnippet: "Record the user's normalized answer onto your autonomous clarification card (questionId, answer)",
+    parameters: Type.Object({
+      questionId: Type.Number({ description: "澄清卡 id（[待处理提问] 注入中给出）" }),
+      answer: Type.Any({ description: "归一化的用户答案（简洁结构或原文）" }),
+    }),
+    executionMode: "sequential",
+    async execute(_id, params): Promise<AgentToolResult> {
+      return withBridge("answer_question", process.env, (env) => answerQuestion(env, params.questionId, params.answer));
     },
   });
 

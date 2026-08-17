@@ -151,12 +151,18 @@ const approvalHandler: KindHandler = async ({ deps, q, content, userId, publish 
   return { handled: true, skipTurn: true };
 };
 
-// ── ask（ADR-0025 决策 7/10，#47/T5）：run 绑定卡 + 点击命中 values 快照 → 程序化 resume（零 LLM）；
-//   自主卡（runId 空）/ 快照缺值 / 打字 → slide 滑 LLM 轮（卡保 pending，注入仍在）──
+// ── ask（ADR-0025 决策 7/10，#47/T5 + 决策 10 修订）：run 绑定卡 + 点击命中 values 快照 → 程序化 resume（零 LLM）；
+//   自主卡点选 → 确定性收口（answer=选项文本）但**不跳轮**（答案消费者是 pi——对话继续）；
+//   快照缺值 / 打字 → slide 滑 LLM 轮（run 绑定：pi 归一化+resume；自主：pi 归一化+answer_question）──
 const askHandler: KindHandler = async ({ deps, q, content, publish }) => {
   const idx = optionIndex(q.options as string[], content);
   if (idx < 0) return { handled: false }; // 打字（非选项文本）→ 滑 LLM 轮（pi 归一化，答案消费者是 pi）
-  if (!q.runId) return { handled: false }; // 自主卡：无绑定 run、无 resume 语义 → 滑 LLM 轮
+  if (!q.runId) {
+    // 自主卡（决策 10 修订）：回答即 solved——记录答案上卡，问题不再悬置；pi 轮照跑（注入引导 answer_question/续答）
+    const row = deps.store.markQuestionAnswered(q.id, content);
+    if (row) publish({ type: "hitl_answered", questionId: q.id, answer: content, kind: "ask" });
+    return { handled: true }; // skipTurn 不设 → LLM 轮照常入队（429 语义同普通消息）
+  }
   const resumeData = deterministicResumeData(q, idx); // values 快照查表（旧 enum 对位已退役）
   if (resumeData === undefined) return { handled: false }; // 无快照不可映射 → slide（卡保 pending）
   let outcome: ResumeOutcome;

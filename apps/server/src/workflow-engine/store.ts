@@ -527,6 +527,18 @@ export class WorkflowStore {
     return this.getQuestion(pending.id);
   }
 
+  /** 自主 ask 卡收口（ADR-0025 决策 10 修订）：回答即 solved——answer=点选文本（dispatch）或 pi 归一化答案（answer_question）。
+   *  CAS pending→answered（已答返 undefined 行状由调用方幂等处理）。 */
+  markQuestionAnswered(id: number, answer: unknown): QuestionRow | undefined {
+    const q = this.getQuestion(id);
+    if (!q || q.status !== "pending") return undefined;
+    this.db.update(hitlQuestions)
+      .set({ status: "answered", answer: J(answer), answeredAt: now() })
+      .where(and(eq(hitlQuestions.id, id), eq(hitlQuestions.status, "pending")))
+      .run();
+    return this.getQuestion(id);
+  }
+
   /** #18：某 conv+workflow 的 pending 审批卡（幂等防护：同 conv+workflow 已有 pending 则不建新）。 */
   getPendingApproval(conversationId: string, workflowId: string): QuestionRow | undefined {
     const r = this.db.select().from(hitlQuestions)

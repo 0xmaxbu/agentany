@@ -198,17 +198,18 @@ describe("dispatch · ask 卡（选项点击确定性 resume）", () => {
     expect(q.answer).toBeNull();
   });
 
-  test("自主卡（runId null）点选 → slide（无 resume 语义，卡保 pending）", async () => {
+  test("自主卡（runId null）点选 → 确定性收口（answer=选项文本）+ 不跳轮（pi 继续对话）", async () => {
     const qid = ctx.store.createQuestion({
       conversationId: "c1", kind: "ask", runId: null, prompt: "澄清：目标市场？",
       options: ["是", "否"],
     });
     const tok = await ctx.login("m1");
-    await ctx.send("c1", tok, "是", qid);
+    const r = await ctx.send("c1", tok, "是", qid);
+    expect(r.status).toBe(202);
     await new Promise((res) => setTimeout(res, 30));
     const q = ctx.store.getQuestion(qid)!;
-    expect(q.status).toBe("pending"); // 答案消费者是 pi（对话语义）→ 不跳轮
-    expect(q.answer).toBeNull();
+    expect(q.status).toBe("answered"); // 决策 10 修订：回答即 solved，不再永久 pending
+    expect(q.answer).toBe("是"); // 用户回答上卡（前端卡显示问题+回答）
   });
 
   

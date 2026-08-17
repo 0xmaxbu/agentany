@@ -209,7 +209,7 @@ describe("T6 #48 路由重构 · （真 HTTP POST + 计数 runPiStream）", () =
     expect(store.getQuestion(qid)!.answeredAt).toBe(once.answeredAt); // 不二次写
   });
 
-  test("自主卡点选 → 滑 LLM 轮（计数 +1，卡保 pending）", async () => {
+  test("自主卡点选 → 卡收口（answer=选项文本）+ LLM 轮照跑（pi 继续对话，不跳轮）", async () => {
     const { store, runRegistry, llmCount, send } = routeSetup();
     const autoId = store.createQuestion({
       conversationId: "c1", kind: "ask", runId: null, prompt: "澄清：目标市场？", options: ["是", "否"],
@@ -217,8 +217,10 @@ describe("T6 #48 路由重构 · （真 HTTP POST + 计数 runPiStream）", () =
     const before = llmCount();
     const r = await send("是", autoId);
     expect(r.status).toBe(202);
-    await delayUntil(() => llmCount() === before + 1); // 答案消费者是 pi → 滑 LLM 轮
-    expect(store.getQuestion(autoId)!.status).toBe("pending"); // 卡保持 pending（[待处理提问] 注入仍在）
+    await delayUntil(() => llmCount() === before + 1); // 答案消费者是 pi → 不跳轮（决策 10 修订）
+    const q = store.getQuestion(autoId)!;
+    expect(q.status).toBe("answered"); // 问题 solved——打字/点选即收口（不再永久 pending）
+    expect(q.answer).toBe("是"); // 用户回答上卡
   });
 
   test("429 分轨：队列满时点卡仍 202 + resume 执行；文字消息 → 429", async () => {

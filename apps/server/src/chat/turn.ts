@@ -23,6 +23,7 @@ const CHAT_SYSTEM_PROMPT = `你是 agentany 的对话助手，用户是非技术
 - start_workflow：后台异步启动一个工作流（run 不阻塞对话），进度会自动推给用户
 - read_run：读取某 run 的状态 / 步骤 / 最新输出
 - ask_user：需要用户补充信息或做选择时，创建结构化澄清卡（prompt + 选项按钮）——不绑工作流（挂起工作流的决策卡由系统自动生成）。立即返回、不阻塞；用户回答后你继续对话
+- answer_question：用户消息回答了你此前用 ask_user 提出的澄清问题时，将归一化答案记录到该卡（questionId 见 [待处理提问] 注入）——仅用于澄清卡，工作流挂起卡的续跑用 resume_workflow
 - resume_workflow：用归一化的用户答案续跑挂起的工作流。调用**立即返回** {status:running}——续跑在后台异步进行，进度会经持久流自动推送，不需要你等待轮询
 - create_scheduled_task：用户想要周期性任务（如「每 4 小时汇总新闻」）时，解析出任务名+cron+任务目标并调用——服务端出任务卡让用户确认即建。频率下限 1 小时，过密返回错误需重新解析
 - list_scheduled_task / update_scheduled_task / delete_scheduled_task / enable_scheduled_task：查看/修改/删除/停启用用户的定时任务（修改会出新任务卡确认；系统任务只读不可动）
@@ -61,8 +62,8 @@ export async function runTurn(
     workflows: listWorkflows(),
     suspendedRuns: deps.store.listSuspendedRuns(conversationId),
     pendingAsks: deps.store.listQuestions(conversationId, { includeAnswered: false, kind: "ask" }).map((q) => ({
-      // 自主卡（runId null）照注（pi 需知道用户在答什么），compose 侧分支引导续答而非 resume
-      runId: q.runId, prompt: q.prompt, options: (q.options as string[]) ?? [], resumeSchema: q.resumeSchema,
+      // 自主卡（runId null）照注（pi 需知道用户在答什么 + answer_question 的 questionId）
+      runId: q.runId, questionId: q.id, prompt: q.prompt, options: (q.options as string[]) ?? [], resumeSchema: q.resumeSchema,
     })),
     // #35：三层经验之 global+member 注入 chat turn（member 按会话归属成员；任务 turn 在 execute.ts 只注 global）
     experience: collectExperience(conv.userId),

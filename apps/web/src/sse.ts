@@ -4,7 +4,8 @@ import { BLOCK_FRAME, type BlockKind } from "./lib/blocks";
 export { type Block, type BlockKind } from "./lib/blocks";
 
 export type SSEEvent =
-  | { type: "user_message"; id: number; content: string }
+  | { type: "user_message"; id: number; content: string; taskId?: string; cardAnswered?: boolean }
+  // taskId=#29 定时任务投递标志；cardAnswered=#48/T6 程序化轮旗标（卡应答被确定性收口，无 LLM 占位）
   // f3/ADR-0019 块三帧：blockId 标识块（非 turn）；turn 边界仍由 done 表达
   | { type: typeof BLOCK_FRAME.start; blockId: string; kind: BlockKind; meta?: Record<string, unknown> }
   | { type: typeof BLOCK_FRAME.delta; blockId: string; delta: string }
@@ -21,9 +22,10 @@ export type SSEEvent =
   | { type: "run_failed"; runId: string; note?: string }
   | { type: "step_started"; runId: string; stepId: string }
   | { type: "step_completed"; runId: string; stepId: string; status: string; output?: unknown; payload?: unknown; resumeSchema?: unknown }
-  // ticket #16 ask_user（kind=ask）+ #18 审批门（kind=approval）：异步发卡 + 用户答→续跑/审批
-  | { type: "hitl_request"; questionId: number; runId: string | null; kind?: "ask" | "approval"; workflowId?: string; prompt: string; options: string[]; resumeSchema?: unknown; multiple?: number }
-  | { type: "hitl_answered"; questionId: number; kind?: "ask" | "approval"; runId?: string; answer: unknown };
+  // ticket #16 ask_user（kind=ask）+ #18 审批门（kind=approval）+ #28 任务卡（kind=task）：异步发卡 + 用户答→续跑/审批/建任务
+  | { type: "hitl_request"; questionId: number; runId: string | null; kind?: "ask" | "approval" | "task"; workflowId?: string; prompt: string; options: string[]; resumeSchema?: unknown; multiple?: number; context?: string }
+  // context=ADR-0025 决策 5：ask 卡决策辅助 markdown（待渲染）
+  | { type: "hitl_answered"; questionId: number; kind?: "ask" | "approval" | "task"; runId?: string; answer: unknown };
 
 /**
  * 从缓冲区解析完整 SSE 帧（按 `\n\n` 分隔），返回解析出的事件 + 剩余不完整片段。

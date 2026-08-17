@@ -55,11 +55,12 @@ export interface Message {
   createdAt: string;
 }
 
-// HITL 提问（ticket #16 ask_user + #18 审批门）：ask 卡（kind=ask）+ 审批卡（kind=approval）。
+// HITL 提问（ticket #16 ask_user + #18 审批门 + #28 任务卡）：ask/approval/task 三卡。
 export interface Question {
-  id: number; conversationId: string; runId: string | null; // approval 卡通过前无 run → null
-  kind: "ask" | "approval"; workflowId: string | null; input: unknown;
+  id: number; conversationId: string; runId: string | null; // approval/自主 ask 卡无 run → null
+  kind: "ask" | "approval" | "task"; workflowId: string | null; input: unknown;
   prompt: string; options: string[]; resumeSchema?: unknown; multiple: number;
+  context?: string; // ADR-0025 决策 5：ask 卡决策辅助 markdown（GET /hitl 恢复口径同帧）
   status: "pending" | "answered"; answer?: unknown; decidedBy: string | null;
   createdAt: string; answeredAt: string | null;
 }

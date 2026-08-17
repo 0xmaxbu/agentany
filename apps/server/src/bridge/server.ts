@@ -96,6 +96,26 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     return c.json({ status: "asked", questionId: id });
   });
 
+  // /ask_answer（ADR-0025 决策 10 修订）：自主卡打字答案的收口通道——pi 归一化后落卡（对应 run 绑定卡的 /run/resume）。
+  // 仅自主卡（kind=ask 且 runId null）；run 绑定卡答案走 resume_workflow（resume 语义）。
+  app.post("/ask_answer", async (c) => {
+    if (!store || !eventBus) return c.json({ error: "hitl unavailable" }, 503);
+    const convId = nonceConversation(bearerToken(c.req.header("authorization"))!);
+    if (!convId) return c.json({ error: "no conversation for nonce" }, 400);
+    const body = await jsonBody(c);
+    const { questionId, answer } = body as { questionId?: number; answer?: unknown };
+    if (typeof questionId !== "number") return c.json({ error: "questionId required" }, 400);
+    const q = store.getQuestion(questionId);
+    if (!q || q.conversationId !== convId) return c.json({ error: "question not found" }, 404); // 含跨会话（nonce 只授权本会话）
+    if (q.kind !== "ask" || q.runId) {
+      return c.json({ error: "only autonomous ask cards use answer_question; run-bound cards resume via resume_workflow" }, 409);
+    }
+    if (q.status !== "pending") return c.json({ status: "alreadyAnswered" }); // 幂等
+    store.markQuestionAnswered(questionId, answer);
+    eventBus.publish(convId, { type: "hitl_answered", questionId, kind: "ask", answer });
+    return c.json({ status: "answered" });
+  });
+
   // /run/resume（#16）：resume_workflow 工具经此。registry.resume 三态分支；clean→markAnswered + 推 hitl_answered。
   app.post("/run/resume", async (c) => {
     if (!reg) return c.json({ error: "run registry unavailable" }, 503);
