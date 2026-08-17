@@ -144,25 +144,25 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
     const isSystem = task.scope === "system";
     const isSeed = isSystem && task.id === DISTILL_TASK_ID;
     const body = await jsonBody(c);
+    // 蒸馏 seed 冻结单点闸：请求里带任何 cron 以外字段即 403（四处逐字段判重收敛于此——review S2）
+    if (isSeed && [body.displayName, body.prompt, body.allowWrite, body.allowSearch].some((v) => v !== undefined)) {
+      return c.json({ error: "distill seed is frozen: only cron is editable" }, 403);
+    }
     const patch: { displayName?: string; cron?: string; prompt?: string; allowWrite?: boolean; allowSearch?: boolean } = {};
     if (body.displayName !== undefined) {
-      if (isSeed) return c.json({ error: "distill seed is frozen: only cron is editable" }, 403);
       if (typeof body.displayName !== "string" || body.displayName.length === 0) return c.json({ error: "invalid displayName" }, 400);
       patch.displayName = body.displayName;
     }
     if (body.prompt !== undefined) {
-      if (isSeed) return c.json({ error: "distill seed is frozen: only cron is editable" }, 403);
       if (typeof body.prompt !== "string" || body.prompt.length === 0) return c.json({ error: "invalid prompt" }, 400);
       patch.prompt = body.prompt;
     }
     if (body.allowWrite !== undefined) {
-      if (isSeed) return c.json({ error: "distill seed is frozen: only cron is editable" }, 403);
       if (!isSystem) return c.json({ error: "allowWrite applies to system tasks only" }, 400);
       if (typeof body.allowWrite !== "boolean") return c.json({ error: "allowWrite must be boolean" }, 400);
       patch.allowWrite = body.allowWrite;
     }
     if (body.allowSearch !== undefined) {
-      if (isSeed) return c.json({ error: "distill seed is frozen: only cron is editable" }, 403);
       if (!isSystem) return c.json({ error: "allowSearch applies to system tasks only" }, 400);
       if (typeof body.allowSearch !== "boolean") return c.json({ error: "allowSearch must be boolean" }, 400);
       patch.allowSearch = body.allowSearch;
@@ -209,7 +209,7 @@ export function registerScheduledTaskRoutes(app: Hono<AppEnv>, deps: RunDeps): v
     if (task.scope === "system" && task.id === DISTILL_TASK_ID) {
       return c.json({ error: "distill seed cannot be deleted" }, 403);
     }
-    if (deps.scheduler?.isRunning(task.id)) return c.json({ error: "task is running" }, 409);
+    if (deps.scheduler?.isRunning(task.id)) return c.json({ error: "task already running" }, 409);
     try {
       const ok = ts().deleteTask(task.id, u.role === "admin");
       return ok ? c.json({ deleted: true }) : c.json({ error: "task not found" }, 404);

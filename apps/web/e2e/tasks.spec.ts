@@ -177,6 +177,10 @@ test("admin 编辑 system 任务弹窗：预填 + 改 cron → 行内 cron 更�
   const row = page.locator("[data-testid=tasks-table] > div", { hasText: name }).first();
   await expect(row).toBeVisible({ timeout: 10_000 });
 
+  // 改前先展开记下「下次」（nextFireAt=旧 cron 的火点）——改 cron 后断言它变（服务端重算可观察）
+  await row.locator("[data-testid=task-row]").click();
+  const nextBefore = await row.locator("text=/下次：/").textContent();
+
   await row.locator("[data-testid=task-edit-btn]").click();
   const dlg = page.locator("[data-testid=task-dialog]");
   await expect(dlg).toBeVisible();
@@ -185,16 +189,53 @@ test("admin 编辑 system 任务弹窗：预填 + 改 cron → 行内 cron 更�
   await expect(dlg.locator("[data-testid=task-form-cron]")).toHaveValue("0 5 * * 1");
   await expect(dlg.locator("[data-testid=task-form-prompt]")).toHaveValue("初始目标");
 
-  // 改 cron 提交 → 行内更新（nextFireAt 服务端重算）
+  // 改 cron 提交 → 行内更新 + nextFireAt 重算生效（spec #40 验收点：改后可观察——review P1）
   await dlg.locator("[data-testid=task-form-cron]").fill("15 7 * * 3");
   await dlg.locator("[data-testid=task-submit]").click();
   await expect(dlg).toHaveCount(0, { timeout: 5_000 });
-  await expect(page.locator("[data-testid=tasks-table] > div", { hasText: name }).first()).toContainText("15 7 * * 3", { timeout: 5_000 });
+  const rowAfter = page.locator("[data-testid=tasks-table] > div", { hasText: name }).first();
+  await expect(rowAfter).toContainText("15 7 * * 3", { timeout: 5_000 });
+  // 展开态跨编辑保留（expanded 按行 id 记录）——直接断言「下次」已变（勿再点行=会收起）
+  await expect(rowAfter.locator("text=/下次：/")).not.toHaveText(nextBefore ?? "", { timeout: 5_000 });
+  // API 侧断言真值：nextFireAt 为新 cron（15 7 * * 3）火点（分钟位=15 稳定不受 TZ 影响；> now）
+  const taskAfter = (await (await page.request.get("/scheduled-tasks")).json()) as { nextFireAt: string; cron: string; displayName: string }[];
+  const mine = taskAfter.find((t) => t.cron === "15 7 * * 3" && t.displayName === name);
+  expect(mine).toBeDefined();
+  const nf = new Date(mine!.nextFireAt);
+  expect(nf.getUTCMinutes()).toBe(15);
+  expect(nf.getTime()).toBeGreaterThan(Date.now());
 
   // 清理
   await page.locator("[data-testid=tasks-table] > div", { hasText: name }).first().locator("[data-testid=delete-task]").click();
   await page.locator("[data-testid=confirm-delete]").click();
   await expect(page.locator("[data-testid=tasks-table] > div", { hasText: name })).toHaveCount(0, { timeout: 5_000 });
+});
+
+test("admin 新建弹窗 cron 校验：前端格式错即时可见 + 服务端过密 422 直出（review P3）", async ({ page }) => {
+  await page.goto("/admin/tasks");
+  await expect(page.locator("h1")).toHaveText("定时任务", { timeout: 10_000 });
+  await page.locator("[data-testid=task-create-btn]").click();
+  const dlg = page.locator("[data-testid=task-dialog]");
+  await expect(dlg).toBeVisible();
+
+  await dlg.locator("[data-testid=task-form-name]").fill("校验任务");
+  await dlg.locator("[data-testid=task-form-prompt]").fill("x");
+
+  // 前端粗校验：3 段 → 即时错误 + 提交禁用
+  await dlg.locator("[data-testid=task-form-cron]").fill("0 5 *");
+  await expect(dlg.locator("[data-testid=cron-format-error]")).toBeVisible();
+  await expect(dlg.locator("[data-testid=task-submit]")).toBeDisabled();
+
+  // 5 段但过密（*/5 分钟）→ 前端放行（格式对），服务端 422 → 错误直出、弹窗不关
+  await dlg.locator("[data-testid=task-form-cron]").fill("*/5 * * * *");
+  await expect(dlg.locator("[data-testid=cron-format-error]")).toHaveCount(0);
+  await dlg.locator("[data-testid=task-submit]").click();
+  await expect(dlg.locator("[data-testid=task-dialog-error]")).toContainText("too frequent", { timeout: 5_000 });
+  await expect(dlg).toBeVisible(); // 未提交成功——弹窗仍在
+
+  // 取消无副作用（列表无校验任务）
+  await dlg.locator("button", { hasText: "取消" }).click();
+  await expect(page.locator("[data-testid=tasks-table] > div", { hasText: "校验任务" })).toHaveCount(0);
 });
 
 test("蒸馏 seed 编辑弹窗：仅 cron 可编辑，prompt 只读 + 说明", async ({ page }) => {

@@ -22,7 +22,7 @@ import {
   markTaskViewed,
   runTaskNow,
   setTaskEnabled,
-  DISTILL_TASK_ID,
+  isDistillSeed,
   type ScheduledTask,
   type TaskRun,
 } from "../../api";
@@ -156,7 +156,7 @@ function TaskRow({
   const [running, setRunning] = useState(false);
   const [runs, setRuns] = useState<TaskRun[] | null>(null);
   const isSystem = task.scope === "system";
-  const isDistill = task.id === DISTILL_TASK_ID;
+  const isDistill = isDistillSeed(task); // 冻结特判单出口（review S1）
 
   // 展开即拉历史（手动跑后 task.unreadRuns 变化 → 重拉：展开态能看到新 run 行）
   useEffect(() => {

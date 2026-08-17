@@ -51,13 +51,12 @@ export class ScheduledTaskStore {
   constructor(private db: BunSQLiteDatabase<any>, private workflowStore?: WorkflowStore) {}
 
   createTask(p: {
-    id?: string; // 测试/seed 造固定 id 行（如蒸馏 t_seed_distill）
     scope: TaskScope; workspaceId: string | null; displayName: string; cron: string; prompt: string;
     outputConversationId: string | null; creatorId: string; nextFireAt: string;
     allowWrite?: boolean; allowSearch?: boolean;
   }): ScheduledTaskRow {
     const row: ScheduledTaskRow = {
-      id: p.id ?? "t_" + globalThis.crypto.randomUUID(),
+      id: "t_" + globalThis.crypto.randomUUID(),
       scope: p.scope, workspaceId: p.workspaceId, displayName: p.displayName, cron: p.cron,
       prompt: p.prompt, outputConversationId: p.outputConversationId, creatorId: p.creatorId,
       nextFireAt: p.nextFireAt, enabled: true, createdAt: now(),

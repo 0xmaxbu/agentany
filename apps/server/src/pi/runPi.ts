@@ -96,9 +96,9 @@ async function spawnPiCore(opts: RunPiStreamOptions): Promise<RunPiResult> {
   // 其余（.env/DB/源码/家目录/其它项目）不可达、网络全禁。逃生阀 AGENTANY_NO_SANDBOX=1 直通。
   // 扩展父目录加入 ro：pi 经 -e 加载的扩展（含其同侧 import，如 chat-bridge→bridge-core）需可读。
   // skills/ 下扩展已被 repoSkillsDir() 覆盖；chat/extensions/ 等非 skills 扩展靠此处放行（ticket #12）。
-  // #39/ADR-0023：sandboxAllow 显式覆盖（system 任务全域白名单）；默认路径 ro 逐 skill 目录放行
-  // （#37 后真相源在 knowledge/skills/<name>——逐目录而非其父，knowledge/ 根（experience/learnings/
-  // distill-state）对 pi 不可见，学习域排除）。
+  // #39/ADR-0023：sandboxAllow 显式覆盖（system 任务全域白名单——ro 逐 skill 目录精确放行，
+  // 见 execute.ts）；默认路径（chat/workflow）仍是 skills 根整树 ro（#37 既有行为）——
+  // 逐目录收紧可后续统一，暂不动（回归面大）。
   const extDirs = Array.from(new Set((opts.extensions ?? []).map(dirname)));
   const skillPaths = repoSkillPaths();
   const plan = wrapSpawn({

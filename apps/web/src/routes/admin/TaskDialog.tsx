@@ -7,11 +7,15 @@
 // 交互完整态：提交 busy、失败错误可见（服务端 error 字段直出）、Esc/点外取消无副作用。
 import { useEffect, useState } from "react";
 import { GlobeHemisphereWestIcon, MagnifyingGlassIcon, PencilSimpleIcon, WarningIcon } from "@phosphor-icons/react";
-import { createSystemTask, updateTask, DISTILL_TASK_ID, type ScheduledTask } from "../../api";
+import { createSystemTask, updateTask, isDistillSeed, type ScheduledTask } from "../../api";
 import { Button } from "../../components/ui/button";
 import { Dialog } from "../../components/ui/dialog";
 
 const IW = 1.5;
+
+/** cron 粗校验（review P3）：5 段非空即过——合法性与频率下限（≥1h）的精确语义留在服务端单点，前端只挡明显错形。 */
+const cronLooksWrong = (cron: string): boolean =>
+  cron.trim().length > 0 && cron.trim().split(/\s+/).length !== 5;
 
 /** 开关行：label + 说明 + checkbox（原生——触控面积优先，样式跟 ui 惯例）。 */
 function Toggle({
@@ -49,7 +53,7 @@ export function TaskDialog({
   onSaved: () => void;
 }) {
   const isEdit = task !== null;
-  const isDistill = task?.id === DISTILL_TASK_ID;
+  const isDistill = task !== null && isDistillSeed(task); // 冻结特判单出口（review S1）
   const [name, setName] = useState(task?.displayName ?? "");
   const [cron, setCron] = useState(task?.cron ?? "");
   const [prompt, setPrompt] = useState(task?.prompt ?? "");
@@ -87,7 +91,7 @@ export function TaskDialog({
     }
   };
 
-  const canSubmit = !busy && cron.trim().length > 0 && (isDistill || (name.trim().length > 0 && prompt.trim().length > 0));
+  const canSubmit = !busy && cron.trim().length > 0 && !cronLooksWrong(cron) && (isDistill || (name.trim().length > 0 && prompt.trim().length > 0));
 
   return (
     <Dialog open onClose={onClose} title={isDistill ? "编辑蒸馏任务" : isEdit ? "编辑 system 任务" : "新建 system 任务"}>
@@ -122,9 +126,14 @@ export function TaskDialog({
             value={cron}
             onChange={(e) => setCron(e.target.value)}
             placeholder="0 5 * * 1（分 时 日 月 周；最小间隔 1 小时）"
-            className="h-8 rounded border border-border bg-background px-2 font-mono text-sm"
+            className={`h-8 rounded border bg-background px-2 font-mono text-sm ${cronLooksWrong(cron) ? "border-destructive" : "border-border"}`}
             data-testid="task-form-cron"
           />
+          {cronLooksWrong(cron) && (
+            <span className="text-[11px] text-destructive" data-testid="cron-format-error">
+              格式应为 5 段（分 时 日 月 周），如 0 5 * * 1
+            </span>
+          )}
         </label>
 
         <label className="flex flex-col gap-1">

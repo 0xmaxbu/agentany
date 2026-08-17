@@ -197,8 +197,11 @@ export interface ScheduledTask {
   unreadRuns?: number;
 }
 
-/** 蒸馏 seed 任务 id（服务端 execute.ts DISTILL_TASK_ID 同契约——唯一冻结特判：仅 cron 可改）。 */
+/** 蒸馏 seed 任务 id（服务端 execute.ts DISTILL_TASK_ID 同契约）。 */
 export const DISTILL_TASK_ID = "t_seed_distill";
+
+/** 冻结特判唯一出口（review S1：seed=仅 cron 可改、不可删——服务端闸同口径，前端形态判断收敛于此）。 */
+export const isDistillSeed = (t: { id: string }): boolean => t.id === DISTILL_TASK_ID;
 export interface TaskRun {
   id: number;
   taskId: string;
