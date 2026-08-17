@@ -12,7 +12,7 @@ import { resolveScopePaths, scopeOf, type Scope } from "../scope";
 import { validate } from "../workflow-engine/schema";
 import { decide } from "../security/policy";
 import { buildBriefMessage, extractArtifacts, extractBrief, extractNoteBrief, stepListFallback, truncateForRead } from "./briefing";
-import type { WorkflowStore, RunRow } from "../workflow-engine/store";
+import type { WorkflowStore, RunRow, RunStatus } from "../workflow-engine/store";
 import type { Workflow } from "../workflow-engine/defineWorkflow";
 import type { EventBus, Frame } from "../chat/eventbus";
 import { WorkflowNotFound, InvalidInput, makeRunId } from "../runs";
@@ -92,29 +92,63 @@ export class RunRegistry {
     return { status: "needs_approval", questionId };
   }
 
-  /** 续跑（#16 HITL 经 bridge 调）。重建 ctx（句柄可能因重启不在）。rejected/idempotent 不发 run_*。 */
+  /** 续跑（#16 HITL 经 bridge 调；ADR-0025 决策 11 拆分）。
+   *  同步段只判 verdict 即时返（rejected/idempotent/clean→running）；clean → detached 续跑（对齐 start 语义，
+   *  不再阻塞 HTTP 分钟级）。续跑帧经 DB + EventBus；双击幂等由 runner 串行锁承担（第二次 idempotent 静默）。 */
   async resume(runId: string, resumeData: unknown): Promise<ResumeOutcome> {
     const row = this.deps.store.getRun(runId);
     if (!row) throw new Error(`run not found: ${runId}`);
+    const verdict = this.resumeVerdict(runId, resumeData);
+    if (verdict.kind === "rejected") return { status: "suspended", runId, rejected: true, error: verdict.error };
+    if (verdict.kind === "idempotent") return { status: verdict.status, runId, idempotent: true, note: "not currently suspended" };
     const wf = getWorkflow(row.workflowId);
     if (!wf) throw new WorkflowNotFound(row.workflowId);
-    const workspaceId = row.workspaceId; // NOT NULL（迁移 backfill；run 恒有 ws 锚）
-    const scope = scopeOf(workspaceId);
-    const abortCtrl = this.handles.get(runId)?.abortCtrl ?? new AbortController();
-    const ctx = this.ctxFor(wf, scope, workspaceId, runId, abortCtrl);
+    this.resumeDetached(wf, row, runId, resumeData); // fire-and-forget；ctx 在其内构建（verdict 保持纯同步零开销）
+    return { status: "running", runId }; // clean 即时 verdict；续跑后台 detached
+  }
+
+  // 同步段：run 存在（调用方已取）+ 挂起态 + resumeSchema 校验 → running｜rejected｜idempotent。不发帧、不动状态。
+  // 校验与 runner 内 resumeInner 同口径（validate(last.resumeSchema)）——廉价先行，err 面调用方即时可判。
+  private resumeVerdict(runId: string, resumeData: unknown):
+    | { kind: "running" }
+    | { kind: "rejected"; error: string }
+    | { kind: "idempotent"; status: RunStatus } {
+    const log = this.deps.store.getLog(runId);
+    const last = log[log.length - 1];
+    if (!last || last.status !== "suspended") {
+      const r = this.deps.store.getRun(runId);
+      return { kind: "idempotent", status: r?.status ?? "failed" };
+    }
+    const v = validate(last.resumeSchema as any, resumeData);
+    if (!v.ok) return { kind: "rejected", error: v.error };
+    return { kind: "running" };
+  }
+
+  // detached 续跑：重建 ctx（句柄可能因重启不在）；rejected/idempotent 不发 run_*（幂等对竞态双击，
+  // rejected 已在同步段挡掉走不到这）。run_resumed 补发在续跑真成立后（ADR-0022：不预发）。
+  private resumeDetached(wf: Workflow, row: RunRow, runId: string, resumeData: unknown): void {
     const publish = (frame: Frame) => {
       if (row.conversationId) this.deps.eventBus.publish(row.conversationId, frame);
     };
     const onProgress = (p: RunProgress) => publish({ ...p, runId });
-    // run_resumed 不预发：先让 runner 判幂等/拒绝（h7 串行锁内）——非挂起态的重复 resume 不产生任何帧
-    // （ADR-0022 双路判答竞争下：先到的 resume 完成后，后到的 idempotent 静默——前端状态不被回写「resumed」）。
-    const outcome = await resume(wf, this.deps.store, runId, resumeData, ctx, onProgress);
-    // rejected / idempotent 不是 clean 结局，不发 run_*（由调用方处理）。
-    if (!("rejected" in outcome) && !("idempotent" in outcome)) {
-      publish({ type: "run_resumed", runId }); // 真续跑成立才补发（此时步骤帧已先行——顺序仅影响展示，状态终值正确）
-      this.publishOutcome(publish, runId, outcome);
-    }
-    return outcome;
+    void (async () => {
+      const abortCtrl = this.handles.get(runId)?.abortCtrl ?? new AbortController();
+      const ctx = this.ctxFor(wf, scopeOf(row.workspaceId), row.workspaceId, runId, abortCtrl);
+      let outcome: ResumeOutcome;
+      try {
+        outcome = await resume(wf, this.deps.store, runId, resumeData, ctx, onProgress);
+      } catch (e) {
+        const note = (e as Error)?.message ?? String(e); // 顶抛：标 failed + 推 run_failed（同 runDetached catch）
+        this.deps.store.updateRunStatus(runId, "failed");
+        publish({ type: "run_failed", runId, note });
+        return;
+      }
+      if (!("rejected" in outcome) && !("idempotent" in outcome)) {
+        publish({ type: "run_resumed", runId }); // 真续跑成立才补发（步骤帧已先行——顺序仅影响展示，终值正确）
+        // runner.resume 只产 RunOutcome|rejected|idempotent（running 仅 registry 同步段产）；窄化断言
+        this.publishOutcome(publish, runId, outcome as RunOutcome);
+      }
+    })();
   }
 
   /** 读 run 状态/步骤/最新输出（chat read_run 经 bridge 调）。 */

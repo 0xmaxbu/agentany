@@ -138,7 +138,8 @@ export async function run(
 export type ResumeOutcome =
   | RunOutcome
   | { status: "suspended"; runId: string; rejected: true; error: string }
-  | { status: RunStatus; runId: string; idempotent: true; note: string };
+  | { status: RunStatus; runId: string; idempotent: true; note: string }
+  | { status: "running"; runId: string }; // #41/T4（ADR-0025 决策 11）：registry.resume 同步 verdict——clean 已接受，续跑 detached
 
 // h7：per-runId 串行锁。把 resume 的 check-then-act 串行化，防并发 resume 双执行（TOCTOU）。
 // 单进程（ADR-0003）下内存锁足够；第一个跑完后第二个再见 advanced 状态→幂等。

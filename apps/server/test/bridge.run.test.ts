@@ -130,3 +130,48 @@ describe("bridge /run/start + /run/read（ticket #14）", () => {
     }
   });
 });
+
+describe("bridge /run/resume（T4 #44 ADR-0025 决策 11：即时 verdict）", () => {
+  test("clean → 立即返 {status:running}（续跑 detached）；rejected → 409；idempotent → alreadyAnswered", async () => {
+    const { store, eventBus, registry } = setup();
+    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    const token = issueNonce("c-bridge");
+    const post = (runId: string, resumeData: unknown) =>
+      fetch(`http://127.0.0.1:${port}/run/resume`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ runId, resumeData }),
+      });
+    try {
+      const started = await fetch(`http://127.0.0.1:${port}/run/start`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ workflowId: "synthetic-3step", input: {} }),
+      });
+      const runId = ((await started.json()) as any).runId as string;
+      await delayUntil(() => registry.read(runId)?.status === "suspended");
+
+      // rejected（schema 不符）：保持 pending、409
+      const t0 = Date.now();
+      const rej = await post(runId, { decision: "bogus" });
+      expect(rej.status).toBe(409);
+      expect(Date.now() - t0).toBeLessThan(500);
+      expect(registry.read(runId)!.status).toBe("suspended");
+
+      // clean：即时 200 {status:running}（快、不阻塞续跑）
+      const t1 = Date.now();
+      const ok = await post(runId, { decision: "accept" });
+      expect(ok.status).toBe(200);
+      expect(((await ok.json()) as any).status).toBe("running");
+      expect(Date.now() - t1).toBeLessThan(500);
+      await delayUntil(() => registry.read(runId)?.status === "completed");
+
+      // idempotent：已非挂起态
+      const idem = await post(runId, { decision: "accept" });
+      expect(((await idem.json()) as any).alreadyAnswered).toBeTrue();
+    } finally {
+      stop();
+      _clearNonces();
+    }
+  });
+});

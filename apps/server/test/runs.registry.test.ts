@@ -83,6 +83,76 @@ describe("RunRegistry · resume", () => {
   });
 });
 
+describe("T4 #44 resume 拆分（ADR-0025 决策 11）：同步 verdict + detached 续跑", () => {
+  test("clean → 即时返 {running}（不阻塞）；续跑 detached 后 run_resumed/completed", async () => {
+    const { eventBus, registry } = newRegistry();
+    const frames: any[] = [];
+    eventBus.subscribe("c-test", (f) => frames.push(f));
+    const r = startSynthetic(registry);
+    await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
+
+    const t0 = Date.now();
+    const out = await registry.resume(r.runId, { decision: "accept" });
+    // 同步 verdict：即时返 running（旧实现在此 await 整个续跑至 completed）
+    expect(out.status).toBe("running");
+    expect(Date.now() - t0).toBeLessThan(500);
+    // 续跑 detached：最终仍到 completed + run_resumed 帧
+    await delayUntil(() => frames.some((f) => f.type === "run_completed"));
+    expect(frames.map((f) => f.type)).toContain("run_resumed");
+    expect(registry.read(r.runId)!.status).toBe("completed");
+  });
+
+  test("rejected → 即时 {rejected}，不动状态、不发 run_* 帧", async () => {
+    const { eventBus, registry } = newRegistry();
+    const frames: any[] = [];
+    eventBus.subscribe("c-test", (f) => frames.push(f));
+    const r = startSynthetic(registry);
+    await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
+
+    const t0 = Date.now();
+    const out = await registry.resume(r.runId, { decision: "bogus" } as any); // schema 校验失败
+    expect(out).toMatchObject({ rejected: true });
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(frames.some((f) => f.type === "run_resumed" || f.type === "run_completed")).toBeFalse();
+    expect(registry.read(r.runId)!.status).toBe("suspended"); // 保持挂起（供重试）
+  });
+
+  test("idempotent → 即时 {idempotent}（非挂起态不续跑、无帧）", async () => {
+    const { eventBus, registry } = newRegistry();
+    const frames: any[] = [];
+    eventBus.subscribe("c-test", (f) => frames.push(f));
+    const r = startSynthetic(registry);
+    await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
+    await registry.resume(r.runId, { decision: "accept" });
+    await delayUntil(() => frames.some((f) => f.type === "run_completed"));
+
+    frames.length = 0; // 清帧：第二次 resume（已 completed）必须零副作用
+    const t0 = Date.now();
+    const out = await registry.resume(r.runId, { decision: "accept" });
+    expect(out).toMatchObject({ idempotent: true });
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(frames.some((f) => f.type === "run_resumed" || f.type === "run_completed")).toBeFalse();
+  });
+
+  test("并发双击 → 两路都 running，但只续跑一次（不二次执行、单 run_resumed、步骤不翻倍）", async () => {
+    const { eventBus, registry } = newRegistry();
+    const frames: any[] = [];
+    eventBus.subscribe("c-test", (f) => frames.push(f));
+    const r = startSynthetic(registry);
+    await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
+
+    const [a, b] = await Promise.all([
+      registry.resume(r.runId, { decision: "accept" }),
+      registry.resume(r.runId, { decision: "accept" }),
+    ]);
+    expect(a.status).toBe("running");
+    expect(b.status).toBe("running");
+    await delayUntil(() => frames.some((f) => f.type === "run_completed"));
+    expect(frames.filter((f) => f.type === "run_resumed").length).toBe(1); // 二路之二 idempotent 静默
+    expect(registry.read(r.runId)!.steps).toHaveLength(4); // s1, review, review, s2 —— 未翻倍
+  });
+});
+
 describe("RunRegistry · abort + sweepCrashed", () => {
   test("abort(runId) → true（句柄在）；abort(未知) → false", async () => {
     const { registry } = newRegistry();

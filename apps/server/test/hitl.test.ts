@@ -189,10 +189,11 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
       await askUser(port, token, r.runId);
       const resp = await resumeRun(port, token, r.runId, { decision: "accept" });
       expect(resp.status).toBe(200);
-      expect((await resp.json() as any).status).toBe("completed");
+      expect((await resp.json() as any).status).toBe("running"); // ADR-0025 决策 11：即时 verdict，续跑 detached
       await delayUntil(() => frames.some((f) => f.type === "hitl_answered"));
       expect(frames.some((f) => f.type === "hitl_answered" && (f.answer as any)?.decision === "accept")).toBe(true);
-      expect(frames.some((f) => f.type === "run_completed")).toBe(true); // registry clean 发
+      await delayUntil(() => frames.some((f) => f.type === "run_completed")); // detached 续跑完成（registry clean 发）
+      expect(frames.some((f) => f.type === "run_completed")).toBe(true);
       expect(store.getPendingByRun(r.runId)).toBeUndefined(); // answered
       const q = store.listQuestions("c-hitl", { includeAnswered: true })[0];
       expect(q.status).toBe("answered");
@@ -273,7 +274,8 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
       await askUser(port, token, r.runId);
       const resp = await resumeRun(port, token, r.runId, { decision: "redirect" });
       expect(resp.status).toBe(200);
-      expect((await resp.json() as any).status).toBe("suspended"); // 回 s1→review 再 suspend
+      expect((await resp.json() as any).status).toBe("running"); // ADR-0025 决策 11：即时 verdict（回 s1→review 再 suspend 是后续）
+      await delayUntil(() => registry.read(r.runId)?.status === "suspended"); // 循环再挂起
       await delayUntil(() => frames.some((f) => f.type === "hitl_answered")); // q1 answered
       expect(store.listQuestions("c-hitl", { includeAnswered: true }).filter((q) => q.status === "answered")).toHaveLength(1);
       expect(store.getPendingByRun(r.runId)).toBeUndefined(); // q1 已答，无 pending

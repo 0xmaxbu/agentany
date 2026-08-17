@@ -118,7 +118,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     }
     if ("rejected" in outcome) return c.json({ error: outcome.error }, 409); // schema 校验失败，保持 pending
     if ("idempotent" in outcome) return c.json({ alreadyAnswered: true }); // 已答，no-op
-    // clean（completed/suspended/failed）→ 标该 run 的 pending 提问 answered + 推 hitl_answered
+    // clean（ADR-0025 决策 11：即时返 running，续跑 detached）→ 答案已确定性派发：标 pending answered + 推 hitl_answered
     const row = store?.markPendingAnsweredByRun(runId, resumeData);
     if (row && eventBus) eventBus.publish(convId, { type: "hitl_answered", questionId: row.id, answer: resumeData });
     return c.json({ status: outcome.status });
