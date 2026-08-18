@@ -64,3 +64,11 @@
 | 系统作用域 (System scope) | **服务端代码装配跨 workspace 数据的权限**（非 pi 的读写特权）：跨 ws 数据（如蒸馏要读的各 ws pi session）由服务端装配成最小切片供任务 pi 只读；pi 全程无跨 ws 读写能力（ADR-0021）。不是 workspace——无名单/权限语义，是正交的全局维度。 |
 | 定时任务 (Scheduled Task) | 用户配置的 **cron 触发器**，**仅触发 LLM 可独立完成的任务**（**不触发工作流**——工作流含 HITL/审批语义，cron 无人值守不适用）。**任务本质=自由 prompt 任务**：用户在 chat 里说需求（如「每 4 小时去 xx 网站读新闻发摘要」），LLM 解析出 cron+任务 prompt+**display_name**（任务名）→ **任务卡确认**（cron 人类可读+未来 3 次执行时间+频率下限校验）→ 入库；到点=pi 以该 prompt 跑（chat 同构沙箱但**无 bridge**——无人值守无交互语义，tavily 保留），产出投递**产出会话**。两类 scope：**workspace**（成员随口建，绑建时 ws+产出会话）/ **system**（跨 ws 内置如经验蒸馏，seed DB 行，**无产出会话**——产出=执行日志在管理页看，带**未读数**、点开即清；**经 chat 删除/停用一律服务端硬拒**，仅 admin UI 可管）。**成员自建自批**（任务卡自己确认即建；CommandPolicy 仅 deny 拒——require_approval 同样自建自批、任务卡确认即批，不发 admin 卡）；**system 任务经 chat 工具只读且仅 admin 可读，删/停/改一律工具层直接拒**（管理只走 admin UI）；对话/面板可改可管自己的任务；执行不再逐次问；支持手动调用（trigger 区分 cron/manual）；错过窗口记 missed 不补跑；同任务在跑→跳过（skipped_overrun）。**产出文件**：执行器从 blocks 流的 tool_use 记录收集被写文件→task_files 登记→产出会话渲染文件管理器式列表，`GET /files/<workspaceId>/<relative_path>` 预览（登录+ws 访问权；v1 纯文本预览 md/txt/html/pdf，预览页顶部下载按钮；无预览能力的扩展名直接下载）。 |
 | 产出会话 (Output conversation) | **workspace 定时任务**创建时自动建的专属会话（挂任务同 ws，标题=display_name）：任务每次执行的产出投递于此。system 任务无产出会话。创建者=建任务的用户。 |
+| IM 通道 (IM channel) | Web/App 之外的即时通讯通道，接入 chat 的 pending 卡决策（v1 飞书，钉钉同接缝第二批；ADR-0028）。**一应用一条长连接服务全租户**（飞书集群模式，非 per-user）；出站是 REST 短连——多用户无连接数性能障碍，瓶颈在平台 API 限频。 |
+| IM 决策入口 (IM decision entry) | IM 上回答 pending 卡的通道并集：**按钮作答**与**文本作答**两条，都收敛到同一张卡的 CAS（响应只处理一次）。 |
+| 按钮作答 (Button answer) | IM 的**确定性通道**：卡片选项渲染成按钮，`card.action.trigger` 回调携带 questionId+值 → 直接 dispatch/CAS，零 LLM。approval/task 由此在 IM 上决策（重开 #49 决策 5，ADR-0028）；文本仍不放行这两种卡。 |
+| 文本作答 (Text answer) | IM 的**归一化通道**：用户打字 → LLM 按 resumeSchema 归一化判答。仅对 kind=ask 卡生效；多张候选并存时走**选择卡**收口。 |
+| 选择卡 (Selection card) | **多卡歧义收口**：用户文本无法判断答哪张 pending 卡时，bot 发一张系统卡列出各候选（仅 prompt）追问目标，点击后用缓存的待确认文本判答。不归任一工作流会话——只回答「答哪张」。 |
+| 绑定码 (Bind code) | 用户自助绑定 IM 的凭证：Web 已登录用户点「绑定 IM」生成 **10 分钟有效、单次使用**的高熵码，到 IM 发 `#bind <码>` → 把该 IM 身份（如飞书 open_id）绑到自己的 agentany 账号。推翻 #49 决策 6 的 admin 静态绑定（ADR-0028）。 |
+| 绑定补发 (Bind backfill) | 绑定成功的瞬间，把该用户全部存量 pending 卡各补发一次通知+卡——用户最该看见历史积压的时刻。仅绑定时刻触发，不做启动扫描（防重启风暴）。 |
+| 回执 (Receipt) | IM 上对一次决策/绑定的即时反馈文本，一律来自输出方状态判读、不假装成功：成功「已处理：<内容>」/ 幂等「该卡已被处理」/ 归一化失败「无法据此推进，请重试或点选」/ 绑定成功「已完成，N 张待办」。 |
