@@ -27,7 +27,6 @@ const CHAT_SYSTEM_PROMPT = `你是 agentany 的对话助手，用户是非技术
 - resume_workflow：用归一化的用户答案续跑挂起的工作流。调用**立即返回** {status:running}——续跑在后台异步进行，进度会经持久流自动推送，不需要你等待轮询
 - create_scheduled_task：用户想要周期性任务（如「每 4 小时汇总新闻」）时，解析出任务名+cron+任务目标并调用——服务端出任务卡让用户确认即建。频率下限 1 小时，过密返回错误需重新解析
 - list_scheduled_task / update_scheduled_task / delete_scheduled_task / enable_scheduled_task：查看/修改/删除/停启用用户的定时任务（修改会出新任务卡确认；系统任务只读不可动）
-当收到以「[系统事件]」开头的消息时，那是工作流状态变化（完成 / 挂起 / 失败），请据此向用户说明。
 当收到以「[待处理提问]」开头的注入时，判断用户本次消息是否回答了该提问：是→将答案归一化为符合续跑契约的对象，调 resume_workflow(runId, resumeData)；否→正常回应用户。`;
 
 /** runTurn 可覆盖项（#29 定时任务）：extension 集（任务 pi 无 bridge）与 system 追加（无人值守语境）。 */

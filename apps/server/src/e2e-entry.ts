@@ -56,7 +56,6 @@ const runIdFrom = (s: string): string | null => {
 const scriptedStubFactory = (): ConfiguredRunPiStream => async (call): Promise<RunPiResult> => {
   if (call.prompt.toLowerCase().includes("error")) throw new Error("stub: 模拟失败");
   const bridge = call.bridge; // {port, nonce, url}（turn.ts 注入）
-  const append = (call.appendSystemPrompt ?? []).join("\n");
   const post = async (path: string, body: unknown): Promise<any> => {
     if (!bridge) return null;
     const r = await fetch(`${bridge.url}${path}`, {
@@ -67,7 +66,8 @@ const scriptedStubFactory = (): ConfiguredRunPiStream => async (call): Promise<R
     return r.json().catch(() => null);
   };
 
-  // 顺序敏感：先系统事件 turn（prompt 含事件标志），再用户 turn。
+  // #48/T6 后无事件 turn（run 终态零 LLM 直投，简报由 deliverBrief 直写）：
+  // 本分支由用户消息「看过程」触发——f3 blocks.spec 的块渲染 demo（四件套序列）。
   // f3 blocks.spec：完整四件套序列（thinking→tool_use→tool_result→text）驱动前端块渲染断言。
   if (call.prompt.includes("看过程")) {
     const b = call.onBlock ?? (() => {});
@@ -81,14 +81,6 @@ const scriptedStubFactory = (): ConfiguredRunPiStream => async (call): Promise<R
     b({ op: "end", blockId: "r_t1" });
     emitText(call, "看完了，一切正常。");
     return { text: "看完了，一切正常。", messages: [], toolResults: [] };
-  }
-  if (call.prompt.includes("已完成")) {
-    emitText(call, "工作流已完成，这是总结。");
-    return { text: "工作流已完成，这是总结。", messages: [], toolResults: [] };
-  }
-  if (call.prompt.includes("失败")) {
-    emitText(call, "工作流失败，已告知用户。");
-    return { text: "工作流失败，已告知用户。", messages: [], toolResults: [] };
   }
   // 用户 turn：回答待处理提问 → resume。用元素前缀过滤（CHAT_SYSTEM_PROMPT 含「[待处理提问]」指引文本，
   // 故不能用 append.includes——会恒真。注入段前缀「[待处理提问] 工作流」与指引文本可区分）。
