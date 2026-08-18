@@ -148,7 +148,7 @@ describe("入站 · 无 pending → 零副作用丢弃（决策 2/5）", () => {
     expect(frames).toHaveLength(0); // 不推帧
   });
 
-  test("已绑定但无 pending ask 卡 → discarded 零副作用（含纯 approval/task 不进文本回流）", async () => {
+  test("纯 approval/task 卡命中（决策 5）→ discarded + 回发「去 Web/App 点卡」提示，不进文本回流", async () => {
     await ctx.newUser("m1");
     const m1 = ctx.userStore.getUserByUsername("m1")!;
     ctx.conv("c1", m1.id);
@@ -158,9 +158,11 @@ describe("入站 · 无 pending → 零副作用丢弃（决策 2/5）", () => {
     const frames: any[] = []; ctx.eventBus.subscribe("c1", (f) => frames.push(f));
     const r = await handleImInbound(ctx.deps, { imUserId: "tg-1", platform: "telegram", text: "批准" });
     expect(r.status).toBe("discarded");
-    expect(ctx.log.calls).toBe(0);
-    expect(ctx.store.listMessages("c1")).toHaveLength(0);
-    expect(frames).toHaveLength(0);
+    expect(r.reply).toContain("Web/App"); // 提示去确定性通道点卡
+    expect(r.conversationId).toBeUndefined();
+    expect(ctx.log.calls).toBe(0); // 不起轮
+    expect(ctx.store.listMessages("c1")).toHaveLength(0); // 不落库
+    expect(frames).toHaveLength(0); // 不推帧
     expect(ctx.store.listQuestions("c1", { includeAnswered: true }).filter((q) => q.status === "pending")).toHaveLength(2); // 卡未动
   });
 
@@ -241,6 +243,23 @@ describe("入站 · 有 pending ask 卡 → 内联 turn 判答收口", () => {
     expect(ctx.store.getQuestion(qid)!.status).toBe("answered");
     expect(frames.some((f) => f.type === "hitl_answered" && f.questionId === qid)).toBe(true);
     expect(typeof r.reply === "string" && r.reply.length > 0).toBe(true);
+  });
+});
+
+// ── 决策 2/5：最新 pending（kind 不限）→ 决策层分流 ──
+describe("决策 2/5：查最新 pending（kind 不限），kind 分流在决策层", () => {
+  test("旧 ask + 新 approval 并存 → 取最新 pending=approval → 只提示去 Web/App，不答旧 ask", async () => {
+    await ctx.newUser("m1");
+    const m1 = ctx.userStore.getUserByUsername("m1")!;
+    ctx.conv("c1", m1.id);
+    ctx.deps.imStore!.bind("tg-1", "telegram", m1.id);
+    const askQid = ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "旧澄清", options: ["旧A"] });
+    ctx.store.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "新审批", options: ["批准", "拒绝"] }); // 后建 → 更高 id = 最新 pending
+    const r = await handleImInbound(ctx.deps, { imUserId: "tg-1", platform: "telegram", text: "旧A" });
+    expect(r.status).toBe("discarded"); // 最新 pending 是 approval → 不放行文本回流
+    expect(r.reply).toContain("审批");
+    expect(ctx.store.getQuestion(askQid)!.status).toBe("pending"); // 旧 ask 未被误答
+    expect(ctx.log.calls).toBe(0);
   });
 });
 

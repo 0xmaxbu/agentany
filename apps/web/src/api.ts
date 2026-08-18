@@ -298,6 +298,10 @@ export async function postMessage(conversationId: string, content: string, inRep
   }
 }
 
+/** 永久性流错误（4xx/5xx / 无 body）：openStream 抛出该类型 → runStreamLoop 终止并上抛 → 前端落 error 气泡。
+ *  非瞬时错误无限重连 = 僵尸循环（code-review 修复前：catch{} 吞一切 + errMsg 死代码）。 */
+export class StreamPermanentError extends Error {}
+
 export interface StreamLoopOptions {
   /** 每次重连前回调（store 对账用）。仅掉线后触发——首次连接不调。 */
   onReconnect?: () => void;
@@ -306,13 +310,16 @@ export interface StreamLoopOptions {
   maxBackoffMs?: number;
   /** 一次连接存活超过该时长（ms）→ attempt 复位（健康连接不累积退避）。 */
   healthyMs?: number;
+  /** 判定某错误为永久性（命中 → 终止上抛，不再重连）；缺省仅 StreamPermanentError。 */
+  isPermanentError?: (error: unknown) => boolean;
 }
 
 /**
  * 断流自动重连状态机（#54/T5）：connect 单次连接消费（流自然结束/抛错 = 掉线）→ 有界指数退避 → 重连。
  * - 退避封顶（maxBackoffMs）：断流风暴时重连频率有界，不无限风暴。
  * - 健康连接（存活 ≥ healthyMs）复位 attempt：健康→掉线→立即恢复场景退避不长胖。
- * - signal abort → 立即返回（卸载/切会话不留残余 loop）。
+ * - **永久错误（isPermanentError 命中）→ 终止上抛**（4xx/5xx 等重试无意义；上抛给外层落 error 气泡，不静默）。
+ * - signal abort → 立即返回，且退避休眠期**与 abort 竞速醒**（卸载/切会话不留残余 loop、不等满退避）。
  * 依赖注入 connect——单测无需真网络（用 fake connect 驱动）。
  */
 export async function runStreamLoop(
@@ -323,6 +330,7 @@ export async function runStreamLoop(
   const max = opts?.maxBackoffMs ?? 30_000;
   const rawBackoff = opts?.backoffMs ?? ((attempt: number) => Math.min(500 * 2 ** (attempt - 1), max));
   const healthyMs = opts?.healthyMs ?? 10_000;
+  const isPermanent = opts?.isPermanentError ?? ((e: unknown): boolean => e instanceof StreamPermanentError);
   let attempt = 0;
   let first = true;
   while (true) {
@@ -332,12 +340,16 @@ export async function runStreamLoop(
     const t0 = Date.now();
     try {
       await connect(signal);
-    } catch {
+    } catch (err) {
       if (signal?.aborted) return; // abort 由 connect 内抛自己处理（下方还查一次兜底）
+      if (isPermanent(err)) throw err; // 永久错：终止上抛（不再退避重连）——openStream 外层 catch 落 error 气泡
     }
     if (signal?.aborted) return;
     attempt = Date.now() - t0 >= healthyMs ? 0 : attempt + 1;
-    await new Promise<void>((r) => setTimeout(r, rawBackoff(attempt)));
+    await new Promise<void>((r) => {
+      const t = setTimeout(r, rawBackoff(attempt));
+      signal?.addEventListener("abort", () => { clearTimeout(t); r(); }, { once: true });
+    });
   }
 }
 
@@ -354,8 +366,8 @@ export async function openStream(
 ): Promise<void> {
   await runStreamLoop(async (s) => {
     const r = await apiFetch(`/conversations/${conversationId}/stream`, { signal: s });
-    if (!r.ok) throw new Error(`openStream: ${r.status}`);
-    if (!r.body) throw new Error("no response body");
+    if (!r.ok) throw new StreamPermanentError(`openStream: ${r.status}`); // 4xx/5xx=永久（重试无意义）；网络 drop 是 fetch 拒绝=瞬时
+    if (!r.body) throw new StreamPermanentError("no response body");
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -367,5 +379,5 @@ export async function openStream(
       buf = parsed.rest;
       for (const e of parsed.events) onEvent(e);
     }
-  }, signal, opts);
+  }, signal, { ...opts, isPermanentError: opts?.isPermanentError ?? ((e: unknown): boolean => e instanceof StreamPermanentError) });
 }

@@ -271,7 +271,8 @@ export const useChat = create<ChatState>((set, get) => {
     openStream(convId, onFrame, ac.signal, {
       onReconnect: () => void get().reconcile(convId),
     }).catch((e) => {
-      if (!ac.signal.aborted) set({ messages: [errMsg(msg(e))] });
+      // 永久性流错误（4xx/5xx/no body）→ runStreamLoop 终止上抛，这里落 error 气泡（不吞；历史保留）
+      if (!ac.signal.aborted) set((s) => ({ messages: [...s.messages, errMsg(msg(e))], sending: false }));
     });
   };
 

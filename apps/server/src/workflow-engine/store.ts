@@ -526,17 +526,17 @@ export class WorkflowStore {
     });
   }
 
-  /** IM 回流（spec #49 决策 2/5/T2 #51）：该用户全部活跃会话中**最新** pending ask 卡。
-   *   kind=ask 硬过滤——approval/task 卡禁用文本回流（决策 5：确定性动作只在确定性通道）。
+  /** IM 回流（spec #49 决策 2/T2 #51）：该用户全部活跃会话中**最新** pending 卡（kind 不限）。
+   *   决策 5 的 kind 分流在入站决策层（inbound 判 kind：ask → 回流；approval/task → 丢弃+提示去 Web/App）——
+   *   kind 限制不放查询层，否则「命中审批/任务卡」的分支永不可达（code-review 修复）。
    *   无 → undefined（入站文本随即丢弃）。 */
-  listPendingAskForUser(userId: string): QuestionRow | undefined {
+  listPendingCardForUser(userId: string): QuestionRow | undefined {
     const rows = this.db.select()
       .from(hitlQuestions)
       .innerJoin(conversations, eq(hitlQuestions.conversationId, conversations.id))
       .where(and(
         eq(conversations.userId, userId),
         isNull(conversations.archivedAt),
-        eq(hitlQuestions.kind, "ask"),
         eq(hitlQuestions.status, "pending"),
       ))
       .orderBy(desc(hitlQuestions.id))
