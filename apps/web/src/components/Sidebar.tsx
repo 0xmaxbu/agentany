@@ -2,7 +2,7 @@
 // 契约类（e2e）：aside.conv-list / button.new / button.item——顺序 = updatedAt 倒序（组内）。
 // 切换/新建直接 navigate（URL 唯一真相——ChatPage params effect 单向驱动 store）。
 // #21/ADR-0020：item 悬浮菜单（member 归档；admin +删除确认）；底部「归档」折叠区（恢复/admin 删）。
-// #62：ADMIN_MENU 加「绑定飞书」——点击弹窗（自助发码 + 4 位码 + 倒计时；绑定成功→2s 自动关）+ 已绑定 tag。
+// #62：UserFooter 弹菜单加「绑定飞书」（管理和登出之间）——点击弹窗（自助发码 + 4 位码 + 倒计时；绑定成功→2s 自动关）+ 已绑定 tag。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArchiveIcon, ArrowUUpLeftIcon, CaretDownIcon, CaretRightIcon, GearSixIcon, MagnifyingGlassIcon, PlusIcon, SignOutIcon, TrashIcon, XIcon } from "@phosphor-icons/react";
@@ -12,20 +12,18 @@ import { useAuth, ROLE } from "../store/auth";
 import { listConversations, issueBindCode, listImBindings, type ConversationRow, type Workspace } from "../api";
 import { Dialog } from "./ui/dialog";
 
-/** 管理菜单（f4）：「所有 admin 管理项目」可扩展列表——M4 定时任务、M5 人审后续挂这。
- *  绑定飞书：#62——无独立路由（弹窗态），path 用 null 区分导航项。 */
+/** 管理菜单（f4）：「所有 admin 管理项目」可扩展列表——M4 定时任务、M5 人审后续挂这。 */
 const ADMIN_MENU = [
   { path: "/admin/users", label: "用户" },
   { path: "/admin/workspaces", label: "Workspace" },
   { path: "/admin/tasks", label: "定时任务" },
 ] as const;
-const BIND_MENU_KEY = "bind-feishu";
 
 /**
  * 侧栏底部用户行（Kimi 式）：头像圈 + 昵称，hover/点击弹出向上菜单（管理/登出收入菜单）。
  * 顶部不再放用户操作——单行身份 + 弹菜单，主列表空间还给会话。
  */
-function UserFooter({ isAdmin }: { isAdmin: boolean }) {
+function UserFooter({ isAdmin, onBindOpen }: { isAdmin: boolean; onBindOpen: () => void }) {
   const user = useAuth((s) => s.user);
   const status = useAuth((s) => s.status);
   const logout = useAuth((s) => s.logout);
@@ -61,6 +59,7 @@ function UserFooter({ isAdmin }: { isAdmin: boolean }) {
               管理
             </button>
           )}
+          {isAdmin && <BindFeishuMenuItem onOpen={() => { setOpen(false); onBindOpen(); }} />}
           {status === "authenticated" && (
             <button
               className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
@@ -236,14 +235,13 @@ export function Sidebar() {
               {m.label}
             </button>
           ))}
-          <BindFeishuMenuItem onOpen={() => setBindOpen(true)} />
         </div>
       ) : (
         <ConvAccordion isAdmin={isAdmin} current={current} loaded={loaded} fallbackNav={fallbackNav} />
       )}
 
-      {/* 底部用户行（Kimi 式）：头像 + 昵称，hover 弹菜单（管理/登出） */}
-      <UserFooter isAdmin={isAdmin} />
+      {/* 底部用户行（Kimi 式）：头像 + 昵称，hover 弹菜单（管理/绑定飞书/登出） */}
+      <UserFooter isAdmin={isAdmin} onBindOpen={() => setBindOpen(true)} />
 
       {/* 绑定飞书弹窗（#62）：自助发码 → 飞书 #bind → 轮询检测成功 → 2s 自动关 */}
       <BindFeishuDialog open={bindOpen} onClose={() => setBindOpen(false)} />
@@ -251,17 +249,16 @@ export function Sidebar() {
   );
 }
 
-/** 菜单项：绑定飞书（#62）——已绑定显 tag；点击开弹窗（无导航路由）。 */
+/** 菜单项：绑定飞书（#62）——已绑定显 tag；点击开弹窗（无导航路由）。用户弹菜单内（管理和登出之间）。 */
 function BindFeishuMenuItem({ onOpen }: { onOpen: () => void }) {
   const bound = useFeishuBound();
   return (
     <button
-      key={BIND_MENU_KEY}
-      className="item flex items-center justify-between rounded-md px-3 py-1.5 text-left text-sm text-foreground hover:bg-accent"
+      className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
       onClick={onOpen}
       data-testid="bind-feishu"
     >
-      <span>绑定飞书</span>
+      绑定飞书
       {bound && <span className="rounded-sm bg-emerald-600/15 px-1.5 py-0.5 text-[10px] text-emerald-600" data-testid="bind-feishu-tag">已绑定</span>}
     </button>
   );
@@ -295,7 +292,9 @@ function BindFeishuDialog({ open, onClose }: { open: boolean; onClose: () => voi
   const [bound, setBound] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // 打开：发码 + 拉时钟（首次即判断是否已绑）
+  const codeRef = useRef<string | null>(null);   // 当前展示码（ref 镜像：boot 闭包需跨轮读，重发判定用）
+  const expiresRef = useRef<string | null>(null);
+  // 未绑 → 复用未过期码（不复发）；无码/已过期才发新码；已绑 → 切成功态
   useEffect(() => {
     if (!open) return;
     let alive = true;
@@ -304,7 +303,13 @@ function BindFeishuDialog({ open, onClose }: { open: boolean; onClose: () => voi
       if (!alive) return;
       void listImBindings().then((bs) => {
         if (user && bs.some((b) => b.userId === user.id && b.platform === "feishu")) { setBound(true); return; }
-        return issueBindCode().then((d) => { if (alive) { setCode(d.code); setExpiresAt(d.expiresAt); setNow(Date.now()); } });
+        const exp = expiresRef.current ? new Date(expiresRef.current).getTime() : 0;
+        if (codeRef.current && exp > Date.now()) { setNow(Date.now()); return; } // 码还有效 → 不动（避免 3s 一换）
+        void issueBindCode().then((d) => {
+          if (!alive) return;
+          codeRef.current = d.code; expiresRef.current = d.expiresAt;
+          setCode(d.code); setExpiresAt(d.expiresAt); setNow(Date.now());
+        });
       }).catch(() => setErr("飞书未接线（服务端缺凭证）"));
     };
     boot();

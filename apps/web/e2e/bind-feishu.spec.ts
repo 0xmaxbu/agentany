@@ -1,15 +1,16 @@
 import { test, expect } from "@playwright/test";
 
-// #62 绑定飞书：admin 态侧栏菜单项 + 弹窗（自助发码面）；users 页 IM 绑定列。
+// #62 绑定飞书：底部用户弹菜单项（管理和登出一级）+ 弹窗（自助发码面）；users 页 IM 绑定列。
 // UI 存在性断言（菜单/弹窗/列头）服务端态无关；「未接线」岔路合法。
 // 另验 vite proxy 覆盖 /im（dev 直连后端必经——回归保护：proxy 漏配时此处红）。
 // e2e backend 未 wire imStore → 弹窗走服务端态分支，URL 仍须经 proxy 命中后端（503 而非 404）。
 
-test("#62 绑定飞书：admin 菜单项 + 弹窗开关", async ({ page }) => {
+test("#62 绑定飞书：用户弹菜单项 + 弹窗开关", async ({ page }) => {
   await page.goto("/admin/users");
   await expect(page.locator("h1")).toHaveText("用户管理", { timeout: 10_000 });
 
-  // admin 侧栏含「绑定飞书」菜单项
+  // 底部用户行 hover 弹菜单 → 含「绑定飞书」（管理和登出一级）
+  await page.hover("[data-testid=user-footer]");
   const menu = page.locator("[data-testid=bind-feishu]");
   await expect(menu).toBeVisible({ timeout: 5_000 });
 
