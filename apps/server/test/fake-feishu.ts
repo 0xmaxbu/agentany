@@ -64,6 +64,7 @@ export interface FakeFeishuWsAck {
   traceId: string | null;
   bizRt: string | null; // ack 带 biz_rt header（应立即存在）
   seqId: number;
+  data?: unknown; // 卡回调 ack 的 data（base64 解码）：{toast, card}
 }
 
 export interface FakeFeishuWsState extends FakeFeishuState {
@@ -75,6 +76,7 @@ export interface FakeFeishuWsState extends FakeFeishuState {
 
 export interface FakeFeishuWsPush {
   pushEvent: (payload: unknown, opts?: { messageId?: string; chunks?: number }) => Promise<{ ack: FakeFeishuWsAck }>;
+  pushCardAction: (payload: unknown, opts?: { messageId?: string }) => Promise<{ ack: FakeFeishuWsAck }>;
 }
 
 /** T2：REST + 长连接假飞书。endpoint 握手返回真 WS URL（回环随机端口），可 pushEvent（分片可选）并断言 ack。 */
@@ -100,16 +102,24 @@ export function fakeFeishuWs(): { app: Hono; state: FakeFeishuWsState } & FakeFe
       return;
     }
     if (frame.method === PBBP2_DATA) {
-      // client 的响应帧 = ack
+      // client 的响应帧 = ack（data 字段 = 卡回调响应的 base64 JSON）
       const messageId = headerValue(frame.headers, HDR_MESSAGE_ID) ?? "";
       let code = -1;
-      try { code = (JSON.parse(new TextDecoder().decode(frame.payload)) as { code?: number }).code ?? -1; } catch { /* 解析失败留 -1 */ }
+      let data: unknown;
+      try {
+        const body = JSON.parse(new TextDecoder().decode(frame.payload)) as { code?: number; data?: string };
+        code = body.code ?? -1;
+        if (typeof body.data === "string") {
+          try { data = JSON.parse(Buffer.from(body.data, "base64").toString("utf-8")); } catch { /* 非 JSON data 留 undefined */ }
+        }
+      } catch { /* 解析失败 code=-1 */ }
       const ack: FakeFeishuWsAck = {
         messageId,
         code,
         traceId: headerValue(frame.headers, HDR_TRACE_ID) ?? null,
         bizRt: headerValue(frame.headers, HDR_BIZ_RT) ?? null,
         seqId: frame.seqId,
+        ...(data !== undefined ? { data } : {}),
       };
       state.acks.push(ack);
       const done = pendingAcks.get(messageId);
@@ -139,7 +149,7 @@ export function fakeFeishuWs(): { app: Hono; state: FakeFeishuWsState } & FakeFe
     });
   });
 
-  const pushEvent = (payload: unknown, opts: { messageId?: string; chunks?: number } = {}): Promise<{ ack: FakeFeishuWsAck }> => {
+  const pushFrame = (payload: unknown, frameType: "event" | "card", opts: { messageId?: string; chunks?: number } = {}): Promise<{ ack: FakeFeishuWsAck }> => {
     const client = [...wsClients][0] as { send: (data: Uint8Array) => void };
     if (!client) return Promise.reject(new Error("no ws client connected"));
     const messageId = opts.messageId ?? `om_fake_${++evtSeq}`;
@@ -152,7 +162,7 @@ export function fakeFeishuWs(): { app: Hono; state: FakeFeishuWsState } & FakeFe
       client.send(encodeFrame({
         seqId: 0, logId: 0, service: 0, method: PBBP2_DATA,
         headers: [
-          { key: HDR_TYPE, value: MSG_TYPE_EVENT },
+          { key: HDR_TYPE, value: frameType },
           { key: HDR_TRACE_ID, value: traceId },
           { key: HDR_MESSAGE_ID, value: messageId },
           { key: HDR_SUM, value: String(chunks) },
@@ -167,10 +177,13 @@ export function fakeFeishuWs(): { app: Hono; state: FakeFeishuWsState } & FakeFe
       pendingAcks.set(messageId, (ack) => { clearTimeout(to); resolve({ ack }); });
     });
   };
+  const pushEvent = (payload: unknown, opts?: { messageId?: string; chunks?: number }) => pushFrame(payload, "event", opts);
+  const pushCardAction = (payload: unknown, opts?: { messageId?: string }) => pushFrame(payload, "card", opts);
 
   return {
     app, state,
     pushEvent,
+    pushCardAction,
     close() { try { server.stop(true); } catch { /* 已停 */ } },
   };
 }
@@ -191,6 +204,21 @@ export function receiveTextEvent(openId: string, text: string, overrides: Record
   };
 }
 let fevtSeq = 0;
+
+/** card.action.trigger 事件构造（按钮点击：operator=点击者，action.value=T3 嵌入的 {questionId,label}）。 */
+export function cardActionEvent(openId: string, questionId: number, label: string, overrides: Record<string, unknown> = {}): unknown {
+  return {
+    schema: "2.0",
+    header: { event_id: `ev_card_${++fevtSeq}`, event_type: "card.action.trigger", create_time: "1700000000000", app_id: "cli_x", tenant_key: "t_x" },
+    event: {
+      operator: { tenant_key: "t_x", open_id: openId, union_id: "u", user_id: "u" },
+      action: { value: { questionId, value: label }, form: null, tag: "button" },
+      context: { open_message_id: `om_card_${fevtSeq}`, open_chat_id: "oc_x", open_id: openId },
+      token: "t",
+    },
+    ...overrides,
+  };
+}
 
 /** transport fetchFn 适配：Hono app 走 URL pathname + query（本仓测试惯例 app.request 直调，不真上网）。 */
 export function fakeFeishuFetch(app: Hono): TransportFetch {

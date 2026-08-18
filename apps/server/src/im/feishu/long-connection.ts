@@ -13,14 +13,14 @@ import {
   encodeFrame, decodeFrame, headerValue, toUint8Array,
   PBBP2_CONTROL, PBBP2_DATA,
   HDR_TYPE, HDR_MESSAGE_ID, HDR_SUM, HDR_SEQ, HDR_TRACE_ID, HDR_BIZ_RT,
-  MSG_TYPE_EVENT, MSG_TYPE_PING, MSG_TYPE_PONG,
+  MSG_TYPE_EVENT, MSG_TYPE_CARD, MSG_TYPE_PING, MSG_TYPE_PONG,
   type Pbbp2Frame,
 } from "./pbbp2";
 
 const DEFAULT_BASE_URL = "https://open.feishu.cn";
 const ENDPOINT_PATH = "/callback/ws/endpoint";
 const CONNECT_TIMEOUT_MS = 10_000; // 建连看护：超时判失败（进重连）
-const ACK_OK = '{"code":200}'; // ack 载荷（响应帧业务码）
+const ACK_OK = '{"code":200}'; // ack 载荷（响应帧业务码基准）
 
 export interface ReconnectConfig {
   reconnectCount: number;      // -1 = 无限重连；≥0 = 最多重试次数
@@ -52,7 +52,10 @@ export interface FeishuLongConnectionOptions {
   baseUrl?: string;          // 缺省 open.feishu.cn；测试传假飞书
   endpointPath?: string;     // 测试可换地址
   fetchFn?: TransportFetch;  // 握手 HTTP 注入（测试指假飞书）
-  onEvent?: (payload: unknown) => void; // 事件 JSON（type=event 已过滤、已 ack）
+  onEvent?: (payload: unknown) => void; // 事件 JSON（type=event 已 filter、已 ack，判答异步）
+  // 卡回调（type=card，T4）：返回回调响应 {toast, card}（更新卡+toast；经 ack data 回传）；
+  // 返回 undefined → ack 200 无 data。须在 3s ack 窗内完成（超窗服务器重推——CAS 保证幂等）。
+  onCard?: (payload: unknown) => Promise<unknown | undefined>;
   log?: (m: string) => void;
   pingIntervalMs?: number;         // 显式覆盖（缺省用 endpoint 的 PingInterval*1000）
   reconnectCount?: number;         // 显式覆盖（缺省 endpoint；再缺省 -1 无限）
@@ -236,7 +239,6 @@ export class FeishuLongConnection {
 
   private handleData(frame: Pbbp2Frame): void {
     const type = headerValue(frame.headers, HDR_TYPE);
-    if (type !== MSG_TYPE_EVENT) return; // card 等留待 T4
     const msStart = Date.now();
     const messageId = headerValue(frame.headers, HDR_MESSAGE_ID) ?? "";
     const sum = Number(headerValue(frame.headers, HDR_SUM) ?? "1") || 1;
@@ -251,15 +253,42 @@ export class FeishuLongConnection {
       ackIdent = combined.last; // 合包 ack 用收到最后一帧的身份
     }
 
-    // 事件立即 ack（3s 限时在服务端；本地即刻回，判答异步不阻塞 ack）
-    this.sendAck(ackIdent, msStart);
-
-    try {
-      const evt = JSON.parse(new TextDecoder().decode(payload)) as unknown;
-      if (this.opts.onEvent) this.opts.onEvent(evt);
-    } catch (e) {
-      this.log(`[im] 事件解析/分发失败：${e instanceof Error ? e.message : String(e)}`);
+    if (type === MSG_TYPE_EVENT) {
+      // 事件立即 ack（判答异步不阻塞 ack）；卡回调须带响应结果 → 走 handleCard（先处理后 ack）
+      this.sendAck(ackIdent, msStart);
+      try {
+        const evt = JSON.parse(new TextDecoder().decode(payload)) as unknown;
+        if (this.opts.onEvent) this.opts.onEvent(evt);
+      } catch (e) {
+        this.log(`[im] 事件解析/分发失败：${e instanceof Error ? e.message : String(e)}`);
+      }
+      return;
     }
+    if (type === MSG_TYPE_CARD) {
+      void this.handleCard(ackIdent, payload, msStart); // 异步：处理 → 带 data 的 ack
+      return;
+    }
+    // 未知 data 类型：协议要求 data 帧限时 ack（否则重推）——无条件回 200
+    this.sendAck(ackIdent, msStart);
+  }
+
+  private async handleCard(ident: Pbbp2Frame, payload: Uint8Array, msStart: number): Promise<void> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(payload));
+    } catch {
+      this.sendCardAck(ident, undefined, msStart);
+      return;
+    }
+    let rsp: unknown;
+    try {
+      rsp = this.opts.onCard ? await this.opts.onCard(parsed) : undefined;
+    } catch (e) {
+      this.log(`[im] 卡回调处理失败：${e instanceof Error ? e.message : String(e)}`);
+      this.sendCardAck(ident, { toast: { type: "error", content: "服务处理失败" } }, msStart);
+      return;
+    }
+    this.sendCardAck(ident, rsp, msStart);
   }
 
   /** 合包：全分片齐 → 拼接并返回 { payload, last }（ack 身份 = 最后一帧）；未齐 → null。 */
@@ -278,12 +307,29 @@ export class FeishuLongConnection {
   }
 
   private sendAck(ident: Pbbp2Frame, msStart: number): void {
+    this.sendResp(ident, msStart, ACK_OK);
+  }
+
+  /** 卡回调 ack：rsp → `{code:200, data: base64(JSON(rsp))}`（node SDK 同款；rsp undefined → 仅 200）。 */
+  private sendCardAck(ident: Pbbp2Frame, rsp: unknown, msStart: number): void {
+    let body = ACK_OK;
+    if (rsp !== undefined && rsp !== null) {
+      try {
+        body = JSON.stringify({ code: 200, data: Buffer.from(JSON.stringify(rsp)).toString("base64") });
+      } catch (e) {
+        this.log(`[im] 卡回调响应序列化失败：${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    this.sendResp(ident, msStart, body);
+  }
+
+  private sendResp(ident: Pbbp2Frame, msStart: number, body: string): void {
     const headers = [...ident.headers, { key: HDR_BIZ_RT, value: String(Date.now() - msStart) }];
     try {
       // 响应帧 = 原帧身份（seqId/logId/service/method/headers 原样）+ payload 换成 ack JSON（官方同款）
       this.ws!.send(encodeFrame({
         seqId: ident.seqId, logId: ident.logId, service: ident.service, method: ident.method,
-        headers, payload: new TextEncoder().encode(ACK_OK),
+        headers, payload: new TextEncoder().encode(body),
       }));
     } catch (e) {
       this.log(`[im] ack 发送失败：${e instanceof Error ? e.message : String(e)}`);

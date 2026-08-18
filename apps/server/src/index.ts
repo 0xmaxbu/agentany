@@ -19,6 +19,7 @@ import { ImStore } from "./im/store";
 import { FeishuTransport } from "./im/feishu/transport";
 import { FeishuLongConnection } from "./im/feishu/long-connection";
 import { makeFeishuInbound } from "./im/feishu/inbound";
+import { handleCardAction } from "./im/feishu/card-action";
 import { ImOutboundRouter } from "./im/outbound-router";
 import type { RunDeps } from "./runs";
 
@@ -56,6 +57,7 @@ if (FEISHU_APP_ID && FEISHU_APP_SECRET) {
   const longConnection = new FeishuLongConnection({
     appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET,
     onEvent: (p) => { feishuInbound(p).catch((e) => console.error("[im] 入站处理失败:", e)); },
+    onCard: (p) => handleCardAction(deps, p), // T4：按钮回调 → dispatch + 更新卡/toast（经 ack data 回传）
     log: (m) => console.log("[im]", m),
   });
   longConnection.start();

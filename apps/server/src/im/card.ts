@@ -65,6 +65,21 @@ export function renderImCard(input: ImCardInput): unknown {
   };
 }
 
+/** 已答态卡（T4 回调响应用）：按钮移除、显「✅ 已处理」——不误导（不能再点）。 */
+export function renderAnsweredCard(input: ImCardInput): unknown {
+  const title = KIND_TITLES[input.kind] ?? "提问";
+  return {
+    schema: "2.0",
+    header: { title: { tag: "plain_text", content: title } },
+    body: {
+      elements: [
+        { tag: "div", text: { tag: "lark_md", content: input.prompt } },
+        { tag: "note", elements: [{ tag: "plain_text", content: "✅ 已处理" }] },
+      ],
+    },
+  };
+}
+
 /** 卡片序列化后 ≤30KB（飞书上限；超限回落文本由路由裁量）。 */
 export function cardJsonSize(card: unknown): number {
   return JSON.stringify(card).length;
