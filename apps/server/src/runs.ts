@@ -15,6 +15,7 @@ import type { WorkspaceStore } from "./workspaces/store";
 import type { ScheduledTaskStore } from "./scheduled-tasks/store";
 import type { TaskScheduler } from "./scheduled-tasks/scheduler";
 import type { ConversationQueues } from "./chat/queue";
+import type { ImStore } from "./im/store";
 
 export interface RunDeps {
   store: WorkflowStore;
@@ -22,6 +23,7 @@ export interface RunDeps {
   streamRegistry: StreamRegistry; // 活跃 SSE 登记：token 吊销时强断（不杀 run）
   workspaceStore: WorkspaceStore; // 工作空间 + 名单（ADR-0018）：鉴权边界唯一口径
   taskStore?: ScheduledTaskStore; // 定时任务三表（#25/ADR-0021）：与 store 共享 db；可选——既有测试装配不破坏
+  imStore?: ImStore; // IM 身份绑定（spec #49 决策 6）：共享 db；可选——IM 未立项/未装配时零侵入
   scheduler?: TaskScheduler; // 调度循环（#26）：手动调用入口；可选——未装配时 /run 503
   conversationQueues?: ConversationQueues; // 共享 per-conv FIFO（#29）：chat 路由与任务执行同一实例——同会话严格串行（防 pi session 并发写坏）；缺省路由自建（测试兼容）
   runPiFactory?: typeof makeRunPi; // 测试可换 stub（di）

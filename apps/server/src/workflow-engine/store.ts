@@ -495,6 +495,26 @@ export class WorkflowStore {
     });
   }
 
+  /** IM 回流（spec #49 决策 2/5/T2 #51）：该用户全部活跃会话中**最新** pending ask 卡。
+   *   kind=ask 硬过滤——approval/task 卡禁用文本回流（决策 5：确定性动作只在确定性通道）。
+   *   无 → undefined（入站文本随即丢弃）。 */
+  listPendingAskForUser(userId: string): QuestionRow | undefined {
+    const rows = this.db.select()
+      .from(hitlQuestions)
+      .innerJoin(conversations, eq(hitlQuestions.conversationId, conversations.id))
+      .where(and(
+        eq(conversations.userId, userId),
+        isNull(conversations.archivedAt),
+        eq(hitlQuestions.kind, "ask"),
+        eq(hitlQuestions.status, "pending"),
+      ))
+      .orderBy(desc(hitlQuestions.id))
+      .limit(1)
+      .all();
+    const r = rows[0]?.hitl_questions;
+    return r ? this.toQuestionRow(r as any) : undefined;
+  }
+
   listQuestions(conversationId: string, opts?: { includeAnswered?: boolean; kind?: "ask" | "approval" | "task" }): QuestionRow[] {
     const conds = [eq(hitlQuestions.conversationId, conversationId)];
     if (!opts?.includeAnswered) conds.push(eq(hitlQuestions.status, "pending"));

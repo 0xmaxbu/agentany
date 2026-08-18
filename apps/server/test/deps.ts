@@ -6,6 +6,7 @@ import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
 import { ScheduledTaskStore } from "../src/scheduled-tasks/store";
+import { ImStore } from "../src/im/store";
 import type { RunDeps } from "../src/runs";
 
 export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {
@@ -17,6 +18,7 @@ export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db), // 与 store/userStore 共享同一 db（名单 join users；公司 ws 由迁移 seed）
     taskStore: new ScheduledTaskStore(db, store), // #25：三表与蒸馏 seed 同 db；产出会话派生复用 store.createConversation
+    imStore: new ImStore(db), // #51/T2：IM 身份绑定（IM 已接线）；IM 专项测试可覆盖
     ...overrides,
   };
 }

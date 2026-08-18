@@ -141,6 +141,13 @@
       "when": 1787290000000,
       "tag": "0019_ask_card_values",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1787400000000,
+      "tag": "0020_im_bindings",
+      "breakpoints": true
     }
   ]
 }
