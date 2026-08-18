@@ -8,7 +8,7 @@ import { EventBus } from "../chat/eventbus";
 import type { WorkflowStore } from "../workflow-engine/store";
 import { ImStore } from "./store";
 import { renderHitlFrame } from "./outbound";
-import { renderImCard, cardJsonSize, type ImCardOption } from "./card";
+import { renderImCard, cardJsonSize, cardOptionsOf } from "./card";
 import type { IMPlatform, ImOutboundMessage } from "./transport";
 
 const MAX_CARD_CHARS = 30 * 1024; // 飞书整卡上限；超限回落纯文本（不丢通知）
@@ -57,9 +57,7 @@ export class ImOutboundRouter {
   private async sendCard(convId: string, f: Extract<Frame, { type: "hitl_request" }>): Promise<void> {
     const q = this.deps.store.getQuestion(f.questionId);
     if (!q) return; // 卡已不在（清理/关会话）→ 不追发
-    const options: ImCardOption[] = Array.isArray(q.values) && q.values.length > 0
-      ? (q.values as { label?: unknown; value?: unknown }[]).map((v) => ({ label: String(v.label ?? ""), value: v.value }))
-      : ((q.options as string[]) ?? []).map((label) => ({ label, value: label }));
+    const options = cardOptionsOf(q);
     const card = renderImCard({ questionId: q.id, kind: (q.kind ?? "ask") as "ask" | "approval" | "task", prompt: q.prompt, options, resumeSchema: q.resumeSchema });
     if (options.length === 0 || cardJsonSize(card) > MAX_CARD_CHARS) {
       const text = renderHitlFrame(f);

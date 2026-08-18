@@ -1,12 +1,12 @@
-// IM 管理路由（spec #49 决策 6；T2 #51）：imBindings 静态绑定——admin 专属（v1 无自助注册/解绑）。
-// 路由只做鉴权 + 形状校验 + 转发 ImStore；回流的业务入口是 handleImInbound（纯函数，平台 webhook 调）。
+// IM 路由（spec #49 决策 6 + #55/T5 修订）：绑定≠admin 专属——自助绑（Web 发码 → 私聊 `#bind` 消费），
+// admin 只读列表 + 兜底强制解绑（离职/异常场景），不可新增绑定。
+// 路由只做鉴权 + 转发 ImStore；业务（命令/发码消费/补发）在 im/feishu/inbound.ts + im/store.ts。
 import type { Context, Hono } from "hono";
-import { userRoleOf, type AppEnv } from "../auth/middleware";
+import { userIdOf, userRoleOf, type AppEnv } from "../auth/middleware";
 import { ROLE } from "../auth/store";
-import { jsonBody } from "../http";
 import type { RunDeps } from "../runs";
 
-/** admin + imStore 双守卫收敛点（三个 handler 曾各复刻两行）。返拒绝响应或 null（放行）。 */
+/** admin + imStore 双守卫收敛点。返拒绝响应或 null（放行）。 */
 const requireImAdmin = (c: Context<AppEnv>, deps: RunDeps): Response | null => {
   if (userRoleOf(c) !== ROLE.admin) return c.json({ error: "forbidden" }, 403);
   if (!deps.imStore) return c.json({ error: "im store not wired" }, 503);
@@ -14,28 +14,21 @@ const requireImAdmin = (c: Context<AppEnv>, deps: RunDeps): Response | null => {
 };
 
 export function registerImRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
-  // 列表（admin）
+  // 自助发码（T5）：任意已登录用户给自己发一次性绑定码（10min TTL，私聊 `#bind <code>` 消费）。
+  app.post("/im/bind-codes", (c) => {
+    if (!deps.imStore) return c.json({ error: "im store not wired" }, 503);
+    const { code, expiresAt } = deps.imStore.issueBindCode(userIdOf(c));
+    return c.json({ code, expiresAt, ttlSeconds: 10 * 60 });
+  });
+
+  // 列表（admin 只读）
   app.get("/im/bindings", (c) => {
     const deny = requireImAdmin(c, deps);
     if (deny) return deny;
     return c.json({ bindings: deps.imStore!.list() });
   });
 
-  // 绑定（admin；幂等 upsert）
-  app.post("/im/bindings", async (c) => {
-    const deny = requireImAdmin(c, deps);
-    if (deny) return deny;
-    const body = await jsonBody(c);
-    const { imUserId, platform, userId } = body as { imUserId?: unknown; platform?: unknown; userId?: unknown };
-    if (typeof imUserId !== "string" || imUserId.length === 0) return c.json({ error: "imUserId required" }, 400);
-    if (typeof platform !== "string" || platform.length === 0) return c.json({ error: "platform required" }, 400);
-    if (typeof userId !== "string" || userId.length === 0) return c.json({ error: "userId required" }, 400);
-    const row = deps.imStore!.bind(imUserId, platform, userId);
-    if (!row) return c.json({ error: "bind failed: user not found, or user already bound on this platform" }, 409);
-    return c.json(row);
-  });
-
-  // 解绑（admin；幂等）
+  // 解绑（admin 兜底；幂等）——单向兜底，无新增通道
   app.delete("/im/bindings/:platform/:imUserId", (c) => {
     const deny = requireImAdmin(c, deps);
     if (deny) return deny;

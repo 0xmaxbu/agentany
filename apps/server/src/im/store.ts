@@ -1,8 +1,12 @@
-// IM 身份绑定存储（spec #49 决策 6）：imBindings 表 CRUD——管理端静态绑定 + 幂等解析。
+// IM 身份绑定存储（spec #49 决策 6 + #55/T5）：imBindings 表 CRUD——绑定 + 幂等解析；
+// im_bind_codes 绑定码（T5 自助绑定凭据）——单次消费（usedAt CAS）+ TTL（expiresAt）+ 高熵。
 // 与 auth/store.ts、workspaces/store.ts 同模式：独立小 store，共享 db（tests: openDbMigrated 同实例）。
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { imBindings, users } from "../db/schema";
+import { randomBytes } from "node:crypto";
+import { imBindings, imBindCodes, users } from "../db/schema";
+
+export const BIND_CODE_TTL_MS = 10 * 60 * 1000; // ~10min（spec：#bind 时效窗口）
 
 const now = () => new Date().toISOString();
 
@@ -63,5 +67,26 @@ export class ImStore {
   /** 全量（管理端查看）。 */
   list(): ImBindingRow[] {
     return this.db.select().from(imBindings).all().map((r) => r as ImBindingRow);
+  }
+
+  // ── 绑定码（spec #55/T5）──
+
+  /** 领码：高熵（128-bit hex）+ TTL。返 {code, expiresAt}。 */
+  issueBindCode(userId: string, ttlMs: number = BIND_CODE_TTL_MS): { code: string; expiresAt: string } {
+    const code = randomBytes(16).toString("hex"); // 128-bit——枚举/预测成本远超 TTL 窗口
+    const createdAt = now();
+    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+    this.db.insert(imBindCodes).values({ code, userId, createdAt, expiresAt }).run();
+    return { code, expiresAt };
+  }
+
+  /** 消费（CAS 单次 + TTL）：usedAt IS NULL AND expiresAt > now → 置 usedAt。返回链到账号；已用/过期 → null。 */
+  consumeBindCode(code: string): { userId: string } | null {
+    const t = now();
+    return this.db.update(imBindCodes)
+      .set({ usedAt: t })
+      .where(and(eq(imBindCodes.code, code), isNull(imBindCodes.usedAt), gt(imBindCodes.expiresAt, t)))
+      .returning({ userId: imBindCodes.userId })
+      .get() ?? null;
   }
 }

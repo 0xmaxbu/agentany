@@ -33,6 +33,14 @@ export function isClosedChoice(resumeSchema: unknown): boolean {
   return singleEnumVals(resumeSchema as Schema | undefined).vals.length > 0;
 }
 
+/** question 行 → 卡选项素材（values 快照优先；缺 → options label 回落——T3 路由与 T5 绑定补发同源）。 */
+export function cardOptionsOf(q: { values?: unknown; options?: unknown }): ImCardOption[] {
+  if (Array.isArray(q.values) && q.values.length > 0) {
+    return (q.values as { label?: unknown; value?: unknown }[]).map((v) => ({ label: String(v.label ?? ""), value: v.value }));
+  }
+  return ((q.options as string[]) ?? []).map((label) => ({ label, value: label }));
+}
+
 /** footer 开面：仅 ask 卡且 schema 开放时显文本作答邀请——approval/task 文本不放行（恒按钮面，不误导）。 */
 export function isTextOk(input: Pick<ImCardInput, "kind" | "resumeSchema">): boolean {
   return input.kind === "ask" && !isClosedChoice(input.resumeSchema);

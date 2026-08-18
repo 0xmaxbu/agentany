@@ -178,6 +178,23 @@ export const imBindings = sqliteTable(
   }),
 );
 
+// 绑定码（spec #55/T5）：自助绑定的一次性凭据——Web 领码 → 私聊 bot `#bind <code>` 把 open_id 链到 Web 账号。
+// code 高熵随机（128-bit），consumed（usedAt 非空）即失效，expiresAt 兜超时（~10min）。
+// 消费 = CAS 单次（usedAt IS NULL AND expiresAt > now → 置 usedAt），重放被拒。
+export const imBindCodes = sqliteTable(
+  "im_bind_codes",
+  {
+    code: text("code").primaryKey(),
+    userId: text("userId").notNull(),   // 领码的 Web 用户（链到此账号）
+    createdAt: text("createdAt").notNull(),
+    expiresAt: text("expiresAt").notNull(),
+    usedAt: text("usedAt"),             // null=未用（消费置值；幂等锚）
+  },
+  (t) => ({
+    byUser: index("im_bind_codes_user_idx").on(t.userId),
+  }),
+);
+
 // 任务执行历史（#25/ADR-0021 决策 8）：viewedAt null=未读（system 任务 badge 计数锚）。
 export const taskRuns = sqliteTable(
   "task_runs",

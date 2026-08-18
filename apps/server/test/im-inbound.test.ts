@@ -111,24 +111,25 @@ describe("imBindings 管理（admin）+ resolve 幂等", () => {
     expect(ctx.deps.imStore!.resolve("tg-x", "telegram")).toBeUndefined();
   });
 
-  test("HTTP：member 403；admin POST/GET/DELETE 全链", async () => {
+  test("HTTP（T5 契约）：member 只读/无 admin 新增；admin 列表+兜底解绑；自助发码任意登录用户", async () => {
     await ctx.newUser("m1");
-    await ctx.newUser("m2");
     await ctx.newUser("ad", "admin");
-    const m2 = ctx.userStore.getUserByUsername("m2")!;
     const mt = await ctx.login("m1");
     const at = await ctx.login("ad");
-    for (const req of [
-      ctx.app.request("/im/bindings", { headers: { authorization: mt } }),
-      ctx.app.request("/im/bindings", { method: "POST", headers: { ...JH, authorization: mt }, body: JSON.stringify({ imUserId: "tg-1", platform: "telegram", userId: m2.id }) }),
-      ctx.app.request("/im/bindings/telegram/tg-1", { method: "DELETE", headers: { authorization: mt } }),
-    ]) expect((await req).status).toBe(403);
-    const bind = await ctx.app.request("/im/bindings", { method: "POST", headers: { ...JH, authorization: at }, body: JSON.stringify({ imUserId: "tg-1", platform: "telegram", userId: m2.id }) });
-    expect(bind.status).toBe(200);
-    expect(ctx.deps.imStore!.resolve("tg-1", "telegram")!.userId).toBe(m2.id);
+    expect((await ctx.app.request("/im/bindings", { headers: { authorization: mt } })).status).toBe(403); // member 看不到列表
+    expect((await ctx.app.request("/im/bindings/telegram/tg-1", { method: "DELETE", headers: { authorization: mt } })).status).toBe(403); // member 无兜底权
+    expect((await ctx.app.request("/im/bindings", { method: "POST", headers: { ...JH, authorization: at }, body: JSON.stringify({ imUserId: "tg-1", platform: "telegram", userId: "u_x" }) })).status).toBe(404); // 无 admin 新增通道（T5 修订）
+    // 自助发码：member 也能领自己的一次性码
+    const issue = await ctx.app.request("/im/bind-codes", { method: "POST", headers: { authorization: mt } });
+    expect(issue.status).toBe(200);
+    const { code, expiresAt } = await issue.json() as { code: string; expiresAt: string };
+    expect(code.length).toBeGreaterThanOrEqual(32); // 高熵
+    expect(new Date(expiresAt).getTime()).toBeGreaterThan(Date.now());
+    // 消费 → 绑定成立 → admin 列表 + 兜底解绑
+    expect(ctx.deps.imStore!.consumeBindCode(code)!.userId).toBe(ctx.userStore.getUserByUsername("m1")!.id);
+    ctx.deps.imStore!.bind("tg-1", "telegram", ctx.userStore.getUserByUsername("m1")!.id);
     const list = await ctx.app.request("/im/bindings", { headers: { authorization: at } });
-    const rows = (await list.json() as { bindings: unknown[] }).bindings;
-    expect(rows).toHaveLength(1);
+    expect(((await list.json()) as { bindings: unknown[] }).bindings).toHaveLength(1);
     const del = await ctx.app.request("/im/bindings/telegram/tg-1", { method: "DELETE", headers: { authorization: at } });
     expect(del.status).toBe(200);
     expect(ctx.deps.imStore!.resolve("tg-1", "telegram")).toBeUndefined();

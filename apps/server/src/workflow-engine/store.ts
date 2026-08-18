@@ -546,6 +546,21 @@ export class WorkflowStore {
     return r ? this.toQuestionRow(r as any) : undefined;
   }
 
+  /** 全量 pending 卡（用户全部活跃会话，按 id 序）——T5 绑定补发扫瞄（绑上新平台后一次性补发存量卡）。 */
+  listPendingCardsForUser(userId: string): QuestionRow[] {
+    return this.db.select()
+      .from(hitlQuestions)
+      .innerJoin(conversations, eq(hitlQuestions.conversationId, conversations.id))
+      .where(and(
+        eq(conversations.userId, userId),
+        isNull(conversations.archivedAt),
+        eq(hitlQuestions.status, "pending"),
+      ))
+      .orderBy(hitlQuestions.id)
+      .all()
+      .map((r) => this.toQuestionRow((r as any).hitl_questions));
+  }
+
   listQuestions(conversationId: string, opts?: { includeAnswered?: boolean; kind?: "ask" | "approval" | "task" }): QuestionRow[] {
     const conds = [eq(hitlQuestions.conversationId, conversationId)];
     if (!opts?.includeAnswered) conds.push(eq(hitlQuestions.status, "pending"));
