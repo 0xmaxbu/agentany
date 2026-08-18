@@ -2,8 +2,8 @@ import { test, expect } from "@playwright/test";
 
 // #19 E2E 全链（e2e-entry scripted stub 驱动【真桥接 + 真事件】）：
 // 发「跑合成三步」→ stub 调 start_workflow → run 卡 + step 进度 → run_suspended → 自动 turn → ask_user 卡
-// → 点 accept → 判答 resume → run_completed → 自动总结 → 刷新恢复（ask 已答 + 历史）。
-// 注：runs 是 SSE 瞬时态（无 GET /runs），刷新不恢复 run 卡——断 ask 卡（GET /hitl 持久）+ 消息历史。
+// → 点 accept → 判答 resume → run_completed → 自动总结 → 刷新恢复（ask 已答 + run 卡 + 历史）。
+// #53/T4：run 卡经 GET /runs 域表直读恢复（不再"刷新即丢"）；ask 卡经 GET /hitl 持久。
 test("工作流全链：start → suspend → ask → resume → completed + 刷新恢复", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("header .conv")).toBeVisible({ timeout: 10_000 }); // #命名：header 名可为主题名
@@ -32,8 +32,9 @@ test("工作流全链：start → suspend → ask → resume → completed + 刷
   // 总结气泡（completed 事件 turn）
   await expect(page.locator(".bubble.assistant").last()).toContainText("总结", { timeout: 8_000 });
 
-  // 刷新恢复：ask 卡（已答，GET /hitl 持久）+ 消息历史
+  // 刷新恢复：#53/T4 GET /runs —— run 卡重新显示（completed）；ask 卡已答（GET /hitl）+ 消息历史
   await page.reload();
+  await expect(runCard).toContainText("completed", { timeout: 5_000 });
   await expect(askCard).toContainText("已回答", { timeout: 5_000 });
   await expect(page.locator(".bubble.user").first()).toContainText("跑合成三步", { timeout: 5_000 });
 });

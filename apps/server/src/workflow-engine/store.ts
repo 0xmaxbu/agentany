@@ -150,6 +150,15 @@ export class WorkflowStore {
     return seq;
   }
 
+  /** 会话的 run 列表（#53/T4：run 卡刷新恢复）——域表直读，createdAt 倒序（最新在前）。无 run → []。 */
+  listRunsForConversation(conversationId: string): RunRow[] {
+    const rows = this.db.select().from(workflowRuns)
+      .where(eq(workflowRuns.conversationId, conversationId))
+      .orderBy(desc(workflowRuns.createdAt))
+      .all();
+    return rows.map((r) => ({ ...r, status: r.status as RunStatus, input: P(r.input) }));
+  }
+
   getRun(runId: string): RunRow | undefined {
     const r = this.db.select().from(workflowRuns).where(eq(workflowRuns.runId, runId)).get();
     if (!r) return undefined;

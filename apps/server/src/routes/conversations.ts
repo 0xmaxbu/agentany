@@ -100,6 +100,23 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     return c.json(deps.store.listQuestions(conv.id, { includeAnswered: true }));
   });
 
+  // run 卡刷新恢复（#53/T4）：域表直读该会话 run 列表（workflow_runs + workflow_run_log）。
+  // 步骤 = log 每步取最新态（append-only：running→completed 覆盖）；brief = 终态简报（前端简报气泡走 GET /messages 已恢复）。
+  app.get("/conversations/:id/runs", (c) => {
+    const conv = loadIfVisible(c.req.param("id"), principalOf(c));
+    if (!conv) return c.json({ error: "conversation not found" }, 404);
+    const runs = deps.store.listRunsForConversation(conv.id).map((r) => {
+      const stepsBy = new Map<string, string>();
+      for (const l of deps.store.getLog(r.runId)) stepsBy.set(l.stepId, l.status); // 保首次出现的 seq 序
+      return {
+        runId: r.runId, workflowId: r.workflowId, status: r.status,
+        brief: r.brief ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt,
+        steps: [...stepsBy].map(([stepId, status]) => ({ stepId, status })),
+      };
+    });
+    return c.json({ runs });
+  });
+
   // 持久流（SSE，长连，承载所有帧）：订阅 EventBus 转发；心跳保活；客户端断开→取消订阅。
   app.get("/conversations/:id/stream", (c) => {
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));

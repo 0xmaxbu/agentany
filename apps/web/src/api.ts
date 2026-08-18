@@ -126,6 +126,20 @@ export async function getHitlQuestions(conversationId: string): Promise<Question
   return r.json();
 }
 
+// #53/T4：run 卡刷新恢复——会话内 run 列表（域表直读；status/steps/brief）。
+export interface ConversationRun {
+  runId: string;
+  workflowId: string | null;
+  status: string; // running | suspended | completed | failed
+  steps: { stepId: string; status: string }[];
+  brief?: string | null;
+}
+export async function getConversationRuns(conversationId: string): Promise<ConversationRun[]> {
+  const r = await apiFetch(`/conversations/${conversationId}/runs`);
+  if (!r.ok) throw new Error(`getConversationRuns: ${r.status}`);
+  return ((await r.json()) as { runs: ConversationRun[] }).runs;
+}
+
 // #30 产出文件：按 run 分组（outputMessageId 锚到产出消息尾）。
 export interface TaskFileGroup {
   runId: number;

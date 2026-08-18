@@ -3,7 +3,7 @@
 // f2-3：会话列表职责迁 workspace store（服务端真相，弃 localStorage）；URL /c/:id 为当前会话锚
 //（ChatPage effect 唯一驱动 switchConversation/newConversation——init 已废）。
 import { create } from "zustand";
-import { abortConversation, createConversation, getConversationFiles, getHitlQuestions, getMessages, openStream, postMessage, type Conversation, type Question, type TaskFileGroup } from "../api";
+import { abortConversation, createConversation, getConversationFiles, getConversationRuns, getHitlQuestions, getMessages, openStream, postMessage, type Conversation, type ConversationRun, type Question, type TaskFileGroup } from "../api";
 import { useWorkspace, COMPANY_WORKSPACE_ID } from "./workspace";
 import type { SSEEvent } from "../sse";
 import type { Block } from "../sse";
@@ -94,6 +94,13 @@ const toUIMessage = (m: { id: string | number; dbId?: number | null; role: "user
   status: "complete",
 });
 const toUIQuestion = (q: Question): UIQuestion => ({ id: q.id, runId: q.runId, kind: q.kind, workflowId: q.workflowId, prompt: q.prompt, options: q.options, context: q.context, status: q.status, answer: q.answer });
+// #53/T4：GET /runs 快照 → UIRun（刷新恢复，抵消持久流瞬时态；note 由后续 run_failed 帧补）
+const toUIRun = (r: ConversationRun): UIRun => ({
+  runId: r.runId,
+  workflowId: r.workflowId ?? undefined,
+  status: r.status,
+  steps: r.steps.map((s) => ({ stepId: s.stepId, status: s.status })),
+});
 import { msg } from "../lib/msg";
 // 建会话并发去重（模块级，同旧 store initPromise 模式）：React StrictMode dev 双触发复用同一 promise
 let creatingInflight: Promise<string | null> | null = null;
@@ -292,6 +299,7 @@ export const useChat = create<ChatState>((set, get) => {
         set({
           messages: (await getMessages(id)).map(toUIMessage),
           questions: (await getHitlQuestions(id)).map(toUIQuestion),
+          runs: (await getConversationRuns(id)).map(toUIRun), // #53/T4：run 卡刷新恢复（域表直读）
         });
       } catch (e) {
         set({ messages: [errMsg(msg(e))] });
