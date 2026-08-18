@@ -298,23 +298,74 @@ export async function postMessage(conversationId: string, content: string, inRep
   }
 }
 
+export interface StreamLoopOptions {
+  /** 每次重连前回调（store 对账用）。仅掉线后触发——首次连接不调。 */
+  onReconnect?: () => void;
+  /** 退避时长（attempt 从 1 起）。注入可微调（测试短退避）。缺省 = 500ms * 2^(attempt-1)，封顶 maxBackoffMs。 */
+  backoffMs?: (attempt: number) => number;
+  maxBackoffMs?: number;
+  /** 一次连接存活超过该时长（ms）→ attempt 复位（健康连接不累积退避）。 */
+  healthyMs?: number;
+}
+
 /**
- * 持久流（长连）：GET /stream，fetch+ReadableStream 消费，每个解析出的事件回调 onEvent。
- * signal 取消即关流（切会话/卸载时）。重连期丢帧是已知缺口（#19+/序列号再补）。
+ * 断流自动重连状态机（#54/T5）：connect 单次连接消费（流自然结束/抛错 = 掉线）→ 有界指数退避 → 重连。
+ * - 退避封顶（maxBackoffMs）：断流风暴时重连频率有界，不无限风暴。
+ * - 健康连接（存活 ≥ healthyMs）复位 attempt：健康→掉线→立即恢复场景退避不长胖。
+ * - signal abort → 立即返回（卸载/切会话不留残余 loop）。
+ * 依赖注入 connect——单测无需真网络（用 fake connect 驱动）。
  */
-export async function openStream(conversationId: string, onEvent: (e: SSEEvent) => void, signal?: AbortSignal): Promise<void> {
-  const r = await apiFetch(`/conversations/${conversationId}/stream`, { signal });
-  if (!r.ok) throw new Error(`openStream: ${r.status}`);
-  if (!r.body) throw new Error("no response body");
-  const reader = r.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
+export async function runStreamLoop(
+  connect: (signal?: AbortSignal) => Promise<void>,
+  signal?: AbortSignal,
+  opts?: StreamLoopOptions,
+): Promise<void> {
+  const max = opts?.maxBackoffMs ?? 30_000;
+  const rawBackoff = opts?.backoffMs ?? ((attempt: number) => Math.min(500 * 2 ** (attempt - 1), max));
+  const healthyMs = opts?.healthyMs ?? 10_000;
+  let attempt = 0;
+  let first = true;
   while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const parsed = parseSSEFrames(buf);
-    buf = parsed.rest;
-    for (const e of parsed.events) onEvent(e);
+    if (signal?.aborted) return;
+    if (!first) opts?.onReconnect?.(); // 重连对账先于再连（快照补缺，实时帧续上）
+    first = false;
+    const t0 = Date.now();
+    try {
+      await connect(signal);
+    } catch {
+      if (signal?.aborted) return; // abort 由 connect 内抛自己处理（下方还查一次兜底）
+    }
+    if (signal?.aborted) return;
+    attempt = Date.now() - t0 >= healthyMs ? 0 : attempt + 1;
+    await new Promise<void>((r) => setTimeout(r, rawBackoff(attempt)));
   }
+}
+
+/**
+ * 持久流（长连 + 自动重连）：GET /stream，fetch+ReadableStream 消费，每个解析出的事件回调 onEvent。
+ * 断流（网络/服务端关闭）→ runStreamLoop 有界退避重连；重连前 onReconnect（store 三快照对账，
+ * 按 messageId/questionId/runId 幂等合并——快照对账即本端的补放等价物，无 seq 协议）。signal abort → 停。
+ */
+export async function openStream(
+  conversationId: string,
+  onEvent: (e: SSEEvent) => void,
+  signal?: AbortSignal,
+  opts?: StreamLoopOptions,
+): Promise<void> {
+  await runStreamLoop(async (s) => {
+    const r = await apiFetch(`/conversations/${conversationId}/stream`, { signal: s });
+    if (!r.ok) throw new Error(`openStream: ${r.status}`);
+    if (!r.body) throw new Error("no response body");
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parsed = parseSSEFrames(buf);
+      buf = parsed.rest;
+      for (const e of parsed.events) onEvent(e);
+    }
+  }, signal, opts);
 }

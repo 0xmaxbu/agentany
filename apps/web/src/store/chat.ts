@@ -66,6 +66,7 @@ interface ChatState {
   stop: () => Promise<void>;
   newConversation: (workspaceId?: string) => Promise<string | null>; // 返新会话 id（ChatPage navigate 用；#手风琴：可指定 ws）
   switchConversation: (id: string) => Promise<void>; // 幂等（同 id return）
+  reconcile: (id?: string) => Promise<void>; // #54/T5：断流重连三快照对账（幂等合并；缺省当前会话）
   closeStream: () => void; // 断持久流（登出/forceLogout 时 auth store 调）
   sendCardAnswer: (questionId: number, content: string) => Promise<void>; // 统一卡应答（消息绑定 questionId；task/approval/ask 三卡同路）
   refreshFiles: (conversationId: string) => Promise<void>; // #30：拉产出文件分组（进会话/任务 turn done 后调；无文件静默空）
@@ -101,6 +102,24 @@ const toUIRun = (r: ConversationRun): UIRun => ({
   status: r.status,
   steps: r.steps.map((s) => ({ stepId: s.stepId, status: s.status })),
 });
+// #54/T5：断流对账——三快照（messages/hitl/runs）与 live 幂等合并。
+/** 按 key 幂等合并：incoming 覆盖同 key，新 key 追加；已有但快照无 → 保留（存量不删）。 */
+export function mergeById<T>(existing: T[], incoming: T[], key: (x: T) => string | number | null): T[] {
+  const out = [...existing];
+  for (const inc of incoming) {
+    const k = key(inc);
+    if (k === null) continue; // 无 key 的（流式占位）由调用方预处理
+    const i = out.findIndex((x) => key(x) === k);
+    if (i >= 0) out[i] = inc;
+    else out.push(inc);
+  }
+  return out;
+}
+/** 消息合并：丢 live 中未定稿(id null)占位（快照有权威完整版）；按 id 升序（时间序）。 */
+export function reconcileMessages(live: UIMessage[], snap: UIMessage[]): UIMessage[] {
+  return mergeById(live.filter((m) => m.id !== null), snap, (m) => m.id as number)
+    .sort((a, b) => (a.id as number) - (b.id as number));
+}
 import { msg } from "../lib/msg";
 // 建会话并发去重（模块级，同旧 store initPromise 模式）：React StrictMode dev 双触发复用同一 promise
 let creatingInflight: Promise<string | null> | null = null;
@@ -113,6 +132,14 @@ let creatingInflight: Promise<string | null> | null = null;
  *   回撤只撤销**本次自开**的宿主消息，绝不删已有 streaming 消息。
  * kind/帧 type 判断统一引用 lib/blocks 常量（防字面量漂移）。
  */
+/** 三快照（#53/T4 + #54/T5）：拉 messages/hitl/runs 域表直读 → UI 形状。switchConversation 首载与 reconcile 重连对账共用。 */
+const loadSnapshots = async (id: string) => {
+  const [messages, questions, runs] = await Promise.all([
+    getMessages(id), getHitlQuestions(id), getConversationRuns(id),
+  ]);
+  return { messages: messages.map(toUIMessage), questions: questions.map(toUIQuestion), runs: runs.map(toUIRun) };
+};
+
 const onBlockFrame = (msgs: UIMessage[], e: SSEEvent): UIMessage[] => {
   if (e.type !== BLOCK_FRAME.start && e.type !== BLOCK_FRAME.delta && e.type !== BLOCK_FRAME.end) return msgs;
   // 定位宿主消息：末条 streaming 中的 assistant（隐式跟随——非 streaming 则 block_start 自开新消息）
@@ -240,7 +267,10 @@ export const useChat = create<ChatState>((set, get) => {
     closeStream();
     const ac = new AbortController();
     set({ streamCtrl: ac });
-    openStream(convId, onFrame, ac.signal).catch((e) => {
+    // #54/T5：断流自动重连 + 重连前对账（runStreamLoop 只在掉线后调 onReconnect，首次连接不调——首载走 switchConversation）。
+    openStream(convId, onFrame, ac.signal, {
+      onReconnect: () => void get().reconcile(convId),
+    }).catch((e) => {
       if (!ac.signal.aborted) set({ messages: [errMsg(msg(e))] });
     });
   };
@@ -296,16 +326,32 @@ export const useChat = create<ChatState>((set, get) => {
         .find((c) => c.id === id)?.workspaceId ?? COMPANY_WORKSPACE_ID;
       set({ conversationId: id, workspaceId: wsId, messages: [], runs: [], questions: [], fileGroups: [] });
       try {
-        set({
-          messages: (await getMessages(id)).map(toUIMessage),
-          questions: (await getHitlQuestions(id)).map(toUIQuestion),
-          runs: (await getConversationRuns(id)).map(toUIRun), // #53/T4：run 卡刷新恢复（域表直读）
-        });
+        const snap = await loadSnapshots(id);
+        if (get().conversationId !== id) return; // 竞态守卫：切走了不写
+        set({ messages: snap.messages, questions: snap.questions, runs: snap.runs });
       } catch (e) {
         set({ messages: [errMsg(msg(e))] });
       }
       void refreshFiles(id); // #30：产出会话历史文件（非阻塞——历史先出）
       openStreamFor(id);
+    },
+
+    // #54/T5：断流自动重连后的对账——三快照（messages/hitl/runs）与 live 幂等合并，
+    // 消息按 id（未定稿占位让位给快照权威版）、卡按 questionId、run 按 runId。失败静默（下轮重连再对账）。
+    reconcile: async (id) => {
+      const convId = id ?? get().conversationId;
+      if (!convId) return;
+      try {
+        const snap = await loadSnapshots(convId);
+        if (get().conversationId !== convId) return; // 竞态守卫
+        set((s) => ({
+          messages: reconcileMessages(s.messages, snap.messages),
+          questions: mergeById(s.questions, snap.questions, (q) => q.id),
+          runs: mergeById(s.runs, snap.runs, (r) => r.runId),
+        }));
+      } catch {
+        /* 对账失败（瞬时网络）静默：下一轮重连再试 */
+      }
     },
 
     closeStream,
