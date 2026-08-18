@@ -8,7 +8,7 @@ import { streamSSE } from "hono/streaming";
 import type { RunDeps } from "../runs";
 import { ConversationQueues } from "../chat/queue";
 import { EventBus, type Frame } from "../chat/eventbus";
-import { runTurn } from "../chat/turn";
+import { startInlineTurn } from "../chat/inline-turn";
 import { canAccessConversation, resolveRequestWorkspace } from "../workspaces/guard";
 import { userIdOf, principalOf, userRoleOf, type AppEnv } from "../auth/middleware";
 import { ROLE } from "../auth/store";
@@ -101,20 +101,15 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
   });
 
   // run 卡刷新恢复（#53/T4）：域表直读该会话 run 列表（workflow_runs + workflow_run_log）。
-  // 步骤 = log 每步取最新态（append-only：running→completed 覆盖）；brief = 终态简报（前端简报气泡走 GET /messages 已恢复）。
+  // 步骤收敛 = store listRunsWithSteps（log 一次批取，每步最新态 + 首现序）；route 只做 API 整形（去 input 等域列）。
   app.get("/conversations/:id/runs", (c) => {
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
-    const runs = deps.store.listRunsForConversation(conv.id).map((r) => {
-      const stepsBy = new Map<string, string>();
-      for (const l of deps.store.getLog(r.runId)) stepsBy.set(l.stepId, l.status); // 保首次出现的 seq 序
-      return {
-        runId: r.runId, workflowId: r.workflowId, status: r.status,
-        brief: r.brief ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt,
-        steps: [...stepsBy].map(([stepId, status]) => ({ stepId, status })),
-      };
+    return c.json({
+      runs: deps.store.listRunsWithSteps(conv.id).map(({ runId, workflowId, status, brief, createdAt, updatedAt, steps }) => ({
+        runId, workflowId, status, brief: brief ?? null, createdAt, updatedAt, steps,
+      })),
     });
-    return c.json({ runs });
   });
 
   // 持久流（SSE，长连，承载所有帧）：订阅 EventBus 转发；心跳保活；客户端断开→取消订阅。
@@ -176,18 +171,8 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
       skipTurn = !!r.skipTurn;
     }
     if (!skipTurn && !queues.wouldAcceptHttpTurn(id)) return c.json({ error: "conversation busy (queue full)" }, 429);
-    const userMsgId = deps.store.appendMessage({ conversationId: id, role: "user", content }); // 立即落库（LLM 路径在 429 后）
-    deps.store.touchConversation(id); // updatedAt = 列表排序锚（#20）
-    // 扇出：持久流显示用户消息（cardAnswered=程序化轮旗标，前端可据此免 LLM 占位）
-    eventBus.publish(id, { type: "user_message", id: userMsgId, content, ...(skipTurn ? { cardAnswered: true } : {}) });
-    if (!skipTurn) {
-      // 内联 user→turn（#48/T6，不再绕 EventBus 订阅一跳）；429 已预检，双保险失败仍 error 帧
-      const ok = queues.enqueueHttpTurn(id, (signal) => {
-        const send = (fr: Frame) => eventBus.publish(id, fr);
-        return runTurn(deps, id, content, send, signal);
-      });
-      if (!ok) eventBus.publish(id, { type: "error", message: "conversation busy (queue full)" });
-    }
+    // 内联 user→turn（#48/T6，不再绕 EventBus 订阅一跳）；先 429 预检后落库；入队双保险失败 error 帧——见 startInlineTurn
+    startInlineTurn(deps, queues, eventBus, id, content, { skipTurn });
     return c.json({ accepted: true }, 202);
   });
 

@@ -138,22 +138,6 @@ export const workspaceMembers = sqliteTable(
 
 // 定时任务（#25/ADR-0021）：cron 触发的自由 prompt LLM 任务（不触发工作流）。
 // 两类 scope：workspace（成员自建，绑建时 ws+产出会话）/ system（跨 ws 内置如蒸馏，seed DB 行，无产出会话）。
-// IM 平台身份绑定（spec #49 决策 6）：imUserId + platform → agentany userId（管理端静态绑定，v1 无自助注册）。
-// 唯一需要的「跨端身份」基础设施；不需要 IM↔会话映射——会话由 pending 卡自己的 conversation_id 决定。
-export const imBindings = sqliteTable(
-  "im_bindings",
-  {
-    imUserId: text("imUserId").notNull(), // 平台侧用户唯一 id（tg: 12345678 …）
-    platform: text("platform").notNull(), // "telegram" | "wecom" | "dingtalk" …（v1 静态绑定只记字符串）
-    userId: text("userId").notNull(),     // agentany 用户
-    createdAt: text("createdAt").notNull(),
-  },
-  (t) => ({
-    pk: primaryKey({ columns: [t.imUserId, t.platform] }),        // 一平台一身份一行，重复 bind 走 upsert
-    userPlatform: uniqueIndex("im_bindings_user_platform_idx").on(t.userId, t.platform), // 一用户每平台至多一个绑定
-  }),
-);
-
 export const scheduledTasks = sqliteTable(
   "scheduled_tasks",
   {
@@ -175,6 +159,22 @@ export const scheduledTasks = sqliteTable(
   (t) => ({
     // dueTasks 扫描：enabled AND nextFireAt（索引覆盖 WHERE + ORDER BY）
     due: index("scheduled_tasks_enabled_nextFireAt_idx").on(t.enabled, t.nextFireAt),
+  }),
+);
+
+// IM 平台身份绑定（spec #49 决策 6）：imUserId + platform → agentany userId（管理端静态绑定，v1 无自助注册）。
+// 唯一需要的「跨端身份」基础设施；不需要 IM↔会话映射——会话由 pending 卡自己的 conversation_id 决定。
+export const imBindings = sqliteTable(
+  "im_bindings",
+  {
+    imUserId: text("imUserId").notNull(), // 平台侧用户唯一 id（tg: 12345678 …）
+    platform: text("platform").notNull(), // "telegram" | "wecom" | "dingtalk" …（v1 静态绑定只记字符串）
+    userId: text("userId").notNull(),     // agentany 用户
+    createdAt: text("createdAt").notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.imUserId, t.platform] }),        // 一平台一身份一行，重复 bind 走 upsert
+    userPlatform: uniqueIndex("im_bindings_user_platform_idx").on(t.userId, t.platform), // 一用户每平台至多一个绑定
   }),
 );
 

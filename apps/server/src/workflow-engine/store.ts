@@ -1,6 +1,6 @@
 // Drizzle 版 WorkflowStore（替 spike-b 裸 bun:sqlite；方法同 spike-b）。
 // 这是引擎里唯一耦合 db 的文件；runner 只接收本类实例、不 import db。
-import { and, desc, eq, gt, isNull, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, isNotNull, or, sql } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
 import { conversations, feedback, hitlQuestions, messages, workflowRunLog, workflowRuns } from "../db/schema";
 
@@ -157,6 +157,28 @@ export class WorkflowStore {
       .orderBy(desc(workflowRuns.createdAt))
       .all();
     return rows.map((r) => ({ ...r, status: r.status as RunStatus, input: P(r.input) }));
+  }
+
+  /** #53/T4：会话 run 列表 + 每 run 的 log 步骤收敛（code-review：GET /runs 原是 route 内逐 run getLog 的 N+1——
+   *   收敛下沉 store，log **一次批取**）。步骤 status = 每步最新态（append-only：running→completed 覆盖）；
+   *   步骤序 = 首现 seq 序（logs 按 seq 升序，Map.set 首次命中键保留序）。 */
+  listRunsWithSteps(conversationId: string): Array<RunRow & { steps: { stepId: string; status: LogStatus }[] }> {
+    const runs = this.listRunsForConversation(conversationId);
+    if (!runs.length) return [];
+    const rows = this.db.select().from(workflowRunLog)
+      .where(inArray(workflowRunLog.runId, runs.map((r) => r.runId)))
+      .orderBy(workflowRunLog.seq)
+      .all();
+    const stepsByRun = new Map<string, Map<string, LogStatus>>();
+    for (const l of rows) {
+      const m = stepsByRun.get(l.runId);
+      if (m) m.set(l.stepId, l.status as LogStatus);
+      else stepsByRun.set(l.runId, new Map([[l.stepId, l.status as LogStatus]]));
+    }
+    return runs.map((r) => ({
+      ...r,
+      steps: [...(stepsByRun.get(r.runId) ?? new Map<string, LogStatus>())].map(([stepId, status]) => ({ stepId, status })),
+    }));
   }
 
   getRun(runId: string): RunRow | undefined {

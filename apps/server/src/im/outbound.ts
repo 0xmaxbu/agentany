@@ -22,7 +22,12 @@ export function renderHitlFrame(f: Frame): string | null {
       return `${label}：${f.prompt}${optsList}`;
     }
     case "hitl_answered": {
-      return `已处理：${JSON.stringify(f.answer)}`;
+      const a: unknown = f.answer;
+      // primitives 直写（免 JSON 转义噪声）；对象仍序列化（honest payload）
+      const text = typeof a === "string" || typeof a === "number" || typeof a === "boolean"
+        ? String(a)
+        : a == null ? "" : JSON.stringify(a);
+      return `已处理${text ? `：${text}` : ""}`;
     }
     default:
       return null;

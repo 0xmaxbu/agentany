@@ -55,10 +55,20 @@ describe("renderHitlFrame：hitl_request → 纯文本（prompt + 全量 options
 });
 
 describe("renderHitlFrame：hitl_answered → 已处理确认", () => {
-  test("含答案摘要（JSON）", () => {
+  test("含答案摘要（对象 → JSON）", () => {
     const t = renderHitlFrame({ type: "hitl_answered", questionId: 3, answer: { decision: "accept" }, kind: "ask" })!;
     expect(t).toContain("已处理");
     expect(t).toContain('"accept"');
+  });
+
+  test("字符串答案 → 直写无转义噪声（免 JSON.stringify 引号）", () => {
+    const t = renderHitlFrame({ type: "hitl_answered", questionId: 3, answer: "同意批准", kind: "ask" })!;
+    expect(t).toBe("已处理：同意批准"); // 无引号/转义
+  });
+
+  test("空答案 → 仅「已处理」", () => {
+    const t = renderHitlFrame({ type: "hitl_answered", questionId: 3, answer: null, kind: "ask" })!;
+    expect(t).toBe("已处理");
   });
 });
 
