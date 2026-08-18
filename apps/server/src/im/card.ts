@@ -46,27 +46,25 @@ export function isTextOk(input: Pick<ImCardInput, "kind" | "resumeSchema">): boo
   return input.kind === "ask" && !isClosedChoice(input.resumeSchema);
 }
 
-/** hitl_request → 飞书 Card 2.0（交互卡：prompt + 每选项一按钮 + 按开放度 footer）。纯函数，结构单测直测。 */
+/** hitl_request → 飞书 Card 2.0（交互卡：prompt + 每选项一按钮 + 按开放度 footer）。纯函数，结构单测直测。
+ *  按钮直接铺 body.elements（tag:"button"）——live smoke 修复：Card 2.0 已废弃 1.0 的 action 容器（真飞书拒收）。 */
 export function renderImCard(input: ImCardInput): unknown {
   const title = KIND_TITLES[input.kind] ?? "提问";
   const footer: unknown[] = isTextOk(input) ? [
-    { tag: "note", elements: [{ tag: "plain_text", content: FOOTER_OPEN_HINT }] },
+    { tag: "div", text: { tag: "lark_md", content: FOOTER_OPEN_HINT } }, // note 已废弃（Card 2.0 breaking）；与 prompt 同形 div（live smoke 验证通过）
   ] : [];
-  const actions: unknown[] = input.options.length > 0 ? [{
-    tag: "action",
-    actions: input.options.map((o) => ({
-      tag: "button",
-      text: { tag: "plain_text", content: o.label },
-      behaviors: [{ type: "callback", value: { questionId: input.questionId, value: o.label } }],
-    })),
-  }] : [];
+  const buttons: unknown[] = input.options.map((o) => ({
+    tag: "button",
+    text: { tag: "plain_text", content: o.label },
+    behaviors: [{ type: "callback", value: { questionId: input.questionId, value: o.label } }],
+  }));
   return {
     schema: "2.0",
     header: { title: { tag: "plain_text", content: title } },
     body: {
       elements: [
         { tag: "div", text: { tag: "lark_md", content: input.prompt } },
-        ...actions,
+        ...buttons,
         ...footer,
       ],
     },
@@ -82,14 +80,15 @@ export function renderAnsweredCard(input: ImCardInput): unknown {
     body: {
       elements: [
         { tag: "div", text: { tag: "lark_md", content: input.prompt } },
-        { tag: "note", elements: [{ tag: "plain_text", content: "✅ 已处理" }] },
+        { tag: "div", text: { tag: "lark_md", content: "✅ 已处理" } }, // note 已废弃（Card 2.0 breaking）；同形 div
       ],
     },
   };
 }
 
 /** 选择卡（spec #55/T6）：多条 pending ask 卡并存时，把「待确认文本」挂到选择——每张卡一个按钮（仅 prompt）。
- *  按钮回调 value = { selectQuestionId }——与普通卡 {questionId, label} 区分（card-action 按字段路由）。 */
+ *  按钮回调 value = { selectQuestionId }——与普通卡 {questionId, label} 区分（card-action 按字段路由）。
+ *  按钮同样平铺（Card 2.0 无 action 容器，live smoke 修复）。 */
 export function renderSelectCard(candidates: { questionId: number; prompt: string }[]): unknown {
   return {
     schema: "2.0",
@@ -97,14 +96,11 @@ export function renderSelectCard(candidates: { questionId: number; prompt: strin
     body: {
       elements: [
         { tag: "div", text: { tag: "lark_md", content: "收到您的回答，但有多张卡片待处理。请点击您要回答的那张：" } },
-        {
-          tag: "action",
-          actions: candidates.map((c) => ({
-            tag: "button",
-            text: { tag: "plain_text", content: truncatePrompt(c.prompt) }, // 仅 prompt（不展开选项明细分）
-            behaviors: [{ type: "callback", value: { selectQuestionId: c.questionId } }],
-          })),
-        },
+        ...candidates.map((c) => ({
+          tag: "button",
+          text: { tag: "plain_text", content: truncatePrompt(c.prompt) }, // 仅 prompt（不展开选项明细分）
+          behaviors: [{ type: "callback", value: { selectQuestionId: c.questionId } }],
+        })),
       ],
     },
   };

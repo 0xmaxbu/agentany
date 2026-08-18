@@ -254,7 +254,17 @@ export class FeishuLongConnection {
     }
 
     if (type === MSG_TYPE_EVENT) {
-      // 事件立即 ack（判答异步不阻塞 ack）；卡回调须带响应结果 → 走 handleCard（先处理后 ack）
+      // live smoke 实测：真飞书把 card.action.trigger（卡片回调）也走 EVENT 帧（header.event_type），不推 CARD 帧。
+      // → 事件帧先取 event_type：卡片回调 → 走 handleCard（先处理 + 带 data 的 ack）；其余事件 → 立即 ack + 异步 onEvent。
+      let eventType: string | undefined;
+      try {
+        eventType = ((JSON.parse(new TextDecoder().decode(payload)) as { header?: { event_type?: string } })?.header?.event_type);
+      } catch { /* 解析失败 → 按普通事件处理 */ }
+      if (eventType === "card.action.trigger") {
+        void this.handleCard(ackIdent, payload, msStart);
+        return;
+      }
+      // 事件立即 ack（判答异步不阻塞 ack）
       this.sendAck(ackIdent, msStart);
       try {
         const evt = JSON.parse(new TextDecoder().decode(payload)) as unknown;

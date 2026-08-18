@@ -134,7 +134,7 @@ describe("e2e：#bind → 补发 + 回执；#unbind；未绑定普通文本静�
     const cards = sends.filter((s) => s.msgType === "interactive");
     expect(cards).toHaveLength(2);
     expect(cards.some((s) => s.uuid === `${qid1}:hitl_request`)).toBe(true);
-    expect((cards[0].content as any).body.elements[1].actions[0].behaviors[0].value.questionId).toBe(qid1);
+    expect(((cards[0].content as any).body.elements.find((e: any) => e.tag === "button")).behaviors[0].value.questionId).toBe(qid1);
   });
 
   test("绑定码单次性：用过-解绑-重放 → 拒；乱码/过期 → 拒，均不绑定不补发", async () => {

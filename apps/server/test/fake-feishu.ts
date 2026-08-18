@@ -150,6 +150,12 @@ export function fakeFeishuWs(): { app: Hono; state: FakeFeishuWsState } & FakeFe
   });
 
   const pushFrame = (payload: unknown, frameType: "event" | "card", opts: { messageId?: string; chunks?: number } = {}): Promise<{ ack: FakeFeishuWsAck }> => {
+    // live smoke 实测：真飞书把 card.action.trigger（卡片回调）走 EVENT 帧（header.event_type），不推 CARD 帧。
+    // pushCardAction 应发 EVENT 帧（header.event_type=card.action.trigger），与真飞书同型——否则测不到真路径。
+    if (frameType === "card") {
+      const p = payload as { header?: { event_type?: string } };
+      if (p?.header?.event_type === "card.action.trigger") frameType = "event";
+    }
     const client = [...wsClients][0] as { send: (data: Uint8Array) => void };
     if (!client) return Promise.reject(new Error("no ws client connected"));
     const messageId = opts.messageId ?? `om_fake_${++evtSeq}`;

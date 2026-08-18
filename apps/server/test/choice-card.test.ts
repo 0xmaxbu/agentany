@@ -140,11 +140,12 @@ describe("renderSelectCard（结构）", () => {
       { questionId: 7, prompt: "这道题目特别长，需要被截断才能放进按钮里面微软雅黑两排装不下，四十个字以内根本展示不完的场景" },
     ]);
     expect(card.schema).toBe("2.0");
-    const actions: any[] = card.body.elements[1].actions;
-    expect(actions).toHaveLength(2);
-    expect(actions[0].text.content).toBe("预算区间是多少？");
-    expect(actions[1].text.content.endsWith("…")).toBe(true); // 长 prompt 截断
-    expect(actions[0].behaviors[0].value).toEqual({ selectQuestionId: 3 });
+    const btns: any[] = card.body.elements.filter((e: any) => e.tag === "button");
+    expect(btns).toHaveLength(2);
+    expect(btns[0].text.content).toBe("预算区间是多少？");
+    expect(btns[1].text.content.endsWith("…")).toBe(true); // 长 prompt 截断
+    expect(btns[0].behaviors[0].value).toEqual({ selectQuestionId: 3 });
+    expect(card.body.elements.some((e: any) => e.tag === "action")).toBe(false); // 2.0 无 action 容器（live smoke 修复）
   });
 });
 
@@ -176,7 +177,9 @@ describe("e2e：两卡并存 → 选择卡 → 点选判答", () => {
     await ctx.inbound(receiveTextEvent("ou_1", "不超过 10 万"));
     await delayUntil(() => ctx.fake.state.sent.some((s) => s.msgType === "interactive"), 2000);
     const selCard = ctx.fake.state.sent.find((s) => s.msgType === "interactive")!;
-    const buttons: any[] = (selCard.content as any).body.elements[1].actions;
+    const selector = selCard.content as any;
+    expect(selector.body.elements[1].actions).toBeUndefined(); // 2.0 无 action 容器（live smoke 修复）
+    const buttons: any[] = selector.body.elements.filter((e: any) => e.tag === "button");
     expect(buttons.map((b) => b.behaviors[0].value.selectQuestionId)).toEqual([q1, q2]);
 
     // 点选第 2 张（q2）→ 缓存文本「不超过 10 万」判答 q2 → 收口 + 更新卡/toast

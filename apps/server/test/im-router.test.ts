@@ -48,9 +48,10 @@ describe("ImOutboundRouter（出站路由胶水）", () => {
     const card = ctx.fake.state.sent[0].content as any;
     expect(card.schema).toBe("2.0");
     expect(card.body.elements[0].text.content).toContain("选哪个方案？");
-    const action = card.body.elements[1];
-    expect(action.actions).toHaveLength(2);
-    expect(action.actions[0].behaviors[0].value).toEqual({ questionId: qid, value: "A" });
+    const buttons = card.body.elements.filter((e: any) => e.tag === "button");
+    expect(buttons).toHaveLength(2);
+    expect(card.body.elements.some((e: any) => e.tag === "action")).toBe(false); // 2.0 无 action 容器（live smoke 修复）
+    expect(buttons[0].behaviors[0].value).toEqual({ questionId: qid, value: "A" });
   });
 
   test("开放 schema → 卡带 footer；hitl_answered → 确认回执文本（同路由）；非 hitl 帧不产出", async () => {
@@ -61,7 +62,7 @@ describe("ImOutboundRouter（出站路由胶水）", () => {
     ctx.router.subscribeAll();
     ctx.bus.publish("c1", { type: "hitl_request", questionId: qid, runId: null, prompt: "预算？", options: ["<10w"], kind: "ask" });
     await new Promise((r) => setTimeout(r, 10));
-    expect((ctx.fake.state.sent[0].content as any).body.elements.some((e: any) => e.tag === "note" && e.elements?.[0]?.content)).toBe(true); // 开放 → footer 显
+    expect((ctx.fake.state.sent[0].content as any).body.elements.some((e: any) => e.tag === "div" && e.text?.content)).toBe(true); // 开放 → footer 显（note 已废弃 → div 同形）
 
     ctx.bus.publish("c1", { type: "hitl_answered", questionId: qid, answer: { decision: "accept" } });
     await new Promise((r) => setTimeout(r, 10));

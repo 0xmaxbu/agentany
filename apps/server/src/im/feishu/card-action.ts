@@ -41,10 +41,15 @@ export function mapSelectAction(payload: unknown): { questionId: number; openId:
 
 const SUCCESS_MSG: Record<string, string> = { ask: "已处理", approval: "已审批", task: "已确认" };
 
+/** 卡回调响应：toast + 已答态卡（更新原卡）。card 须带 raw 包装（飞书回调响应契约：card.type="raw" + data=卡 JSON）。
+ *  live smoke 修复：裸卡 JSON 会被飞书判 200673「返回了错误的卡片」→ 客户端 toast「处理出错」。 */
 export function answeredCardRsp(q: QuestionRow, toastText: string, toastType: "success" | "info" | "error" = "success"): unknown {
   return {
     toast: { type: toastType, content: toastText },
-    card: renderAnsweredCard({ questionId: q.id, kind: (q.kind ?? "ask") as "ask" | "approval" | "task", prompt: q.prompt, options: [] }),
+    card: {
+      type: "raw",
+      data: renderAnsweredCard({ questionId: q.id, kind: (q.kind ?? "ask") as "ask" | "approval" | "task", prompt: q.prompt, options: [] }),
+    },
   };
 }
 

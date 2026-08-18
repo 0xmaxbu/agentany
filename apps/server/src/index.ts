@@ -59,7 +59,7 @@ if (FEISHU_APP_ID && FEISHU_APP_SECRET) {
   const longConnection = new FeishuLongConnection({
     appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET,
     onEvent: (p) => { feishuInbound(p).catch((e) => console.error("[im] 入站处理失败:", e)); },
-    onCard: (p) => handleCardAction(deps, p, textPending), // T4 按钮回调 + T6 选择卡点选
+    onCard: (p) => handleCardAction(deps, p, textPending), // T4 按钮回调（真飞书经 EVENT 帧 event_type=card.action.trigger 路由，T2 长连接已分流）+ T6 选择卡点选
     log: (m) => console.log("[im]", m),
   });
   longConnection.start();

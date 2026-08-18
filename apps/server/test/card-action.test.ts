@@ -40,17 +40,19 @@ describe("mapCardAction（回调 → 决策输入）", () => {
 });
 
 describe("卡回调响应卡（已答态）", () => {
-  test("renderAnsweredCard：无按钮 + 「✅ 已处理」note", () => {
+  test("renderAnsweredCard：无按钮 + 「✅ 已处理」（div 同形，note 已废弃）", () => {
     const card: any = renderAnsweredCard({ questionId: 1, kind: "approval", prompt: "批准？", options: [] });
     expect(card.schema).toBe("2.0");
     expect(card.body.elements.some((e: any) => e.tag === "action")).toBe(false);
-    expect(card.body.elements.some((e: any) => e.tag === "note" && e.elements?.[0]?.content === "✅ 已处理")).toBe(true);
+    expect(card.body.elements.some((e: any) => e.tag === "note")).toBe(false);
+    expect(card.body.elements.some((e: any) => e.tag === "div" && e.text?.content === "✅ 已处理")).toBe(true);
   });
-  test("answeredCardRsp：toast + card", () => {
+  test("answeredCardRsp：toast + raw 包装卡", () => {
     const q = { id: 5, kind: "approval", prompt: "批准？" } as any;
     const rsp: any = answeredCardRsp(q, "已审批");
     expect(rsp.toast).toEqual({ type: "success", content: "已审批" });
-    expect(rsp.card.body.elements.some((e: any) => e.tag === "note")).toBe(true);
+    expect(rsp.card.type).toBe("raw"); // 飞书回调响应契约：card.type="raw" + data=卡 JSON（live smoke 修复，裸卡 → 200673）
+    expect(rsp.card.data.body.elements.some((e: any) => e.tag === "note")).toBe(false); // Card 2.0 无 note
   });
 });
 
@@ -102,8 +104,9 @@ describe("T4 e2e：按钮回调闭环（假飞书 WS）", () => {
     const rsp: any = ack.data;
     expect(rsp.toast.content).toBe("已审批");
     // 更新卡 = 已答态（无按钮）
-    expect(rsp.card.body.elements.some((e: any) => e.tag === "action")).toBe(false);
-    expect(rsp.card.body.elements.some((e: any) => e.tag === "note" && String(e.elements?.[0]?.content).includes("已处理"))).toBe(true);
+    const respCard: any = rsp.card.data; // callback 响应 raw 包装 → data=卡 JSON
+    expect(respCard.body.elements.some((e: any) => e.tag === "action")).toBe(false);
+    expect(respCard.body.elements.some((e: any) => e.tag === "div" && String(e.text?.content).includes("已处理"))).toBe(true);
     // 落库：approval deny 已决（决策人即点击者 m1）
     const decided = s.store.getQuestion(qid)!;
     expect(decided.status).toBe("answered");
@@ -183,7 +186,7 @@ describe("T4 e2e：按钮回调闭环（假飞书 WS）", () => {
     const qid = s.store.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "批准？", options: ["批准", "拒绝"] });
     // T3 渲染的卡 → 取按钮嵌入 value → 组点按钮事件 → T4 解析 → dispatch 生效（deny 侧，避开 registry 依赖）
     const sentCard: any = renderImCard({ questionId: qid, kind: "approval", prompt: "批准？", options: [{ label: "拒绝", value: "拒绝" }, { label: "批准", value: "批准" }] });
-    const embedded = sentCard.body.elements[1].actions[0].behaviors[0].value;
+    const embedded = (sentCard.body.elements.find((e: any) => e.tag === "button") as any).behaviors[0].value;
     const m = mapCardAction(cardActionEvent("ou_1", embedded.questionId, embedded.value));
     expect(m).toEqual({ questionId: qid, value: "拒绝", openId: "ou_1" });
     const { ack } = await s.fake.pushCardAction(cardActionEvent("ou_1", embedded.questionId, embedded.value));
