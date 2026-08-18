@@ -17,6 +17,8 @@ import { warnIfNoSandbox } from "./pi/sandbox";
 import { startBridge, BRIDGE_PORT } from "./bridge/server";
 import { ImStore } from "./im/store";
 import { FeishuTransport } from "./im/feishu/transport";
+import { FeishuLongConnection } from "./im/feishu/long-connection";
+import { makeFeishuInbound } from "./im/feishu/inbound";
 import { ImOutboundRouter } from "./im/outbound-router";
 import type { RunDeps } from "./runs";
 
@@ -43,13 +45,21 @@ const scheduler = new TaskScheduler({
 deps.scheduler = scheduler;
 scheduler.start(); // 每 60s tick；DB 为真相，重启后按 nextFireAt 继续
 
-// 飞书通道（spec #55/T1）：凭证就位才接飞书出站路由（缺一 → 无飞书，零侵入）。绑定变更后需重扫
-// subscribeAll()（自助绑定 T5 落地时在写侧 hook；v1 由重启/重扫补偿）。
+// 飞书通道（spec #55）：凭证就位才接（缺一 → 无飞书，零侵入）。
+// T1（#56）出站：bus hitl 帧 → owner 绑定 → send。
+// T2（#57）入站：长连接（免公网 raw protobuf 事件）→ 文本回流 handleImInbound → 回复回发（同一 transport）。
 if (FEISHU_APP_ID && FEISHU_APP_SECRET) {
   const feishu = new FeishuTransport({ appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET });
   const imRouter = new ImOutboundRouter({ store, imStore: deps.imStore!, bus: eventBus, platform: feishu });
   imRouter.subscribeAll();
-  console.log("[im] 飞书出站已接线");
+  const feishuInbound = makeFeishuInbound(deps, feishu);
+  const longConnection = new FeishuLongConnection({
+    appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET,
+    onEvent: (p) => { feishuInbound(p).catch((e) => console.error("[im] 入站处理失败:", e)); },
+    log: (m) => console.log("[im]", m),
+  });
+  longConnection.start();
+  console.log("[im] 飞书出站 + 长连接已接线");
 }
 await bootstrapAdmin(userStore); // env 设了 bootstrap admin 则幂等 upsert（否则走纯 dev 阀）
 const app = createApp(deps);
