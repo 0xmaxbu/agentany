@@ -50,6 +50,10 @@ export const DATA_DIR = resolve(process.env.DATA_DIR ?? `${REPO_ROOT}data`);
 
 export const PORT = Number(process.env.PORT ?? 3000);
 
+// 飞书通道（spec #55/T1）：应用机器人凭证（企业自建应用）。两者皆设 → index 接线飞书出站；缺一 → 无飞书（零侵入）。
+export const FEISHU_APP_ID = process.env.FEISHU_APP_ID ?? "";
+export const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET ?? "";
+
 // 工作空间工作区 / Pi session 目录（ADR-0018：ws=目录锚的唯一单位）。runPi-factory 与 workflow steps 共用。
 /** DATA_DIR 动态取值（#37 坑：模块级 const 在 bun test 单进程下晚设 env 无效；生产同值无差异）。 */
 export const dataDir = (): string => process.env.DATA_DIR ?? DATA_DIR;

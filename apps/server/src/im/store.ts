@@ -52,6 +52,14 @@ export class ImStore {
     return r && r.userId ? { userId: r.userId } : undefined;
   }
 
+  /** 反查（spec #55/T1）：agentany 用户 + 平台 → 绑定的 IM 身份（出站路由寻址用——resolve 的反向）。未绑定 → undefined。 */
+  reverseResolve(userId: string, platform: string): { imUserId: string } | undefined {
+    const r = this.db.select({ imUserId: imBindings.imUserId }).from(imBindings)
+      .where(and(eq(imBindings.userId, userId), eq(imBindings.platform, platform)))
+      .get();
+    return r && r.imUserId ? { imUserId: r.imUserId } : undefined;
+  }
+
   /** 全量（管理端查看）。 */
   list(): ImBindingRow[] {
     return this.db.select().from(imBindings).all().map((r) => r as ImBindingRow);

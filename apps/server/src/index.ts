@@ -12,9 +12,12 @@ import { makeExecuteTask } from "./scheduled-tasks/execute";
 import { ConversationQueues } from "./chat/queue";
 import { bootstrapAdmin } from "./auth/bootstrap";
 import { ensureKnowledgeRepo } from "./knowledge/repo";
-import { PORT } from "./config";
+import { PORT, FEISHU_APP_ID, FEISHU_APP_SECRET } from "./config";
 import { warnIfNoSandbox } from "./pi/sandbox";
 import { startBridge, BRIDGE_PORT } from "./bridge/server";
+import { ImStore } from "./im/store";
+import { FeishuTransport } from "./im/feishu/transport";
+import { ImOutboundRouter } from "./im/outbound-router";
 import type { RunDeps } from "./runs";
 
 const db = openDbMigrated(); // 启动跑迁移（data/db.sqlite）
@@ -32,13 +35,22 @@ const conversationQueues = new ConversationQueues(); // 共享 per-conv FIFO：c
 const runRegistry = new RunRegistry({ store, eventBus });
 runRegistry.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed + 「异常终止」brief（进程没在跑了）
 runRegistry.reconcileBriefMessages(); // ADR-0025 决策 3：sweep 之后——终态但简报未发的 run 幂等补发（崩溃区间归零）
-const deps: RunDeps = { store, userStore, streamRegistry, workspaceStore, taskStore, eventBus, conversationQueues, runRegistry };
+const deps: RunDeps = { store, userStore, streamRegistry, workspaceStore, taskStore, imStore: new ImStore(db), eventBus, conversationQueues, runRegistry };
 const scheduler = new TaskScheduler({
   store: taskStore,
   executeTask: makeExecuteTask({ deps, queues: conversationQueues, eventBus }), // #29 真链：runTurn 同构、任务 pi 无 bridge
 });
 deps.scheduler = scheduler;
 scheduler.start(); // 每 60s tick；DB 为真相，重启后按 nextFireAt 继续
+
+// 飞书通道（spec #55/T1）：凭证就位才接飞书出站路由（缺一 → 无飞书，零侵入）。绑定变更后需重扫
+// subscribeAll()（自助绑定 T5 落地时在写侧 hook；v1 由重启/重扫补偿）。
+if (FEISHU_APP_ID && FEISHU_APP_SECRET) {
+  const feishu = new FeishuTransport({ appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET });
+  const imRouter = new ImOutboundRouter({ store, imStore: deps.imStore!, bus: eventBus, platform: feishu });
+  imRouter.subscribeAll();
+  console.log("[im] 飞书出站已接线");
+}
 await bootstrapAdmin(userStore); // env 设了 bootstrap admin 则幂等 upsert（否则走纯 dev 阀）
 const app = createApp(deps);
 warnIfNoSandbox(); // 逃生阀开启时显眼告警（ADR-0011 A1）
