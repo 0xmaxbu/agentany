@@ -1,7 +1,8 @@
 // 用户管理（f4）：表格 + 搜索 + 新建/重置密码弹窗（页面默认仅表格）。渲染在 shell 中区。
+// #62：绑定状态列（IM 绑定——admin 列表 + 兜底解绑，服务端 /im/bindings）。
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { apiFetch } from "../../api";
+import { apiFetch, listImBindings, unbindIm, type ImBinding } from "../../api";
 import { useAuth, ROLE } from "../../store/auth";
 import { useTheme } from "../../lib/theme";
 import { CheckIcon, MagnifyingGlassIcon, ProhibitIcon } from "@phosphor-icons/react";
@@ -43,6 +44,7 @@ const resetPassword = async (id: string, newPassword: string) => {
 
 export function AdminUsersPage() {
   const [users, setUsers] = useState<AdminUserRow[] | null>(null);
+  const [bindings, setBindings] = useState<ImBinding[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
@@ -51,7 +53,11 @@ export function AdminUsersPage() {
   const status = useAuth((s) => s.status);
   const isAdmin = status === "anonymous" || user?.role === ROLE.admin;
 
-  const reload = () => void listUsers().then(setUsers).catch((e) => setErr(String(e.message ?? e)));
+  const reload = () => {
+    // bindings 列表失败不挡用户列表（im 未接线时 503——降级显示「—」）
+    void listUsers().then(setUsers).catch((e) => setErr(String(e.message ?? e)));
+    void listImBindings().then(setBindings).catch(() => setBindings(null));
+  };
   useEffect(reload, []);
 
   // 搜索：username/displayName 不分大小写包含
@@ -61,6 +67,13 @@ export function AdminUsersPage() {
     if (!q) return users;
     return users.filter((u) => u.username.toLowerCase().includes(q) || (u.displayName ?? "").toLowerCase().includes(q));
   }, [users, query]);
+
+  // userId → 绑定集映射（同用户可绑多平台 v1 单平台 feishu，结构留数组）
+  const byUser = useMemo(() => {
+    const m = new Map<string, ImBinding[]>();
+    for (const b of bindings ?? []) m.set(b.userId, [...(m.get(b.userId) ?? []), b]);
+    return m;
+  }, [bindings]);
 
   if (!isAdmin) return <NoAccess />;
 
@@ -99,15 +112,16 @@ export function AdminUsersPage() {
                   <th className="px-3 py-2 font-medium">用户名</th>
                   <th className="px-3 py-2 font-medium">角色</th>
                   <th className="px-3 py-2 font-medium">状态</th>
+                  <th className="px-3 py-2 font-medium">IM 绑定</th>
                   <th className="px-3 py-2 text-right font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((u) => (
-                  <UserRow key={u.id} u={u} self={u.id === user?.id} onReset={() => setResetting(u)} onChanged={reload} />
+                  <UserRow key={u.id} u={u} bindings={byUser.get(u.id) ?? []} self={u.id === user?.id} onReset={() => setResetting(u)} onChanged={reload} />
                 ))}
                 {filtered.length === 0 && (
-                  <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">{query ? "无匹配用户" : "暂无用户"}</td></tr>
+                  <tr><td colSpan={6} className="px-3 py-6 text-center text-xs text-muted-foreground">{query ? "无匹配用户" : "暂无用户"}</td></tr>
                 )}
               </tbody>
             </table>
@@ -144,8 +158,26 @@ function NoAccess() {
   );
 }
 
-function UserRow({ u, self, onReset, onChanged }: { u: AdminUserRow; self: boolean; onReset: () => void; onChanged: () => void }) {
+const PLATFORM_TITLES: Record<string, string> = { feishu: "飞书", telegram: "Telegram" };
+
+function UserRow({ u, bindings, self, onReset, onChanged }: { u: AdminUserRow; bindings: ImBinding[]; self: boolean; onReset: () => void; onChanged: () => void }) {
   const deactivated = u.status === "deactivated";
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const doUnbind = async () => {
+    if (bindings.length === 0) return;
+    setBusy(true);
+    try {
+      // v1 单平台逐个清（先飞书；多平台后续扩展）
+      for (const b of bindings) await unbindIm(b.platform, b.imUserId);
+      setConfirming(false);
+      onChanged();
+    } catch {
+      // 失败保持 confirm 态（可重试）
+    } finally { setBusy(false); }
+  };
+
   return (
     <tr className={`border-b border-border/50 last:border-0 hover:bg-accent/40 ${deactivated ? "opacity-50" : ""}`}>
       <td className="px-3 py-2">
@@ -160,6 +192,20 @@ function UserRow({ u, self, onReset, onChanged }: { u: AdminUserRow; self: boole
       <td className="px-3 py-2 text-xs">
         {deactivated ? <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">已停用</span> : <span className="text-emerald-600">active</span>}
       </td>
+      <td className="px-3 py-2 text-xs">
+        {bindings.length === 0 ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          <span className="flex flex-wrap items-center gap-1">
+            {bindings.map((b) => (
+              <span key={`${b.platform}:${b.imUserId}`} className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-foreground" title={b.imUserId}>
+                {PLATFORM_TITLES[b.platform] ?? b.platform}
+                <span className="ml-1 text-muted-foreground">{b.imUserId.slice(0, 6)}…</span>
+              </span>
+            ))}
+          </span>
+        )}
+      </td>
       <td className="px-3 py-2 text-right">
         {/* 自己不可停用/重置（防锁死——后端亦有守卫） */}
         {!self && (
@@ -170,6 +216,16 @@ function UserRow({ u, self, onReset, onChanged }: { u: AdminUserRow; self: boole
               <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => void deactivateUser(u.id).then(onChanged)}>停用</Button>
             )}
             <Button variant="outline" className="h-7 px-2 text-xs" onClick={onReset}>重置密码</Button>
+            {bindings.length > 0 &&
+              (confirming ? (
+                <Button variant="destructive" className="h-7 px-2 text-xs" disabled={busy} onClick={() => void doUnbind()} data-testid="unbind-im-confirm">
+                  {busy ? "解绑中…" : "确认解绑"}
+                </Button>
+              ) : (
+                <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => setConfirming(true)} data-testid="unbind-im">
+                  解绑
+                </Button>
+              ))}
           </span>
         )}
       </td>

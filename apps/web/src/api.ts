@@ -183,6 +183,34 @@ export async function getRunFeedback(runId: string): Promise<FeedbackRow[]> {
   return (await r.json()) as FeedbackRow[];
 }
 
+// ── IM 绑定（spec #55 / #62 Web 自助发码 + admin 列表/兜底解绑）──
+export interface ImBinding {
+  imUserId: string;
+  platform: string;
+  userId: string; // 链到的 agentany 账号
+  createdAt: string;
+}
+
+/** 自助发码（已登录用户给自己）：4 位数字 + 10min TTL（服务端 ADR-0028 决策 2）。 */
+export async function issueBindCode(): Promise<{ code: string; expiresAt: string; ttlSeconds: number }> {
+  const r = await apiFetch("/im/bind-codes", { method: "POST" });
+  if (!r.ok) throw new Error(`issueBindCode: ${r.status}`);
+  return r.json();
+}
+
+/** 全量绑定（admin 只读——用户管理页绑定状态列用）。 */
+export async function listImBindings(): Promise<ImBinding[]> {
+  const r = await apiFetch("/im/bindings");
+  if (!r.ok) throw new Error(`listImBindings: ${r.status}`);
+  return ((await r.json()) as { bindings: ImBinding[] }).bindings;
+}
+
+/** 兜底解绑（admin；离职/异常场景）。 */
+export async function unbindIm(platform: string, imUserId: string): Promise<void> {
+  const r = await apiFetch(`/im/bindings/${encodeURIComponent(platform)}/${encodeURIComponent(imUserId)}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`unbindIm: ${r.status}`);
+}
+
 export async function getConversationFiles(conversationId: string): Promise<TaskFileGroup[]> {
   const r = await apiFetch(`/conversations/${conversationId}/files`);
   if (!r.ok) throw new Error(`getConversationFiles: ${r.status}`);

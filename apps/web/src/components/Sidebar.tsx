@@ -2,20 +2,24 @@
 // 契约类（e2e）：aside.conv-list / button.new / button.item——顺序 = updatedAt 倒序（组内）。
 // 切换/新建直接 navigate（URL 唯一真相——ChatPage params effect 单向驱动 store）。
 // #21/ADR-0020：item 悬浮菜单（member 归档；admin +删除确认）；底部「归档」折叠区（恢复/admin 删）。
+// #62：ADMIN_MENU 加「绑定飞书」——点击弹窗（自助发码 + 4 位码 + 倒计时；绑定成功→2s 自动关）+ 已绑定 tag。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ArchiveIcon, ArrowUUpLeftIcon, CaretDownIcon, CaretRightIcon, GearSixIcon, MagnifyingGlassIcon, PlusIcon, SignOutIcon, TrashIcon, XIcon } from "@phosphor-icons/react";
 import { COMPANY_WORKSPACE_ID, PAGE_SIZE, UNTITLED, useWorkspace } from "../store/workspace";
 import { useChat } from "../store/chat";
 import { useAuth, ROLE } from "../store/auth";
-import { listConversations, type ConversationRow, type Workspace } from "../api";
+import { listConversations, issueBindCode, listImBindings, type ConversationRow, type Workspace } from "../api";
+import { Dialog } from "./ui/dialog";
 
-/** 管理菜单（f4）：「所有 admin 管理项目」可扩展列表——M4 定时任务、M5 人审后续挂这。 */
+/** 管理菜单（f4）：「所有 admin 管理项目」可扩展列表——M4 定时任务、M5 人审后续挂这。
+ *  绑定飞书：#62——无独立路由（弹窗态），path 用 null 区分导航项。 */
 const ADMIN_MENU = [
   { path: "/admin/users", label: "用户" },
   { path: "/admin/workspaces", label: "Workspace" },
   { path: "/admin/tasks", label: "定时任务" },
 ] as const;
+const BIND_MENU_KEY = "bind-feishu";
 
 /**
  * 侧栏底部用户行（Kimi 式）：头像圈 + 昵称，hover/点击弹出向上菜单（管理/登出收入菜单）。
@@ -196,6 +200,7 @@ export function Sidebar() {
   const fallbackNav = useFallbackNav();
   const pathname = useLocation().pathname; // f4：Sidebar 双态（组件不卸载，只换中间内容）
   const adminMode = pathname.startsWith("/admin");
+  const [bindOpen, setBindOpen] = useState(false); // 绑定飞书弹窗（#62）
 
   // admin→chat 切回时刷新 ws 列表与已展开组（管理页建的 ws/归档/会话变动经此同步；
   // 首载由 ShellLayout load() 负责，这里只管「回来」）。prevRef 防 StrictMode 双跑。
@@ -231,6 +236,7 @@ export function Sidebar() {
               {m.label}
             </button>
           ))}
+          <BindFeishuMenuItem onOpen={() => setBindOpen(true)} />
         </div>
       ) : (
         <ConvAccordion isAdmin={isAdmin} current={current} loaded={loaded} fallbackNav={fallbackNav} />
@@ -238,8 +244,115 @@ export function Sidebar() {
 
       {/* 底部用户行（Kimi 式）：头像 + 昵称，hover 弹菜单（管理/登出） */}
       <UserFooter isAdmin={isAdmin} />
+
+      {/* 绑定飞书弹窗（#62）：自助发码 → 飞书 #bind → 轮询检测成功 → 2s 自动关 */}
+      <BindFeishuDialog open={bindOpen} onClose={() => setBindOpen(false)} />
     </aside>
   );
+}
+
+/** 菜单项：绑定飞书（#62）——已绑定显 tag；点击开弹窗（无导航路由）。 */
+function BindFeishuMenuItem({ onOpen }: { onOpen: () => void }) {
+  const bound = useFeishuBound();
+  return (
+    <button
+      key={BIND_MENU_KEY}
+      className="item flex items-center justify-between rounded-md px-3 py-1.5 text-left text-sm text-foreground hover:bg-accent"
+      onClick={onOpen}
+      data-testid="bind-feishu"
+    >
+      <span>绑定飞书</span>
+      {bound && <span className="rounded-sm bg-emerald-600/15 px-1.5 py-0.5 text-[10px] text-emerald-600" data-testid="bind-feishu-tag">已绑定</span>}
+    </button>
+  );
+}
+
+/** 当前用户是否已绑定飞书（弹窗打开/成功/poll 用；查一次缓存到组件卸载）。 */
+function useFeishuBound(): boolean {
+  const user = useAuth((s) => s.user);
+  const [bound, setBound] = useState(false);
+  // 首次加载 + user 到位后查（匿名 dev 也查——imStore 空则 false）
+  useEffect(() => {
+    let alive = true;
+    void listImBindings()
+      .then((bs) => { if (alive && user) setBound(bs.some((b) => b.userId === user.id && b.platform === "feishu")); })
+      .catch(() => { /* im 未接线（503）→ 未绑定 */ });
+    return () => { alive = false; };
+  }, [user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  return bound;
+}
+
+/**
+ * 绑定飞书弹窗（#62）：打开即自助发码（4 位数字 + 10min）→ 飞书私聊 `#bind <码>` →
+ * 轮询 bindings 检测本用户已绑 → 切换「绑定成功」态 → 2s 自动关闭。
+ * 倒计时到期 → 码失效，自动重发新码（服务端旧码 TTL 兜底，无竞态）。
+ */
+function BindFeishuDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const user = useAuth((s) => s.user);
+  const [code, setCode] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now()); // 受控时钟：倒计时推进也驱动重发判定
+  const [bound, setBound] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // 打开：发码 + 拉时钟（首次即判断是否已绑）
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setBound(false); setErr(null);
+    const boot = () => {
+      if (!alive) return;
+      void listImBindings().then((bs) => {
+        if (user && bs.some((b) => b.userId === user.id && b.platform === "feishu")) { setBound(true); return; }
+        return issueBindCode().then((d) => { if (alive) { setCode(d.code); setExpiresAt(d.expiresAt); setNow(Date.now()); } });
+      }).catch(() => setErr("飞书未接线（服务端缺凭证）"));
+    };
+    boot();
+    const poll = setInterval(boot, 3000); // 3s 轮询：检测绑定成功 + TTL 到期重发
+    return () => { alive = false; clearInterval(poll); };
+  }, [open, user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 绑定成功 → 2s 自动关闭
+  useEffect(() => {
+    if (!bound) return;
+    const t = setTimeout(onClose, 2000);
+    return () => clearTimeout(t);
+  }, [bound, onClose]);
+
+  // 倒计时每秒推进（仅网关态；过期由 poll 3s 重发）
+  useEffect(() => {
+    if (!open || bound || !expiresAt) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [open, bound, expiresAt]);
+
+  return (
+    <Dialog open={open} onClose={onClose} title="绑定飞书">
+      {bound ? (
+        <p className="text-sm text-emerald-600" data-testid="bind-success">已绑定飞书，卡片将推送到您的飞书。</p>
+      ) : code && expiresAt ? (
+        <div className="flex flex-col gap-2 text-sm">
+          <p className="text-muted-foreground">在飞书私聊机器人发送：</p>
+          <p className="rounded-md bg-muted px-2 py-1.5 font-mono text-xs" data-testid="bind-command">#bind {code}</p>
+          <p className="text-[11px] text-muted-foreground" data-testid="bind-countdown">
+            码有效期：{formatCountdown(expiresAt, now)}
+          </p>
+          {err && <p className="text-xs text-destructive">{err}</p>}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">{err ?? "加载中…"}</p>
+      )}
+    </Dialog>
+  );
+}
+
+/** 倒计时：X 分 X 秒；过期 → 「已过期，正在重新获取…」（时钟仅每秒由 countdown 状态驱动）。 */
+function formatCountdown(expiresAt: string, now: number): string {
+  const remain = Math.max(0, Math.ceil((new Date(expiresAt).getTime() - now) / 1000));
+  if (remain <= 0) return "已过期，正在自动重发…";
+  const m = Math.floor(remain / 60);
+  const s = remain % 60;
+  return `${m}分${String(s).padStart(2, "0")}秒`;
 }
 
 /**

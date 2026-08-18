@@ -24,6 +24,7 @@ export default defineConfig({
       "/workspaces": BACKEND, // f2 会话列表按 ws 分组（GET /workspaces）
       "/scheduled-tasks": BACKEND, // #31 定时任务管理面（REST）
       "/files": BACKEND, // #30 产出文件预览/下载
+      "/im": BACKEND, // #62 自助绑定（POST /im/bind-codes 发码；admin /im/bindings）
     },
   },
 });
