@@ -54,10 +54,10 @@ const newUser = async (u: string) => { await ctx.userStore.createUser({ username
 describe("绑定码存储（issue/consume 生命周期）", () => {
   const mkUser = async (u: string) => { await ctx.userStore.createUser({ username: u, password: "pw-long-enough", role: "member" }); return ctx.userStore.getUserByUsername(u)!; };
 
-  test("issue：高熵 + 10min TTL", async () => {
+  test("issue：4 位数字 + 10min TTL", async () => {
     const u = await mkUser("u");
     const { code, expiresAt } = ctx.deps.imStore!.issueBindCode(u.id);
-    expect(code.length).toBeGreaterThanOrEqual(32); // 128-bit hex
+    expect(code).toMatch(/^\d{4}$/); // 4 位数字（短码易打；TTL+单次消费兜底）
     const ttl = new Date(expiresAt).getTime() - Date.now();
     expect(ttl).toBeGreaterThan(BIND_CODE_TTL_MS - 2000);
     expect(ttl).toBeLessThanOrEqual(BIND_CODE_TTL_MS);
@@ -93,15 +93,17 @@ describe("绑定码存储（issue/consume 生命周期）", () => {
 });
 
 describe("parseImCommand（#bind/#unbind 语法）", () => {
-  test("#bind <code> → {kind:bind,code}；空白容忍", () => {
-    expect(parseImCommand("#bind abc123")).toEqual({ kind: "bind", code: "abc123" });
-    expect(parseImCommand("  #bind   xyz  ")).toEqual({ kind: "bind", code: "xyz" });
+  test("#bind <4位数字> → {kind:bind,code}；空白容忍", () => {
+    expect(parseImCommand("#bind 4821")).toEqual({ kind: "bind", code: "4821" });
+    expect(parseImCommand("  #bind   0007  ")).toEqual({ kind: "bind", code: "0007" });
   });
-  test("非命令 / 无码 #bind / 超长码 → null", () => {
+  test("非命令 / 无码 / 非 4 位数字（字母、长短）→ null", () => {
     expect(parseImCommand("hello")).toBeNull();
     expect(parseImCommand("#bind")).toBeNull();
     expect(parseImCommand("#bind ")).toBeNull();
-    expect(parseImCommand("#bind " + "a".repeat(65))).toBeNull();
+    expect(parseImCommand("#bind 12")).toBeNull(); // 太短
+    expect(parseImCommand("#bind 12345")).toBeNull(); // 太长
+    expect(parseImCommand("#bind ab12")).toBeNull(); // 字母
   });
   test("#unbind 精确匹配", () => {
     expect(parseImCommand("#unbind")).toEqual({ kind: "unbind" });

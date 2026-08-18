@@ -123,7 +123,7 @@ describe("imBindings 管理（admin）+ resolve 幂等", () => {
     const issue = await ctx.app.request("/im/bind-codes", { method: "POST", headers: { authorization: mt } });
     expect(issue.status).toBe(200);
     const { code, expiresAt } = await issue.json() as { code: string; expiresAt: string };
-    expect(code.length).toBeGreaterThanOrEqual(32); // 高熵
+    expect(code).toMatch(/^\d{4}$/); // 4 位数字短码
     expect(new Date(expiresAt).getTime()).toBeGreaterThan(Date.now());
     // 消费 → 绑定成立 → admin 列表 + 兜底解绑
     expect(ctx.deps.imStore!.consumeBindCode(code)!.userId).toBe(ctx.userStore.getUserByUsername("m1")!.id);

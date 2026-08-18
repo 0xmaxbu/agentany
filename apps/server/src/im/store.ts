@@ -3,7 +3,7 @@
 // 与 auth/store.ts、workspaces/store.ts 同模式：独立小 store，共享 db（tests: openDbMigrated 同实例）。
 import { and, eq, gt, isNull } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";
-import { randomBytes } from "node:crypto";
+import { randomInt } from "node:crypto";
 import { imBindings, imBindCodes, users } from "../db/schema";
 
 export const BIND_CODE_TTL_MS = 10 * 60 * 1000; // ~10min（spec：#bind 时效窗口）
@@ -71,9 +71,9 @@ export class ImStore {
 
   // ── 绑定码（spec #55/T5）──
 
-  /** 领码：高熵（128-bit hex）+ TTL。返 {code, expiresAt}。 */
+  /** 领码：4 位数字（短码易打——绑定窗口靠 TTL 10min + 单次消费兜底，攻防在短窗口内可枚举/撞库，故不设高熵）。 */
   issueBindCode(userId: string, ttlMs: number = BIND_CODE_TTL_MS): { code: string; expiresAt: string } {
-    const code = randomBytes(16).toString("hex"); // 128-bit——枚举/预测成本远超 TTL 窗口
+    const code = String(randomInt(0, 10000)).padStart(4, "0"); // 0000–9999
     const createdAt = now();
     const expiresAt = new Date(Date.now() + ttlMs).toISOString();
     this.db.insert(imBindCodes).values({ code, userId, createdAt, expiresAt }).run();
