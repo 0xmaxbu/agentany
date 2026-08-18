@@ -1,5 +1,5 @@
 // IM 身份绑定存储（spec #49 决策 6 + #55/T5）：imBindings 表 CRUD——绑定 + 幂等解析；
-// im_bind_codes 绑定码（T5 自助绑定凭据）——单次消费（usedAt CAS）+ TTL（expiresAt）+ 高熵。
+// im_bind_codes 绑定码（T5 自助绑定凭据）——4 位数字短码 + 单次消费（usedAt CAS）+ TTL（expiresAt）兜底。
 // 与 auth/store.ts、workspaces/store.ts 同模式：独立小 store，共享 db（tests: openDbMigrated 同实例）。
 import { and, eq, gt, isNull } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";

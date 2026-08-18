@@ -81,7 +81,7 @@ function setup(streamCtor: (deps: RunDeps, log: { calls: number }) => Configured
   const lc = new FeishuLongConnection({
     appId: "cli_x", appSecret: "s", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app),
     onEvent: (p) => { void inbound(p).catch(console.error); },
-    onCard: (p) => handleCardAction(deps, p, pending),
+    onCard: (p) => handleCardAction(deps, p, pending, (openId, content) => transport.send(openId, { text: content })),
     pingIntervalMs: 40, log: () => {},
   });
   return { db, store, userStore, eventBus, queues, deps, fake, transport, inbound, lc, pending, log };
@@ -182,11 +182,13 @@ describe("e2e：两卡并存 → 选择卡 → 点选判答", () => {
     const buttons: any[] = selector.body.elements.filter((e: any) => e.tag === "button");
     expect(buttons.map((b) => b.behaviors[0].value.selectQuestionId)).toEqual([q1, q2]);
 
-    // 点选第 2 张（q2）→ 缓存文本「不超过 10 万」判答 q2 → 收口 + 更新卡/toast
+    // 点选第 2 张（q2）→ ack 立即「已收到」（3s 窗内不跑 LLM）→ 异步判答收口 → 回执文本「已处理」
     const { ack } = await ctx.fake.pushCardAction(selEvent("ou_1", q2));
+    expect((ack.data as any).toast).toEqual({ type: "info", content: "已收到，正在处理…" });
     await delayUntil(() => ctx.store.getQuestion(q2)!.status === "answered", 3000);
-    expect((ack.data as any).toast.content).toBe("已处理");
     expect(ctx.store.getQuestion(q2)!.status).toBe("answered");
+    await delayUntil(() => ctx.fake.state.sent.some((s) => s.msgType === "text" && (s.content as any)?.text === "已处理"), 3000);
+    expect(ctx.fake.state.sent.some((s) => s.msgType === "text" && (s.content as any)?.text === "已处理")).toBe(true); // 异步回执经独立 send 通道
     // 缓存已消费：再点另一张（q1）→ 过期提示（旧选卡已失效）
     const { ack: ack2 } = await ctx.fake.pushCardAction(selEvent("ou_1", q1));
     expect((ack2.data as any).toast.content).toContain("过期");
@@ -210,13 +212,15 @@ describe("e2e：两卡并存 → 选择卡 → 点选判答", () => {
     await delayUntil(() => ctx.store.getQuestion(q2)!.status === "answered", 3000);
     const [ra, rb] = await Promise.all([a, b]);
     expect(ctx.store.getQuestion(q2)!.status).toBe("answered"); // 恰 1 次收口（DB CAS）
-    const toasts = [ra.ack.data, rb.ack.data].map((d: any) => (d as any)?.toast).filter(Boolean);
-    expect(toasts.every((t: any) => t.content === "已处理" || t.content === "该卡已被处理")).toBe(true); // 无 error 分支
-    expect(toasts.some((t: any) => t.content === "已处理")).toBe(true);
+    // 两发 ack 都即时且无 error（幂等分支：首发「已收到」/后发「该卡已被处理」）；回执「已处理」恰达一次（CAS 单收口）
+    const toasts = [ra.ack.data, rb.ack.data].map((d: any) => (d as any)?.toast).filter(Boolean).map((t: any) => t.content);
+    expect(toasts.every((t: any) => t === "已收到，正在处理…" || t === "该卡已被处理")).toBe(true);
+    expect(toasts.some((t: any) => t === "已收到，正在处理…")).toBe(true);
+    expect(ctx.fake.state.sent.filter((s) => s.msgType === "text" && (s.content as any)?.text === "已处理")).toHaveLength(1);
     ctx.lc.stop(); ctx.fake.close();
   });
 
-  test("归一化失败（判答不落 answered）→ 「暂时无法据此推进」toast + 卡 pending + 缓存保留可重试", async () => {
+  test("归一化失败（判答不落 answered）→ ack「已收到」+ 回执「暂时无法据此推进」 + 卡 pending + 缓存保留可重试", async () => {
     const fail = setup(makeFailStream);
     const m1 = await (async () => { if (!fail.userStore.getUserByUsername("m")) await fail.userStore.createUser({ username: "m", password: "pw-long-enough", role: "member" }); return fail.userStore.getUserByUsername("m")!; })();
     fail.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
@@ -229,8 +233,8 @@ describe("e2e：两卡并存 → 选择卡 → 点选判答", () => {
     await delayUntil(() => fail.fake.state.sent.some((s) => s.msgType === "interactive"), 2000);
 
     const { ack } = await fail.fake.pushCardAction(selEvent("ou_1", q1));
-    await delay(100);
-    expect((ack.data as any).toast.content).toContain("暂时无法据此推进");
+    expect((ack.data as any).toast.content).toBe("已收到，正在处理…"); // 3s 窗即时 ack
+    await delayUntil(() => fail.fake.state.sent.some((s) => s.msgType === "text" && (s.content as any)?.text.includes("暂时无法据此推进")), 3000);
     expect(fail.store.getQuestion(q1)!.status).toBe("pending"); // 未收口
     expect(fail.pending.get("ou_1")).toBe("十 万"); // 缓存保留 → 可重试
     fail.lc.stop(); fail.fake.close();

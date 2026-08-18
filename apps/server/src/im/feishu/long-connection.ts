@@ -16,6 +16,7 @@ import {
   MSG_TYPE_EVENT, MSG_TYPE_CARD, MSG_TYPE_PING, MSG_TYPE_PONG,
   type Pbbp2Frame,
 } from "./pbbp2";
+import { larkEventTypeOf } from "./events";
 
 const DEFAULT_BASE_URL = "https://open.feishu.cn";
 const ENDPOINT_PATH = "/callback/ws/endpoint";
@@ -258,7 +259,7 @@ export class FeishuLongConnection {
       // → 事件帧先取 event_type：卡片回调 → 走 handleCard（先处理 + 带 data 的 ack）；其余事件 → 立即 ack + 异步 onEvent。
       let eventType: string | undefined;
       try {
-        eventType = ((JSON.parse(new TextDecoder().decode(payload)) as { header?: { event_type?: string } })?.header?.event_type);
+        eventType = larkEventTypeOf(JSON.parse(new TextDecoder().decode(payload)));
       } catch { /* 解析失败 → 按普通事件处理 */ }
       if (eventType === "card.action.trigger") {
         void this.handleCard(ackIdent, payload, msStart);

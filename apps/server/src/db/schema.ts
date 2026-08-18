@@ -179,7 +179,7 @@ export const imBindings = sqliteTable(
 );
 
 // 绑定码（spec #55/T5）：自助绑定的一次性凭据——Web 领码 → 私聊 bot `#bind <code>` 把 open_id 链到 Web 账号。
-// code 高熵随机（128-bit），consumed（usedAt 非空）即失效，expiresAt 兜超时（~10min）。
+// code 4 位数字（短码易打；ADR-0028 决策 2——安全靠 TTL 10min + 单次消费兜底，非高熵）。
 // 消费 = CAS 单次（usedAt IS NULL AND expiresAt > now → 置 usedAt），重放被拒。
 export const imBindCodes = sqliteTable(
   "im_bind_codes",

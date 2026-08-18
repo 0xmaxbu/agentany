@@ -10,7 +10,8 @@ import type { RunDeps } from "../../runs";
 import type { IMPlatform } from "../transport";
 import { handleImInbound } from "../inbound";
 import { parseImCommand, type ImCommand } from "../commands";
-import { renderImCard, renderSelectCard, cardOptionsOf } from "../card";
+import { renderImCard, renderSelectCard, cardInputOf } from "../card";
+import { larkEventOf } from "./events";
 import type { PendingTextCache } from "../pending-text";
 
 export interface FeishuTextInbound {
@@ -20,16 +21,16 @@ export interface FeishuTextInbound {
 
 /** 事件 payload → {openId,text}；非文本 / 群聊 / 缺字段 → null。纯函数，单测直测。 */
 export function mapFeishuEvent(payload: unknown): FeishuTextInbound | null {
-  const ev = (payload as { event?: Record<string, any> }).event;
-  const msg = ev?.message as any;
+  const ev = larkEventOf(payload);
+  const msg = (ev as { message?: Record<string, unknown> } | undefined)?.message;
   if (!msg) return null;
   if (msg.chat_type !== "p2p") return null; // 群聊一律忽略（v1；@ 也不处理）
   if (msg.message_type !== "text") return null; // 只回流纯文本
-  const openId = (ev?.sender as any)?.sender_id?.open_id;
+  const openId = (ev?.sender as { sender_id?: { open_id?: string } } | undefined)?.sender_id?.open_id;
   if (!openId) return null;
   let text: string | undefined;
   try {
-    text = (JSON.parse(msg.content) as { text?: string })?.text;
+    text = (JSON.parse(String(msg.content ?? "")) as { text?: string })?.text;
   } catch { return null; } // content 不是合法 JSON
   if (!text) return null;
   return { openId, text };
@@ -75,7 +76,7 @@ async function handleFeishuCommand(deps: RunDeps, platform: IMPlatform, openId: 
   // 成功 → 一次性补发全部存量 pending 卡（素材与出站路由同源 cardOptionsOf；uuid 同路由幂等键）
   const pendings = deps.store.listPendingCardsForUser(claimed.userId);
   for (const q of pendings) {
-    const card = renderImCard({ questionId: q.id, kind: (q.kind ?? "ask") as "ask" | "approval" | "task", prompt: q.prompt, options: cardOptionsOf(q), resumeSchema: q.resumeSchema });
+    const card = renderImCard(cardInputOf(q));
     await platform.send(openId, { cardJson: card }, { uuid: `${q.id}:hitl_request` })
       .catch((e: unknown) => console.warn(`[im-bind] 补发卡 ${q.id} 失败：`, e instanceof Error ? e.message : e));
   }

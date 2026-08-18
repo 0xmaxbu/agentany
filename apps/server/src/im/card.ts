@@ -41,6 +41,16 @@ export function cardOptionsOf(q: { values?: unknown; options?: unknown }): ImCar
   return ((q.options as string[]) ?? []).map((label) => ({ label, value: label }));
 }
 
+/** question 行 → 渲染输入（kind 归一化 + 素材同源）。T3 路由/绑定补发/已答渲染共用——避免 kind 归一化散三处。 */
+export function cardInputOf(q: { id: number; kind?: string | null; prompt: string; values?: unknown; options?: unknown; resumeSchema?: unknown }): ImCardInput {
+  return { questionId: q.id, kind: (q.kind ?? "ask") as "ask" | "approval" | "task", prompt: q.prompt, options: cardOptionsOf(q), resumeSchema: q.resumeSchema };
+}
+
+/** lark_md div（Card 2.0 文本块；1.0 的 note 已废弃——live smoke 修复，与 prompt 同形）。 */
+export function larkMdDiv(content: string): unknown {
+  return { tag: "div", text: { tag: "lark_md", content } };
+}
+
 /** footer 开面：仅 ask 卡且 schema 开放时显文本作答邀请——approval/task 文本不放行（恒按钮面，不误导）。 */
 export function isTextOk(input: Pick<ImCardInput, "kind" | "resumeSchema">): boolean {
   return input.kind === "ask" && !isClosedChoice(input.resumeSchema);
@@ -50,9 +60,7 @@ export function isTextOk(input: Pick<ImCardInput, "kind" | "resumeSchema">): boo
  *  按钮直接铺 body.elements（tag:"button"）——live smoke 修复：Card 2.0 已废弃 1.0 的 action 容器（真飞书拒收）。 */
 export function renderImCard(input: ImCardInput): unknown {
   const title = KIND_TITLES[input.kind] ?? "提问";
-  const footer: unknown[] = isTextOk(input) ? [
-    { tag: "div", text: { tag: "lark_md", content: FOOTER_OPEN_HINT } }, // note 已废弃（Card 2.0 breaking）；与 prompt 同形 div（live smoke 验证通过）
-  ] : [];
+  const footer: unknown[] = isTextOk(input) ? [larkMdDiv(FOOTER_OPEN_HINT)] : [];
   const buttons: unknown[] = input.options.map((o) => ({
     tag: "button",
     text: { tag: "plain_text", content: o.label },
@@ -61,13 +69,7 @@ export function renderImCard(input: ImCardInput): unknown {
   return {
     schema: "2.0",
     header: { title: { tag: "plain_text", content: title } },
-    body: {
-      elements: [
-        { tag: "div", text: { tag: "lark_md", content: input.prompt } },
-        ...buttons,
-        ...footer,
-      ],
-    },
+    body: { elements: [larkMdDiv(input.prompt), ...buttons, ...footer] },
   };
 }
 
@@ -77,12 +79,7 @@ export function renderAnsweredCard(input: ImCardInput): unknown {
   return {
     schema: "2.0",
     header: { title: { tag: "plain_text", content: title } },
-    body: {
-      elements: [
-        { tag: "div", text: { tag: "lark_md", content: input.prompt } },
-        { tag: "div", text: { tag: "lark_md", content: "✅ 已处理" } }, // note 已废弃（Card 2.0 breaking）；同形 div
-      ],
-    },
+    body: { elements: [larkMdDiv(input.prompt), larkMdDiv("✅ 已处理")] }, // note 已废弃（Card 2.0 breaking）；同形 div
   };
 }
 
@@ -95,7 +92,7 @@ export function renderSelectCard(candidates: { questionId: number; prompt: strin
     header: { title: { tag: "plain_text", content: "多张待处理卡片" } },
     body: {
       elements: [
-        { tag: "div", text: { tag: "lark_md", content: "收到您的回答，但有多张卡片待处理。请点击您要回答的那张：" } },
+        larkMdDiv("收到您的回答，但有多张卡片待处理。请点击您要回答的那张："),
         ...candidates.map((c) => ({
           tag: "button",
           text: { tag: "plain_text", content: truncatePrompt(c.prompt) }, // 仅 prompt（不展开选项明细分）

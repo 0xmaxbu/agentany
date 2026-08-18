@@ -9,8 +9,9 @@
 import type { RunDeps } from "../../runs";
 import type { QuestionRow } from "../../workflow-engine/store";
 import { dispatchCardAnswer } from "../../chat/hitl-dispatch";
-import { renderAnsweredCard } from "../card";
+import { cardInputOf, renderAnsweredCard } from "../card";
 import { judgeAskCard } from "../inbound";
+import { larkEventOf, larkOperatorOpenId } from "./events";
 import type { PendingTextCache } from "../pending-text";
 
 export interface CardActionInput {
@@ -21,20 +22,18 @@ export interface CardActionInput {
 
 /** card.action.trigger 事件 → {questionId, value, openId}；value 缺/类型错/无操作者 → null。纯函数单测直测。 */
 export function mapCardAction(payload: unknown): CardActionInput | null {
-  const ev = (payload as { event?: Record<string, any> }).event;
-  const value = ev?.action?.value;
+  const value = (larkEventOf(payload) as { action?: { value?: unknown } } | undefined)?.action?.value as { questionId?: unknown; value?: unknown } | null | undefined;
   if (!value || typeof value.questionId !== "number" || typeof value.value !== "string") return null;
-  const openId = ev?.operator?.open_id;
+  const openId = larkOperatorOpenId(payload);
   if (!openId) return null;
   return { questionId: value.questionId, value: value.value, openId };
 }
 
 /** 选择卡点击（T6）：value = { selectQuestionId } → {questionId, openId}；缺/类型错 → null。 */
 export function mapSelectAction(payload: unknown): { questionId: number; openId: string } | null {
-  const ev = (payload as { event?: Record<string, any> }).event;
-  const value = ev?.action?.value;
+  const value = (larkEventOf(payload) as { action?: { value?: unknown } } | undefined)?.action?.value as { selectQuestionId?: unknown } | null | undefined;
   if (!value || typeof value.selectQuestionId !== "number") return null;
-  const openId = ev?.operator?.open_id;
+  const openId = larkOperatorOpenId(payload);
   if (!openId) return null;
   return { questionId: value.selectQuestionId, openId };
 }
@@ -46,18 +45,21 @@ const SUCCESS_MSG: Record<string, string> = { ask: "已处理", approval: "已�
 export function answeredCardRsp(q: QuestionRow, toastText: string, toastType: "success" | "info" | "error" = "success"): unknown {
   return {
     toast: { type: toastType, content: toastText },
-    card: {
-      type: "raw",
-      data: renderAnsweredCard({ questionId: q.id, kind: (q.kind ?? "ask") as "ask" | "approval" | "task", prompt: q.prompt, options: [] }),
-    },
+    card: { type: "raw", data: renderAnsweredCard(cardInputOf(q)) },
   };
 }
 
 /** 卡回调 → 响应（更新卡+toast）。按 value 形态路由：普通问答卡 / 选择卡（selectQuestionId，T6）。
- *  返回 undefined = 不认识的卡 action（ack 200 无 data，服务器视为空响应）。pending = 选择卡待确认文本缓存（入站写/此处读，同实例）。 */
-export async function handleCardAction(deps: RunDeps, payload: unknown, pending?: PendingTextCache): Promise<unknown | undefined> {
+ *  返回 undefined = 不认识的卡 action（ack 200 无 data，服务器视为空响应）。textPending = 选择卡待确认文本缓存（入站写/此处读，同实例）。
+ *  sendText：独立出站通道（spec「回复经独立 send 通道，不与 ack 阻塞」）——仅选择卡判答异步用（LLM 归一化可能 >3s）。 */
+export async function handleCardAction(
+  deps: RunDeps,
+  payload: unknown,
+  textPending?: PendingTextCache,
+  sendText?: (openId: string, content: string) => Promise<unknown>,
+): Promise<unknown | undefined> {
   const sel = mapSelectAction(payload);
-  if (sel) return handleSelectAnswer(deps, pending, sel);
+  if (sel) return handleSelectAnswer(deps, textPending, sel, sendText);
   const m = mapCardAction(payload);
   if (!m) return undefined;
   const user = deps.imStore?.resolve(m.openId, "feishu");
@@ -74,25 +76,37 @@ export async function handleCardAction(deps: RunDeps, payload: unknown, pending?
   return answeredCardRsp(q, SUCCESS_MSG[q.kind ?? "ask"] ?? "已处理");
 }
 
-/** 选择卡点选 → 取缓存文本 → 对所选卡走单卡判答（judgeAskCard）+ CAS。成功消费缓存；失败保缓存供重试。 */
+/** 选择卡点选 → 取缓存文本 → 异步对所选卡走单卡判答（judgeAskCard）+ CAS（不在 3s ack 窗内跑 LLM 轮）。
+ *  立即 ack「已收到」→ 判答完成经 sendText 回执；成功消费缓存，失败保缓存供重试。 */
 async function handleSelectAnswer(
-  deps: RunDeps, pending: PendingTextCache | undefined,
+  deps: RunDeps,
+  textPending: PendingTextCache | undefined,
   sel: { questionId: number; openId: string },
+  sendText?: (openId: string, content: string) => Promise<unknown>,
 ): Promise<unknown> {
   const user = deps.imStore?.resolve(sel.openId, "feishu");
   if (!user) return { toast: { type: "error", content: "请先在 Web 绑定飞书后再操作" } };
   const q = deps.store.getQuestion(sel.questionId);
   if (!q) return { toast: { type: "error", content: "卡已失效" } };
   if (q.status !== "pending") return answeredCardRsp(q, "该卡已被处理", "info"); // 已被并发处理 → 明确收口
-  if (!pending) return { toast: { type: "error", content: "选择卡未就绪，请重新输入回答" } };
-  const text = pending.get(sel.openId);
+  if (!textPending) return { toast: { type: "error", content: "选择卡未就绪，请重新输入回答" } };
+  const text = textPending.get(sel.openId);
   if (!text) return { toast: { type: "error", content: "待回答的文本已过期，请重新输入回答" } }; // TTL 过/无缓存
-  const res = await judgeAskCard(deps, q, text); // 判答 = 文本归一化（卡转 answered 才算成功）
-  const after = deps.store.getQuestion(sel.questionId);
-  if (!after || after.status !== "answered") {
-    // 归一化失败（卡未转 answered）→ 提示重试，缓存保留
-    return { toast: { type: "error", content: "暂时无法据此推进，请重试或点选卡片选项" } };
-  }
-  pending.del(sel.openId); // 成功消费（下次打字再起新选择）
-  return answeredCardRsp(q, "已处理");
+  // 判答异步（LLM 轮可能 >3s，不进 ack 窗口；飞书 3s 无响应会重推 → CAS 幂等）。结果经 sendText 回执。
+  void (async () => {
+    try {
+      await judgeAskCard(deps, q, text);
+      const after = deps.store.getQuestion(sel.questionId);
+      if (!after || after.status !== "answered") {
+        await sendText?.(sel.openId, "暂时无法据此推进，请重试或点选卡片选项"); // 归一化失败，缓存保留
+        return;
+      }
+      textPending.del(sel.openId); // 成功消费（下次打字再起新选择）
+      await sendText?.(sel.openId, "已处理");
+    } catch (e) {
+      console.warn(`[im-select] 选择卡判答 q${sel.questionId} 失败：`, e instanceof Error ? e.message : e);
+      await sendText?.(sel.openId, "暂时无法据此推进，请重试或点选卡片选项");
+    }
+  })();
+  return { toast: { type: "info", content: "已收到，正在处理…" } };
 }
