@@ -35,6 +35,8 @@ export interface TurnOptions {
   appendSystemPrompt?: string[];
   /** true=不发 bridge nonce、沙箱不放行 loopback（review-c4：任务 pi 无交互通道——nonce 落地即被 bash curl 可用）。 */
   noBridge?: boolean;
+  /** #61/T6 消歧聚焦：仅注入这一张 pending ask（选择卡点选后判答不再撞其它卡）。 */
+  focusQuestionId?: number;
 }
 
 export async function runTurn(
@@ -66,6 +68,7 @@ export async function runTurn(
     })),
     // #35：三层经验之 global+member 注入 chat turn（member 按会话归属成员；任务 turn 在 execute.ts 只注 global）
     experience: collectExperience(conv.userId),
+    ...(opts?.focusQuestionId !== undefined ? { focusQuestionId: opts.focusQuestionId } : {}),
   });
   let result;
   try {

@@ -191,8 +191,7 @@ describe("入站 · 有 pending ask 卡 → 内联 turn 判答收口", () => {
     ctx.conv("c1", m1.id);
     ctx.conv("c2", m1.id);
     ctx.deps.imStore!.bind("tg-1", "telegram", m1.id);
-    // 先建旧 ask 卡（低 id）验证取「最新 pending」→ 落在后建的 c2 run 绑定卡
-    ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "旧澄清", options: ["旧A"] });
+    // T6 口径：唯一 ask 卡 → 按其 conversation_id（c2）判答（不再有「旧 ask」干扰——多 ask 才走选择卡）
     // 手动挂起态（synthetic-3step review 契约）：run + 挂起卡
     const runId = "r_pending";
     ctx.store.createRun({ runId, workflowId: "synthetic-3step", workspaceId: "ws_company", conversationId: "c2", input: {} });
@@ -247,20 +246,31 @@ describe("入站 · 有 pending ask 卡 → 内联 turn 判答收口", () => {
   });
 });
 
-// ── 决策 2/5：最新 pending（kind 不限）→ 决策层分流 ──
-describe("决策 2/5：查最新 pending（kind 不限），kind 分流在决策层", () => {
-  test("旧 ask + 新 approval 并存 → 取最新 pending=approval → 只提示去 Web/App，不答旧 ask", async () => {
+// ── T6：扫全部 pending ask 卡；kind 拦截只在「0 张 ask」时生效 ──
+describe("T6 决策：扫全部 ask 卡三分支（kind 拦截仅 0 ask 时）", () => {
+  test("0 张 ask（纯 approval/task）→ 最新 approval/task → 只提示去 Web/App（决策 5 保留）", async () => {
+    await ctx.newUser("m1");
+    const m1 = ctx.userStore.getUserByUsername("m1")!;
+    ctx.conv("c1", m1.id);
+    ctx.deps.imStore!.bind("tg-1", "telegram", m1.id);
+    ctx.store.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "审批", options: ["批准", "拒绝"] });
+    ctx.store.createQuestion({ conversationId: "c1", runId: null, kind: "task", prompt: "建任务", options: ["确认", "取消"], input: {} }); // 后建 → 最新 pending
+    const r = await handleImInbound(ctx.deps, { imUserId: "tg-1", platform: "telegram", text: "确认" });
+    expect(r.status).toBe("discarded");
+    expect(r.reply).toContain("Web/App"); // 提示去确定性通道
+    expect(ctx.log.calls).toBe(0);
+  });
+
+  test("1 张 ask + 新 approval 并存 → T6 口径：有 ask 即可答 ask（approval 是按钮通道不拦文本）", async () => {
     await ctx.newUser("m1");
     const m1 = ctx.userStore.getUserByUsername("m1")!;
     ctx.conv("c1", m1.id);
     ctx.deps.imStore!.bind("tg-1", "telegram", m1.id);
     const askQid = ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "旧澄清", options: ["旧A"] });
-    ctx.store.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "新审批", options: ["批准", "拒绝"] }); // 后建 → 更高 id = 最新 pending
+    ctx.store.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "新审批", options: ["批准", "拒绝"] });
     const r = await handleImInbound(ctx.deps, { imUserId: "tg-1", platform: "telegram", text: "旧A" });
-    expect(r.status).toBe("discarded"); // 最新 pending 是 approval → 不放行文本回流
-    expect(r.reply).toContain("审批");
-    expect(ctx.store.getQuestion(askQid)!.status).toBe("pending"); // 旧 ask 未被误答
-    expect(ctx.log.calls).toBe(0);
+    expect(r.status).toBe("processed"); // ask 卡是文本可应答对象 → 直接判答
+    expect(ctx.store.getQuestion(askQid)!.status).toBe("answered");
   });
 });
 

@@ -10,7 +10,8 @@ import type { RunDeps } from "../../runs";
 import type { IMPlatform } from "../transport";
 import { handleImInbound } from "../inbound";
 import { parseImCommand, type ImCommand } from "../commands";
-import { renderImCard, cardOptionsOf } from "../card";
+import { renderImCard, renderSelectCard, cardOptionsOf } from "../card";
+import type { PendingTextCache } from "../pending-text";
 
 export interface FeishuTextInbound {
   openId: string;
@@ -35,8 +36,9 @@ export function mapFeishuEvent(payload: unknown): FeishuTextInbound | null {
 }
 
 /** 组合回流入站：事件 → 命令层（#bind/#unbind）或文本回流 → 命中回发到发送者 open_id。
- *  未绑定用户：命令 → 有回执（引导）；普通文本 → handleImInbound 静默丢弃（永不影响会话）。 */
-export function makeFeishuInbound(deps: RunDeps, platform: IMPlatform): (payload: unknown) => Promise<void> {
+ *  未绑定用户：命令 → 有回执（引导）；普通文本 → handleImInbound 静默丢弃（永不影响会话）。
+ *  textPending = 选择卡待确认文本缓存（与卡回调 handleCardAction 共享同一实例）。 */
+export function makeFeishuInbound(deps: RunDeps, platform: IMPlatform, textPending?: PendingTextCache): (payload: unknown) => Promise<void> {
   return async (payload: unknown) => {
     const r = mapFeishuEvent(payload);
     if (!r) return; // 非文本/群聊/缺字段 → no-op（长连接仍已 ack）
@@ -46,8 +48,13 @@ export function makeFeishuInbound(deps: RunDeps, platform: IMPlatform): (payload
       if (reply) await platform.send(r.openId, { text: reply });
       return;
     }
-    const res = await handleImInbound(deps, { imUserId: r.openId, platform: platform.platform, text: r.text });
+    const res = await handleImInbound(deps, { imUserId: r.openId, platform: platform.platform, text: r.text }, textPending);
     if (res.reply) await platform.send(r.openId, { text: res.reply }); // 回发处理确认（丢弃无回复）
+    if (res.status === "choice_needed" && res.candidates && res.candidates.length > 1) {
+      // 多卡 → 选择卡（列出各卡 prompt；无 uuid——重发靠新卡，uuid 会压掉覆盖重发的选择卡）
+      await platform.send(r.openId, { cardJson: renderSelectCard(res.candidates) })
+        .catch((e: unknown) => console.warn("[im-choice] 选择卡发送失败：", e instanceof Error ? e.message : e));
+    }
   };
 }
 

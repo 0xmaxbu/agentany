@@ -20,7 +20,7 @@ export function startInlineTurn(
   eventBus: EventBus | undefined,
   convId: string,
   content: string,
-  opts?: { skipTurn?: boolean },
+  opts?: { skipTurn?: boolean; focusQuestionId?: number },
 ): { messageId: number; accepted: boolean } {
   const messageId = deps.store.appendMessage({ conversationId: convId, role: "user", content });
   deps.store.touchConversation(convId); // updatedAt = 列表排序锚（#20）
@@ -28,7 +28,7 @@ export function startInlineTurn(
   if (opts?.skipTurn) return { messageId, accepted: true }; // 确定性收口轮不判答
   const accepted = queues.enqueueHttpTurn(convId, (signal) => {
     const send = (fr: Frame) => eventBus?.publish(convId, fr);
-    return runTurn(deps, convId, content, send, signal);
+    return runTurn(deps, convId, content, send, signal, opts?.focusQuestionId !== undefined ? { focusQuestionId: opts.focusQuestionId } : {});
   });
   if (!accepted) eventBus?.publish(convId, { type: "error", message: "conversation busy (queue full)" });
   return { messageId, accepted };

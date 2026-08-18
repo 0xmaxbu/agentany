@@ -88,6 +88,34 @@ export function renderAnsweredCard(input: ImCardInput): unknown {
   };
 }
 
+/** 选择卡（spec #55/T6）：多条 pending ask 卡并存时，把「待确认文本」挂到选择——每张卡一个按钮（仅 prompt）。
+ *  按钮回调 value = { selectQuestionId }——与普通卡 {questionId, label} 区分（card-action 按字段路由）。 */
+export function renderSelectCard(candidates: { questionId: number; prompt: string }[]): unknown {
+  return {
+    schema: "2.0",
+    header: { title: { tag: "plain_text", content: "多张待处理卡片" } },
+    body: {
+      elements: [
+        { tag: "div", text: { tag: "lark_md", content: "收到您的回答，但有多张卡片待处理。请点击您要回答的那张：" } },
+        {
+          tag: "action",
+          actions: candidates.map((c) => ({
+            tag: "button",
+            text: { tag: "plain_text", content: truncatePrompt(c.prompt) }, // 仅 prompt（不展开选项明细分）
+            behaviors: [{ type: "callback", value: { selectQuestionId: c.questionId } }],
+          })),
+        },
+      ],
+    },
+  };
+}
+
+/** 选择卡按钮文案：prompt 截断（≤40 字符，防按钮撑爆）。 */
+function truncatePrompt(prompt: string): string {
+  const p = prompt.trim();
+  return p.length > 40 ? `${p.slice(0, 40)}…` : p;
+}
+
 /** 卡片序列化后 ≤30KB（飞书上限；超限回落文本由路由裁量）。 */
 export function cardJsonSize(card: unknown): number {
   return JSON.stringify(card).length;

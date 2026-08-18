@@ -20,6 +20,7 @@ import { FeishuTransport } from "./im/feishu/transport";
 import { FeishuLongConnection } from "./im/feishu/long-connection";
 import { makeFeishuInbound } from "./im/feishu/inbound";
 import { handleCardAction } from "./im/feishu/card-action";
+import { makePendingTextCache } from "./im/pending-text";
 import { ImOutboundRouter } from "./im/outbound-router";
 import type { RunDeps } from "./runs";
 
@@ -53,11 +54,12 @@ if (FEISHU_APP_ID && FEISHU_APP_SECRET) {
   const feishu = new FeishuTransport({ appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET });
   const imRouter = new ImOutboundRouter({ store, imStore: deps.imStore!, bus: eventBus, platform: feishu });
   imRouter.subscribeAll();
-  const feishuInbound = makeFeishuInbound(deps, feishu);
+  const textPending = makePendingTextCache(); // 选择卡待确认文本（T6：多卡消歧——入站写/卡回调读，同实例）
+  const feishuInbound = makeFeishuInbound(deps, feishu, textPending);
   const longConnection = new FeishuLongConnection({
     appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET,
     onEvent: (p) => { feishuInbound(p).catch((e) => console.error("[im] 入站处理失败:", e)); },
-    onCard: (p) => handleCardAction(deps, p), // T4：按钮回调 → dispatch + 更新卡/toast（经 ack data 回传）
+    onCard: (p) => handleCardAction(deps, p, textPending), // T4 按钮回调 + T6 选择卡点选
     log: (m) => console.log("[im]", m),
   });
   longConnection.start();

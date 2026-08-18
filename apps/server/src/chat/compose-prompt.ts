@@ -30,6 +30,8 @@ export interface PromptParts {
   pendingAsks: PendingAsk[];
   /** #35 经验注入段（collectExperience 产出：global 全会话 + member 按会话成员）。空数组=无经验文件，省略。 */
   experience?: string[];
+  /** #61/T6 消歧聚焦：设置后只注入那一张 pending ask（选择卡点选的判答不再撞其它卡）。 */
+  focusQuestionId?: number;
 }
 
 export function composeSystemPrompt(p: PromptParts): string[] {
@@ -54,6 +56,7 @@ export function composeSystemPrompt(p: PromptParts): string[] {
   // #16 pending ask 判答格式（run 绑定分支迁自 turn.ts，逐字保留——turn-inline 内容断言依赖）；
   // 自主卡（runId null，决策 10 修订）：打字答案经 pi 归一化后 answer_question 落卡（对应 resume_workflow）。
   for (const q of p.pendingAsks) {
+    if (p.focusQuestionId !== undefined && q.questionId !== p.focusQuestionId) continue; // T6 聚焦
     out.push(q.runId
       ? `[待处理提问] 工作流 ${q.runId} 正在等待用户决策。\n提问：${q.prompt}\n选项：${q.options.join(" / ")}\n续跑契约：${JSON.stringify(q.resumeSchema)}\n若用户本次消息是对此提问的回答，请将回答归一化为符合续跑契约的对象，并调用 resume_workflow("${q.runId}", resumeData)。若无关，正常回应用户。`
       : `[待处理提问] 澄清（你此前向用户提出的问题，不绑定工作流）。\n提问：${q.prompt}\n选项：${q.options.join(" / ")}\n若用户本次消息是对此提问的回答，请将回答归一化为简洁结构（或保留原文），并调用 answer_question(${q.questionId}, answer) 落卡，再据此继续对话。若无关，正常回应用户。`);
