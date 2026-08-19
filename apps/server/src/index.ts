@@ -17,9 +17,8 @@ import { warnIfNoSandbox } from "./pi/sandbox";
 import { startBridge, BRIDGE_PORT } from "./bridge/server";
 import { ImStore } from "./im/store";
 import { FeishuTransport } from "./im/feishu/transport";
-import { FeishuLongConnection } from "./im/feishu/long-connection";
-import { makeFeishuInbound } from "./im/feishu/inbound";
-import { handleCardAction } from "./im/feishu/card-action";
+import { FeishuPlatformAdapter } from "./im/feishu/adapter";
+import { handleImEvent } from "./im/dispatch";
 import { makePendingTextCache } from "./im/pending-text";
 import { ImOutboundRouter } from "./im/outbound-router";
 import type { RunDeps } from "./runs";
@@ -51,18 +50,16 @@ scheduler.start(); // 每 60s tick；DB 为真相，重启后按 nextFireAt 继�
 // T1（#56）出站：bus hitl 帧 → owner 绑定 → send。
 // T2（#57）入站：长连接（免公网 raw protobuf 事件）→ 文本回流 handleImInbound → 回复回发（同一 transport）。
 if (FEISHU_APP_ID && FEISHU_APP_SECRET) {
-  const feishu = new FeishuTransport({ appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET });
+  const feishuTransport = new FeishuTransport({ appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET });
+  const feishu = new FeishuPlatformAdapter({
+    transport: feishuTransport,
+    longConnection: { appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET, log: (m) => console.log("[im]", m) },
+  }); // ADR-0032：双向 adapter（出站 REST + 入站长连接）
   const imRouter = new ImOutboundRouter({ chatStore, hitlStore, imStore: deps.imStore!, bus: eventBus, platform: feishu }); // ADR-0030：出站路由只学 chat+hitl 面
   imRouter.subscribeAll();
   const textPending = makePendingTextCache(); // 选择卡待确认文本（T6：多卡消歧——入站写/卡回调读，同实例）
-  const feishuInbound = makeFeishuInbound(deps, feishu, textPending);
-  const longConnection = new FeishuLongConnection({
-    appId: FEISHU_APP_ID, appSecret: FEISHU_APP_SECRET,
-    onEvent: (p) => { feishuInbound(p).catch((e) => console.error("[im] 入站处理失败:", e)); },
-    onCard: (p) => handleCardAction(deps, p, textPending, (openId, content) => feishu.send(openId, { text: content })), // T4 按钮回调（真飞书经 EVENT 帧 event_type=card.action.trigger 路由，T2 长连接已分流）+ T6 选择卡点选
-    log: (m) => console.log("[im]", m),
-  });
-  longConnection.start();
+  const listener = (e: import("./im/types").ImInboundEvent) => handleImEvent(deps, e, feishu, textPending); // 领域单入口（决策 1）
+  feishu.start(listener); // 连接 + ack + 路由 raw→typed→handleImEvent；进程生命周期内不主动停（热重启由进程回收）
   console.log("[im] 飞书出站 + 长连接已接线");
 }
 await bootstrapAdmin(userStore); // env 设了 bootstrap admin 则幂等 upsert（否则走纯 dev 阀）

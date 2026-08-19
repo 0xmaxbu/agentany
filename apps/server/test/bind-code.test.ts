@@ -15,7 +15,8 @@ import { ConversationQueues } from "../src/chat/queue";
 import { RunLifecycle } from "../src/runs/lifecycle";
 import { ImStore, BIND_CODE_TTL_MS } from "../src/im/store";
 import { FeishuTransport } from "../src/im/feishu/transport";
-import { makeFeishuInbound } from "../src/im/feishu/inbound";
+import { FeishuPlatformAdapter } from "../src/im/feishu/adapter";
+import { handleImEvent } from "../src/im/dispatch";
 import { parseImCommand } from "../src/im/commands";
 import { fakeFeishu, fakeFeishuFetch, receiveTextEvent } from "./fake-feishu";
 import type { RunDeps } from "../src/runs";
@@ -41,9 +42,14 @@ function setup() {
     runPiStreamFactory: (): ConfiguredRunPiStream => async (call) => ({ text: "", messages: [], toolResults: [] }),
   };
   const fake = fakeFeishu();
-  const transport = new FeishuTransport({ appId: "cli_x", appSecret: "s", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app) });
-  const inbound = makeFeishuInbound(deps, transport);
-  return { db, store, userStore, deps, fake, transport, inbound };
+  const adapter = new FeishuPlatformAdapter({ transport: new FeishuTransport({ appId: "cli_x", appSecret: "s", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app) }) });
+  /** 模拟长连接 onEvent：信封 → adapter.parseInbound → handleImEvent（领域单入口）。 */
+  const inbound = async (payload: unknown) => {
+    const evs = adapter.parseInbound(payload);
+    if (!evs) return;
+    for (const e of evs) await handleImEvent(deps, e, adapter);
+  };
+  return { db, store, userStore, deps, fake, adapter, inbound };
 }
 
 let ctx: ReturnType<typeof setup>;

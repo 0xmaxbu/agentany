@@ -3,7 +3,7 @@
 // seam：
 //   - codec：golden-bytes 单测（真 wire 字节，防对称编码 bug）+ round-trip
 //   - client 协议：FeishuLongConnection + fakeFeishuWs → 真建连/真 ping/真 ack/分片合包
-//   - 映射：mapFeishuEvent 纯函数（群聊/非文本/缺字段边界）
+//   - 映射：mapFeishuMessage 纯函数（群聊/非文本/缺字段边界）
 //   - e2e：绑定的用户 + pending ask 卡 → push 文本事件 → handleImInbound 判答收口 → 回复经 send 回发
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
@@ -18,7 +18,8 @@ import { RunLifecycle } from "../src/runs/lifecycle";
 import { ImStore } from "../src/im/store";
 import { FeishuTransport } from "../src/im/feishu/transport";
 import { FeishuLongConnection, backoffDelayMs, shouldGiveUp, type ReconnectConfig } from "../src/im/feishu/long-connection";
-import { mapFeishuEvent, makeFeishuInbound } from "../src/im/feishu/inbound";
+import { mapFeishuMessage, FeishuPlatformAdapter } from "../src/im/feishu/adapter";
+import { handleImEvent } from "../src/im/dispatch";
 import { encodeFrame, decodeFrame, headerValue } from "../src/im/feishu/pbbp2";
 import type { RunDeps } from "../src/runs";
 import type { ConfiguredRunPi, ConfiguredRunPiStream } from "../src/pi/runPi-factory";
@@ -57,26 +58,26 @@ describe("pbbp2 codec（真 wire 字节）", () => {
 });
 
 // ── 映射纯函数 ──
-describe("mapFeishuEvent（事件 → 文本回流口径）", () => {
+describe("mapFeishuMessage（事件 → 文本回流口径）", () => {
   test("p2p text → {openId,text}", () => {
-    const r = mapFeishuEvent(receiveTextEvent("ou_1", "你好"));
+    const r = mapFeishuMessage(receiveTextEvent("ou_1", "你好"));
     expect(r).toEqual({ openId: "ou_1", text: "你好" });
   });
   test("群聊（含 @）→ null（v1 只做单聊）", () => {
     const ev = receiveTextEvent("ou_1", "你好", { event: { message: { chat_type: "group" } } });
-    expect(mapFeishuEvent(ev)).toBeNull();
+    expect(mapFeishuMessage(ev)).toBeNull();
   });
   test("非 text（image）→ null", () => {
     const ev = receiveTextEvent("ou_1", "x", { event: { message: { message_type: "image", content: "{}" } } });
-    expect(mapFeishuEvent(ev)).toBeNull();
+    expect(mapFeishuMessage(ev)).toBeNull();
   });
   test("缺 sender_id.open_id → null", () => {
     const ev = receiveTextEvent("ou_1", "x", { event: { sender: { sender_id: {} } } });
-    expect(mapFeishuEvent(ev)).toBeNull();
+    expect(mapFeishuMessage(ev)).toBeNull();
   });
   test("content 非合法 JSON → null", () => {
     const ev = receiveTextEvent("ou_1", "x", { event: { message: { content: "not-json" } } });
-    expect(mapFeishuEvent(ev)).toBeNull();
+    expect(mapFeishuMessage(ev)).toBeNull();
   });
 });
 
@@ -192,13 +193,14 @@ describe("T2 e2e：bound 用户 + pending ask → 文本事件 → 判答收口 
       runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
       runPiStreamFactory: () => stubJudge(deps, log),
     };
-    const inbound = makeFeishuInbound(deps, transport);
-    const lc = new FeishuLongConnection({
-      appId: "cli_x", appSecret: "s_y", baseUrl: "https://fake.feishu",
-      fetchFn: fakeFeishuFetch(fake.app), onEvent: (p) => { void inbound(p).catch(console.error); },
-      pingIntervalMs: 40, log: () => {},
+    const adapter = new FeishuPlatformAdapter({
+      transport,
+      longConnection: {
+        appId: "cli_x", appSecret: "s_y", baseUrl: "https://fake.feishu",
+        fetchFn: fakeFeishuFetch(fake.app), pingIntervalMs: 40, log: () => {},
+      },
     });
-    lc.start();
+    const conn = adapter.start((e) => handleImEvent(deps, e, adapter));
     await delayUntil(() => fake.state.wsClients === 1, 3000);
 
     // 场景：m1 绑 ou_1，会话 + 一张 pending ask 卡
@@ -218,7 +220,7 @@ describe("T2 e2e：bound 用户 + pending ask → 文本事件 → 判答收口 
     expect(fake.state.sent[0].receiveId).toBe("ou_1");
     expect(String((fake.state.sent[0].content as any).text)).toContain("回答已记录");
 
-    lc.stop(); fake.close();
+    conn.stop(); fake.close();
   });
 
   test("未绑定用户文本事件 → 丢弃（ack 200、仅此一次 ack，不产出发送、不起轮）", async () => {
@@ -239,13 +241,14 @@ describe("T2 e2e：bound 用户 + pending ask → 文本事件 → 判答收口 
       runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
       runPiStreamFactory: () => stubJudge(deps, log),
     };
-    const inbound = makeFeishuInbound(deps, transport);
-    const lc = new FeishuLongConnection({
-      appId: "cli_x", appSecret: "s_y", baseUrl: "https://fake.feishu",
-      fetchFn: fakeFeishuFetch(fake.app), onEvent: (p) => { void inbound(p).catch(console.error); },
-      pingIntervalMs: 40, log: () => {},
+    const adapter = new FeishuPlatformAdapter({
+      transport,
+      longConnection: {
+        appId: "cli_x", appSecret: "s_y", baseUrl: "https://fake.feishu",
+        fetchFn: fakeFeishuFetch(fake.app), pingIntervalMs: 40, log: () => {},
+      },
     });
-    lc.start();
+    const conn = adapter.start((e) => handleImEvent(deps, e, adapter));
     await delayUntil(() => fake.state.wsClients === 1, 3000);
 
     const { ack } = await fake.pushEvent(receiveTextEvent("ou_nobody", "你好"));
@@ -255,6 +258,6 @@ describe("T2 e2e：bound 用户 + pending ask → 文本事件 → 判答收口 
     expect(fake.state.sent).toHaveLength(0); // 不产出发送
     expect(fake.state.acks).toHaveLength(1); // 只 ack 事件本身
 
-    lc.stop(); fake.close();
+    conn.stop(); fake.close();
   });
 });

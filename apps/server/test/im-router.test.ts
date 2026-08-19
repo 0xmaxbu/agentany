@@ -9,6 +9,7 @@ import { EventBus } from "../src/chat/eventbus";
 import { ImStore } from "../src/im/store";
 import { ImOutboundRouter } from "../src/im/outbound-router";
 import { FeishuTransport } from "../src/im/feishu/transport";
+import { FeishuPlatformAdapter } from "../src/im/feishu/adapter";
 import { fakeFeishu, fakeFeishuFetch } from "./fake-feishu";
 
 function setup() {
@@ -18,7 +19,7 @@ function setup() {
   const bus = new EventBus();
   const imStore = new ImStore(db);
   const fake = fakeFeishu();
-  const platform = new FeishuTransport({ appId: "cli_x", appSecret: "s_y", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app) });
+  const platform = new FeishuPlatformAdapter({ transport: new FeishuTransport({ appId: "cli_x", appSecret: "s_y", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app) }) });
   const router = new ImOutboundRouter({ chatStore: store.chat, hitlStore: store.hitl, imStore, bus, platform });
   return { store, userStore, imStore, bus, fake, router };
 }
