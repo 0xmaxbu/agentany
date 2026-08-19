@@ -10,7 +10,7 @@ import { WorkspaceStore } from "../src/workspaces/store";
 import { ScheduledTaskStore } from "../src/scheduled-tasks/store";
 import { EventBus } from "../src/chat/eventbus";
 import { ConversationQueues } from "../src/chat/queue";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import { ImStore } from "../src/im/store";
 import { FeishuLongConnection } from "../src/im/feishu/long-connection";
 import { mapCardAction, handleCardAction, answeredCardRsp } from "../src/im/feishu/card-action";
@@ -72,7 +72,7 @@ describe("T4 e2e：按钮回调闭环（假飞书 WS）", () => {
       workspaceStore: new WorkspaceStore(db),
       taskStore: new ScheduledTaskStore(db, store.chat),
       eventBus, conversationQueues: queues, imStore: new ImStore(db),
-      runRegistry: new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
+      runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
       runPiStreamFactory: (): ConfiguredRunPiStream => async (call) => ({ text: "", messages: [], toolResults: [] }),
     };
     const lc = new FeishuLongConnection({

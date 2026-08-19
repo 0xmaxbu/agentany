@@ -7,7 +7,7 @@ import { startBridge } from "../src/bridge/server";
 import { createApp } from "../src/app";
 import { fullDeps } from "./deps";
 import { issueNonce, _clearNonces } from "../src/bridge/nonce";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import { EventBus } from "../src/chat/eventbus";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
 
@@ -17,9 +17,9 @@ const delayUntil = async (pred: () => boolean, t = 3000): Promise<void> => {
   const s = Date.now();
   while (Date.now() - s < t) { if (pred()) return; await delay(10); }
 };
-// synthetic under auto → {running}；窄化 r.runId（#18 StartOutcome 联合）。
-function startHitl(registry: RunRegistry, conv = "c-hitl") {
-  const r = registry.start({ conversationId: conv, workflowId: "synthetic-3step", input: {} });
+// synthetic under auto → {running}；窄化 r.runId（#18 StartResult 联合）。
+async function startHitl(registry: RunLifecycle, conv = "c-hitl") {
+  const r = await registry.start({ conversationId: conv, workflowId: "synthetic-3step", input: {} });
   if (r.status !== "running") throw new Error(`expected running, got ${r.status}`);
   return r;
 }
@@ -27,7 +27,7 @@ function bridgeSetup() {
   const store = createStores(openDbMigrated(":memory:"));
   store.chat.createConversation({ id: "c-hitl", workspaceId: "ws_company", userId: "u" });
   const eventBus = new EventBus();
-  const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
+  const registry = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
   return { store, eventBus, registry };
 }
 const JH = { "content-type": "application/json" } as const;
@@ -135,12 +135,12 @@ describe("store · 审批 question（#18）", () => {
 describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
   test("挂起 → 引擎同事务直建强制卡；/ask_user 带 runId → 400（run 绑定卡归引擎，bridge 仅自主卡）", async () => {
     const { store, eventBus, registry } = bridgeSetup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const { port, stop } = startBridge(0, { runLifecycle: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-hitl");
     const frames: any[] = [];
     eventBus.subscribe("c-hitl", (f) => frames.push(f));
     try {
-      const r = startHitl(registry);
+const r = await startHitl(registry);
       await delayUntil(() => registry.read(r.runId)?.status === "suspended");
       await delayUntil(() => frames.some((f) => f.type === "hitl_request")); // ADR-0025 决策 6：挂起即直建卡
       const engReq: any = frames.find((f) => f.type === "hitl_request");
@@ -157,7 +157,7 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
 
   test("/ask_user 自主（#47/T5）：无 runId → 自主卡（runId null，无 resume 语义）", async () => {
     const { store, eventBus, registry } = bridgeSetup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const { port, stop } = startBridge(0, { runLifecycle: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-hitl");
     const frames: any[] = [];
     eventBus.subscribe("c-hitl", (f) => frames.push(f));
@@ -181,12 +181,12 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
 
   test("/run/resume 首答: accept → completed + markAnswered + hitl_answered", async () => {
     const { store, eventBus, registry } = bridgeSetup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const { port, stop } = startBridge(0, { runLifecycle: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-hitl");
     const frames: any[] = [];
     eventBus.subscribe("c-hitl", (f) => frames.push(f));
     try {
-      const r = startHitl(registry);
+const r = await startHitl(registry);
       await delayUntil(() => registry.read(r.runId)?.status === "suspended");
       const resp = await resumeRun(port, token, r.runId, { decision: "accept" });
       expect(resp.status).toBe(200);
@@ -204,12 +204,12 @@ describe("bridge /ask_user + /run/resume（#16 步骤2 端到端）", () => {
 
   test("/run/resume 幂等: 首答后再 resume → alreadyAnswered，不重复 mark", async () => {
     const { store, eventBus, registry } = bridgeSetup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const { port, stop } = startBridge(0, { runLifecycle: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-hitl");
     const frames: any[] = [];
     eventBus.subscribe("c-hitl", (f) => frames.push(f));
     try {
-      const r = startHitl(registry);
+const r = await startHitl(registry);
       await delayUntil(() => registry.read(r.runId)?.status === "suspended");
       await resumeRun(port, token, r.runId, { decision: "accept" });
       await delayUntil(() => frames.some((f) => f.type === "hitl_answered"));
@@ -227,7 +227,7 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
   test("/ask_user 带 runId → 400（run 绑定卡归引擎直建；suspended/running/他 conv 一律拒）", async () => {
     const { store, eventBus, registry } = bridgeSetup();
     store.runs.createRun({ runId: "r-run", workflowId: "synthetic-3step", workspaceId: "ws_company", conversationId: "c-hitl", input: {} }); // 默认 running
-    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const { port, stop } = startBridge(0, { runLifecycle: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-hitl");
     try {
       const resp = await askUser(port, token, "r-run");
@@ -238,10 +238,10 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
 
   test("/run/resume rejected: 坏 schema → 409，question 保持 pending、run 不推进", async () => {
     const { store, eventBus, registry } = bridgeSetup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const { port, stop } = startBridge(0, { runLifecycle: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-hitl");
     try {
-      const r = startHitl(registry);
+const r = await startHitl(registry);
       await delayUntil(() => registry.read(r.runId)?.status === "suspended");
       const resp = await resumeRun(port, token, r.runId, { decision: "bogus" }); // 不在 enum
       expect(resp.status).toBe(409);
@@ -252,7 +252,7 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
 
   test("/ask_answer（决策 10 修订）：自主卡打字答案经 pi 归一化落卡 → answered + hitl_answered", async () => {
     const { store, eventBus, registry } = bridgeSetup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const { port, stop } = startBridge(0, { runLifecycle: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-hitl");
     const frames: any[] = [];
     eventBus.subscribe("c-hitl", (f) => frames.push(f));
@@ -282,7 +282,7 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
     store.chat.createConversation({ id: "c-other", workspaceId: "ws_company", userId: "u" });
     const bound = store.hitl.createQuestion({ conversationId: "c-hitl", runId: "r-bound", prompt: "q", options: ["a"] });
     const other = store.hitl.createQuestion({ conversationId: "c-other", runId: null, prompt: "q", options: ["a"] });
-    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const { port, stop } = startBridge(0, { runLifecycle: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-hitl"); // c-hitl 的 nonce
     try {
       const r1 = await fetch(`http://127.0.0.1:${port}/ask_answer`, { method: "POST", headers: { authorization: `Bearer ${token}`, ...JH }, body: JSON.stringify({ questionId: bound, answer: "a" }) });
@@ -296,12 +296,12 @@ describe("bridge /ask_user + /run/resume · guard 与边界（#16）", () => {
 
   test("redirect 循环: resume redirect → 引擎自动再建强制卡 q2 → q1 answered + q2 pending（不重复卡）", async () => {
     const { store, eventBus, registry } = bridgeSetup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const { port, stop } = startBridge(0, { runLifecycle: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-hitl");
     const frames: any[] = [];
     eventBus.subscribe("c-hitl", (f) => frames.push(f));
     try {
-      const r = startHitl(registry);
+const r = await startHitl(registry);
       await delayUntil(() => registry.read(r.runId)?.status === "suspended");
       await delayUntil(() => frames.some((f) => f.type === "hitl_request")); // 引擎卡 q1 已直建
       const q1id = frames.find((f) => f.type === "hitl_request").questionId as number;
@@ -355,8 +355,8 @@ describe("POST /conversations/:id/abort（#19）", () => {
     store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     store.runs.createRun({ runId: "r-run", workflowId: "wf", workspaceId: "ws_company", conversationId: "c1", input: {} }); // running，无句柄
     const eventBus = new EventBus();
-    const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
-    const app = createApp(fullDeps(store, { runRegistry: registry, eventBus }));
+    const registry = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
+    const app = createApp(fullDeps(store, { runLifecycle: registry, eventBus }));
     const resp = await app.request("/conversations/c1/abort", { method: "POST" });
     expect(resp.status).toBe(200);
     const data: any = await resp.json();

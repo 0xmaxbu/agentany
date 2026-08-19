@@ -1,5 +1,5 @@
 // #46/T3（ADR-0025 决策 5/6）：ask 步契约 + 挂起强制卡。
-// seam：ask 工厂单元（直接 execute）+ store.suspendWithAskCard（同事务）+ registry 集成（synthetic → 卡 + hitl_request）。
+// seam：ask 工厂单元（直接 execute）+ store.suspendedStep（同事务）+ lifecycle 集成（synthetic → 卡 + hitl_request）。
 import { describe, test, expect } from "bun:test";
 import { ask } from "../src/workflow-engine/ask";
 import { schema } from "../src/workflow-engine/schema";
@@ -7,7 +7,7 @@ import type { StepContext } from "../src/workflow-engine/defineWorkflow";
 import { openDbMigrated } from "../src/db/client";
 import { createStores, type Stores } from "../src/stores";
 import { EventBus } from "../src/chat/eventbus";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
 
 const stubFactory = (): ConfiguredRunPi => async () => ({ text: "", messages: [], toolResults: [] });
@@ -109,24 +109,26 @@ describe("ask 工厂 · 定义与映射", () => {
   });
 });
 
-describe("store · suspendWithAskCard（同事务强制卡）", () => {
-  test("suspended 重确认 + createQuestion(values=快照) 一个事务；回读 values 不失效", async () => {
+describe("store · suspendedStep 原子挂起（G1/ADR-0025 决策 6 字面：log+status+卡同一事务）", () => {
+  test("suspendedStep → run suspended + log suspended + ask 卡(values=快照) 同一事务；回读 values 不失效", async () => {
     const store = createStores(openDbMigrated(":memory:"));
     store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
     store.runs.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    store.runs.updateRunStatus("r1", "running");
-    const qid = store.runs.suspendWithAskCard({
-      runId: "r1", conversationId: "c1",
-      prompt: "怎么选？", options: ["A", "B"],
-      values: [{ label: "A", value: { selected: "all" } }, { label: "B", value: { selected: "1,3,5" } }],
+    const qid = store.runs.suspendedStep({
+      runId: "r1", stepId: "review", input: {},
+      suspendPayload: { question: "怎么选？", options: [{ label: "A", value: { selected: "all" } }, { label: "B", value: { selected: "1,3,5" } }] },
       resumeSchema: schema.object({ selected: schema.string() }),
+      conversationId: "c1",
+      values: [{ label: "A", value: { selected: "all" } }, { label: "B", value: { selected: "1,3,5" } }],
     });
     expect(qid).toBeGreaterThan(0);
     expect(store.runs.getRun("r1")!.status).toBe("suspended"); // 同事务切挂起
+    expect(store.runs.getLog("r1").at(-1)!.status).toBe("suspended"); // log 同事务
     const q = store.hitl.getQuestion(qid)!;
     expect(q.kind).toBe("ask");
     expect(q.runId).toBe("r1");
-    expect(q.options).toEqual(["A", "B"]);
+    expect(q.prompt).toBe("怎么选？"); // prompt 由 suspendPayload.question 派生
+    expect(q.options).toEqual(["A", "B"]); // options labels 由 values 派生
     expect(q.values).toEqual([{ label: "A", value: { selected: "all" } }, { label: "B", value: { selected: "1,3,5" } }]); // 快照回读
     expect(q.status).toBe("pending");
   });
@@ -137,11 +139,11 @@ describe("registry · 挂起强制卡（ADR-0025 决策 6）", () => {
     const store = createStores(openDbMigrated(":memory:"));
     store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "dev-user" });
     const eventBus = new EventBus();
-    const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
+    const registry = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
 
-    const started = registry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: { offset: 0 } });
+    const started = await registry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: { offset: 0 } });
     if (started.status !== "running") throw new Error(`expected running, got ${started.status}`);
     await delayUntil(() => frames.some((f) => f.type === "hitl_request"));
 

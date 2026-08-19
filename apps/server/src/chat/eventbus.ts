@@ -20,7 +20,7 @@ export type Frame =
   | { type: "run_started"; runId: string; workflowId: string }
   | { type: "run_resumed"; runId: string }
   | { type: "run_completed"; runId: string; brief?: string; artifacts?: string[] } // ADR-0025：零 LLM 简报携带物
-  | { type: "run_suspended"; runId: string; stepId: string; payload: unknown; resumeSchema?: unknown }
+  | { type: "run_suspended"; runId: string; stepId: string; payload?: unknown; resumeSchema?: unknown; questionId?: number } // questionId=ADR-0031：卡引擎原子直建（消费方经 hitl_request 取卡素材，payload=旧 outcome 携带物已退役可缺）
   | { type: "run_failed"; runId: string; note?: string }
   | { type: "step_started"; runId: string; stepId: string }
   | { type: "step_completed"; runId: string; stepId: string; status: string; output?: unknown; payload?: unknown; resumeSchema?: unknown }

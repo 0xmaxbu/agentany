@@ -1,7 +1,9 @@
-// ticket #14：RunRegistry（start/read/resume/abort/sweepCrashed）+ 进度事件（step_*/run_*）经 EventBus。
+// ticket #14：RunLifecycle（start/read/resume/abort/sweepCrashed）+ 进度事件（step_*/run_*）经 EventBus。
 // 用注册的 synthetic-3step（纯程序步，无需真 pi）+ stub runPi factory。
+// ADR-0031（A2 #68）：verdictOf 单一裁决源 / sync 语义 / 二次挂起 / 引擎诚实化 acceptance 追加。
 import { describe, test, expect } from "bun:test";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
+import { verdictOf } from "../src/workflow-engine/runner";
 import { EventBus } from "../src/chat/eventbus";
 import { createStores, type Stores } from "../src/stores";
 import { openDbMigrated } from "../src/db/client";
@@ -23,24 +25,24 @@ function newRegistry() {
   const store = createStores(openDbMigrated(":memory:"));
   const eventBus = new EventBus();
   store.chat.createConversation({ id: "c-test", workspaceId: "ws_company", userId: "u" }); // general 会话
-  const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
+  const registry = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
   return { store, eventBus, registry };
 }
 
-// synthetic-3step under auto posture → allow → {running}；窄化 runId（#18 StartOutcome 联合）。
-function startSynthetic(registry: RunRegistry, input: Record<string, unknown> = {}, conv = "c-test") {
-  const r = registry.start({ conversationId: conv, workflowId: "synthetic-3step", input });
+// synthetic-3step under auto posture → allow → {running}；窄化 runId（#18 StartResult 联合）。
+async function startSynthetic(registry: RunLifecycle, input: Record<string, unknown> = {}, conv = "c-test") {
+  const r = await registry.start({ conversationId: conv, workflowId: "synthetic-3step", input });
   if (r.status !== "running") throw new Error(`synthetic should run under auto, got ${r.status}`);
   return r;
 }
 
-describe("RunRegistry · start / read / 进度事件", () => {
+describe("RunLifecycle · start / read / 进度事件", () => {
   test("start → 立即返 {running, runId}；run 异步跑到 review 挂起；step_*/run_* 推 EventBus", async () => {
     const { eventBus, registry } = newRegistry();
     const frames: any[] = [];
     eventBus.subscribe("c-test", (f) => frames.push(f));
 
-    const r = startSynthetic(registry, { offset: 0 });
+    const r = await startSynthetic(registry, { offset: 0 });
     expect(r.status).toBe("running"); // 立即返（run 不绑 turn）
     expect(r.runId).toBeTruthy();
 
@@ -58,19 +60,19 @@ describe("RunRegistry · start / read / 进度事件", () => {
     expect(rd.steps.map((s) => s.status)).toEqual(["completed", "suspended"]);
   });
 
-  test("read 不存在的 run → null；start 未知工作流 → 抛", () => {
+  test("read 不存在的 run → null；start 未知工作流 → 抛", async () => {
     const { registry } = newRegistry();
     expect(registry.read("nope")).toBeNull();
-    expect(() => registry.start({ conversationId: "c-test", workflowId: "nope", input: {} })).toThrow(/not found/);
+    await expect(registry.start({ conversationId: "c-test", workflowId: "nope", input: {} })).rejects.toThrow(/not found/);
   });
 });
 
-describe("RunRegistry · resume", () => {
+describe("RunLifecycle · resume", () => {
   test("resume(accept) → 续跑至 completed；推 run_resumed/.../run_completed", async () => {
     const { eventBus, registry } = newRegistry();
     const frames: any[] = [];
     eventBus.subscribe("c-test", (f) => frames.push(f));
-    const r = startSynthetic(registry);
+    const r = await startSynthetic(registry);
     await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
 
     await registry.resume(r.runId, { decision: "accept" });
@@ -88,7 +90,7 @@ describe("T4 #44 resume 拆分（ADR-0025 决策 11）：同步 verdict + detach
     const { eventBus, registry } = newRegistry();
     const frames: any[] = [];
     eventBus.subscribe("c-test", (f) => frames.push(f));
-    const r = startSynthetic(registry);
+    const r = await startSynthetic(registry);
     await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
 
     const t0 = Date.now();
@@ -106,7 +108,7 @@ describe("T4 #44 resume 拆分（ADR-0025 决策 11）：同步 verdict + detach
     const { eventBus, registry } = newRegistry();
     const frames: any[] = [];
     eventBus.subscribe("c-test", (f) => frames.push(f));
-    const r = startSynthetic(registry);
+    const r = await startSynthetic(registry);
     await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
 
     const t0 = Date.now();
@@ -121,7 +123,7 @@ describe("T4 #44 resume 拆分（ADR-0025 决策 11）：同步 verdict + detach
     const { eventBus, registry } = newRegistry();
     const frames: any[] = [];
     eventBus.subscribe("c-test", (f) => frames.push(f));
-    const r = startSynthetic(registry);
+    const r = await startSynthetic(registry);
     await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
     await registry.resume(r.runId, { decision: "accept" });
     await delayUntil(() => frames.some((f) => f.type === "run_completed"));
@@ -138,7 +140,7 @@ describe("T4 #44 resume 拆分（ADR-0025 决策 11）：同步 verdict + detach
     const { eventBus, registry } = newRegistry();
     const frames: any[] = [];
     eventBus.subscribe("c-test", (f) => frames.push(f));
-    const r = startSynthetic(registry);
+    const r = await startSynthetic(registry);
     await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
 
     const [a, b] = await Promise.all([
@@ -153,10 +155,10 @@ describe("T4 #44 resume 拆分（ADR-0025 决策 11）：同步 verdict + detach
   });
 });
 
-describe("RunRegistry · abort + sweepCrashed", () => {
+describe("RunLifecycle · abort + sweepCrashed", () => {
   test("abort(runId) → true（句柄在）；abort(未知) → false", async () => {
     const { registry } = newRegistry();
-    const r = startSynthetic(registry);
+    const r = await startSynthetic(registry);
     expect(registry.abort(r.runId)).toBe(true);
     expect(registry.abort("nope")).toBe(false);
     await delay(20); // 让 detached run 沉淀
@@ -223,7 +225,7 @@ describe("store · listRunningRunIds（#19 abort）", () => {
   });
 });
 
-describe("RunRegistry · stopConversationRuns（#19 abort）", () => {
+describe("RunLifecycle · stopConversationRuns（#19 abort）", () => {
   test("无句柄 stale run → 直接置 failed + 发一次 run_failed（去重）；跨会话不动", () => {
     const store = createStores(openDbMigrated(":memory:"));
     store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
@@ -233,7 +235,7 @@ describe("RunRegistry · stopConversationRuns（#19 abort）", () => {
     const eventBus = new EventBus();
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
-    const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
+    const registry = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
 
     const n = registry.stopConversationRuns("c1");
     expect(n).toBe(1);
@@ -250,8 +252,107 @@ describe("RunRegistry · stopConversationRuns（#19 abort）", () => {
     const eventBus = new EventBus();
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
-    const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
+    const registry = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
     expect(registry.stopConversationRuns("c1")).toBe(0);
     expect(frames.filter((f) => f.type === "run_failed")).toHaveLength(0);
+  });
+});
+
+// ── ADR-0031 acceptance（A2 #68）：verdictOf 单源 / 双机同源 / sync / 二次挂起卡 / 引擎诚实 ──
+describe("ADR-0031 · verdictOf 单一裁决源（决策 3）", () => {
+  test("verdictOf 直接：挂起+合法 → running；挂起+非法 → rejected；非挂起 → idempotent", async () => {
+    const { store, registry } = newRegistry();
+    const r = await startSynthetic(registry);
+    await delayUntil(() => registry.read(r.runId)!.status === "suspended");
+    // 合法 resumeData
+    expect(verdictOf(store.runs, r.runId, { decision: "accept" }).kind).toBe("running");
+    // 非法（缺必填 decision）
+    expect(verdictOf(store.runs, r.runId, { bogus: 1 }).kind).toBe("rejected");
+    // 非挂起 run（completed → idempotent）
+    store.runs.createRun({ runId: "r-done", workflowId: "synthetic-3step", workspaceId: "ws_company", input: {} });
+    store.runs.setTerminalBrief({ runId: "r-done", status: "completed", brief: "b", messageContent: "", conversationId: null });
+    expect(verdictOf(store.runs, "r-done", { decision: "accept" }).kind).toBe("idempotent");
+  });
+
+  test("双机同源：lifecycle.resume 同步预检与引擎 resumeInner 同一 verdict（非法一判，二处同错）", async () => {
+    const { store, registry } = newRegistry();
+    const r = await startSynthetic(registry);
+    await delayUntil(() => registry.read(r.runId)!.status === "suspended");
+    const verdict = verdictOf(store.runs, r.runId, { bogus: 1 });
+    expect(verdict.kind).toBe("rejected");
+    const out = await registry.resume(r.runId, { bogus: 1 });
+    // lifecycle.resume 同步段立刻还 rejected（同 error，无需等 detached 续跑）
+    expect("rejected" in out && out.rejected).toBe(true);
+    expect("error" in out && (out as any).error).toBe((verdict as any).error);
+    expect(store.runs.getRun(r.runId)!.status).toBe("suspended"); // 状态不动（供重试）
+  });
+
+  test("resume(clean) → 同步 {running}；verdictOf 同参亦 running（双机一致）", async () => {
+    const { store, registry } = newRegistry();
+    const r = await startSynthetic(registry);
+    await delayUntil(() => registry.read(r.runId)!.status === "suspended");
+    expect(verdictOf(store.runs, r.runId, { decision: "accept" }).kind).toBe("running");
+    const out = await registry.resume(r.runId, { decision: "accept" });
+    expect(out.status).toBe("running");
+  });
+});
+
+describe("ADR-0031 · sync=true 直接返 RunOutcome（决策 2/6）", () => {
+  test("start({sync:true}) → await 完即 RunOutcome（suspended）；不 detached；read 同步可见挂起", async () => {
+    const { registry } = newRegistry();
+    const out = await registry.start({ conversationId: "c-test", workflowId: "synthetic-3step", input: { offset: 0 }, sync: true });
+    expect(out.status).toBe("suspended"); // 真结局（不返 {running}）
+    if (out.status !== "suspended") throw new Error("expected suspended");
+    expect(out.stepId).toBe("review");
+    expect(registry.read(out.runId)!.status).toBe("suspended"); // 同步已收口（无 detached 竞态）
+  });
+});
+
+describe("ADR-0031 · 二次挂起带 resumeSchema（G1 卡列传）", () => {
+  test("redirect 续跑 → 再挂起：新卡带 resumeSchema + run_suspended 再发", async () => {
+    const { store, eventBus, registry } = newRegistry();
+    const frames: any[] = [];
+    eventBus.subscribe("c-test", (f) => frames.push(f));
+    const r = await startSynthetic(registry, { offset: 0 });
+    await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
+    // 第一张卡
+    expect(store.hitl.listQuestions("c-test")).toHaveLength(1);
+    const firstCard = store.hitl.listQuestions("c-test")[0];
+    expect((firstCard.resumeSchema as any)?.shape?.decision).toBeTruthy();
+
+    // redirect → s1 重跑 → review 再挂起（新卡，同一 run）
+    const out = await registry.resume(r.runId, { decision: "redirect" });
+    expect(out.status).toBe("running"); // 同步 verdict
+    await delayUntil(() => frames.filter((f) => f.type === "run_suspended").length >= 2);
+    const qs = store.hitl.listQuestions("c-test");
+    expect(qs).toHaveLength(2); // 两张卡（首挂 + 二次挂）；旧卡保持 pending（同一 resumeSchema 契约）
+    expect(qs[1].resumeSchema).toEqual(qs[0].resumeSchema); // resumeSchema 复刻进二卡
+    expect(qs[1].runId).toBe(r.runId);
+    // redired 消费点 review 的 completed 步带 resumeData（答案入 log）；二次挂起是新一轮问句（空——G1「首挂无答案」对称）
+    const logs = store.runs.getLog(r.runId);
+    expect(logs[logs.length - 1].status).toBe("suspended"); // 二次挂起
+    const consumed = logs.filter((e) => e.stepId === "review" && e.status === "completed");
+    expect(consumed).toHaveLength(1); // 仅 redirect 消费那一次（二次挂起还没被答）
+    expect(consumed[0].resumeData).toEqual({ decision: "redirect" }); // 答案在消费步
+  });
+});
+
+describe("ADR-0031 · 引擎诚实化（决策 4）", () => {
+  test("顶层 catch-all：runPiFactory 抛错被引擎捕获 → failed outcome（不越状态机抛出）", async () => {
+    const store = createStores(openDbMigrated(":memory:"));
+    store.chat.createConversation({ id: "c-test", workspaceId: "ws_company", userId: "u" });
+    // 走需 runPi 的已注册工作流 + 抛错 factory → sync 路径应返 failed 而非抛（引擎诚实：catch-all 吞进 failed）。
+    // 选 brand-research（第一步 research 调 runPi）。approved 跳审批门。
+    const boom = (): ConfiguredRunPi => async () => { throw new Error("pi exploded"); };
+    const registry = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), runPiFactory: boom });
+    const out = await registry.start({ conversationId: "c-test", workflowId: "brand-research", input: { brand: "诚实车" }, approved: true, sync: true });
+    if (out.status !== "failed") throw new Error(`expected failed, got ${out.status}`); // 窄化：runPi 抛错 → engine catch-all → failed
+    expect(store.runs.getRun(out.runId)!.status).toBe("failed"); // 状态机也收口（不卡 running）
+  });
+
+  test("verdictOf 对无 log 的 run → idempotent（不崩）", () => {
+    const { store } = newRegistry();
+    const v = verdictOf(store.runs, "absent", {});
+    expect(v.kind).toBe("idempotent");
   });
 });

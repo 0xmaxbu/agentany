@@ -10,7 +10,7 @@ import { WorkspaceStore } from "../src/workspaces/store";
 import { ScheduledTaskStore } from "../src/scheduled-tasks/store";
 import { EventBus } from "../src/chat/eventbus";
 import { ConversationQueues } from "../src/chat/queue";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import { ImStore } from "../src/im/store";
 import { handleImInbound } from "../src/im/inbound";
 import { dispatchCardAnswer } from "../src/chat/hitl-dispatch";
@@ -34,10 +34,10 @@ const makeJudgeStream = (deps: RunDeps, log: { calls: number; appends: string[][
   const appends = (call as any).appendSystemPrompt ?? [];
   log.appends.push(appends);
   const runEl = appends.find((s: string) => s.startsWith("[待处理提问] 工作流"));
-  if (runEl && deps.runRegistry) {
+  if (runEl && deps.runLifecycle) {
     const runId = runIdFrom(runEl);
     if (runId) {
-      const outcome = await deps.runRegistry.resume(runId, { decision: "accept" });
+      const outcome = await deps.runLifecycle.resume(runId, { decision: "accept" });
       if (!("rejected" in outcome) && !("idempotent" in outcome)) {
         const row = deps.hitlStore.markPendingAnsweredByRun(runId, { decision: "accept" });
         const convOf = deps.runStore.getRun(runId)?.conversationId;
@@ -74,7 +74,7 @@ async function setup(streamCtor: (deps: RunDeps, log: { calls: number; appends: 
     taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus, conversationQueues: queues,
     imStore: new ImStore(db),
-    runRegistry: new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
+    runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
     runPiStreamFactory: () => streamCtor(deps, log),
   };
   const app = createApp(deps);

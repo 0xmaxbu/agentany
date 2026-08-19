@@ -4,7 +4,7 @@
 // 仅绑 127.0.0.1 + nonce 闸：只有本机持有效 nonce 的 pi 子进程能调。
 import { Hono } from "hono";
 import { verifyNonce, nonceConversation } from "./nonce";
-import type { RunRegistry } from "../runs/registry";
+import type { RunLifecycle } from "../runs/lifecycle";
 import type { RunsStore } from "../runs/store"; // ADR-0030：bridge 只学三域面（run/hitl/chat）
 import type { HitlStore } from "../hitl/store";
 import type { ChatStore } from "../chat/store";
@@ -30,7 +30,7 @@ function bearerToken(auth: string | undefined): string | null {
 }
 
 export interface BridgeDeps {
-  runRegistry?: RunRegistry;
+  runLifecycle?: RunLifecycle;
   runStore?: RunsStore; // /run/*（读 run 跨会话 guard）
   hitlStore?: HitlStore; // /ask_user /ask_answer /task/*（卡 CRUD）
   chatStore?: ChatStore; // taskCtx（nonce→conv）
@@ -41,7 +41,7 @@ export interface BridgeDeps {
 
 export function createBridgeApp(opts: BridgeDeps = {}): Hono {
   const app = new Hono();
-  const { runRegistry: reg, runStore, hitlStore, chatStore, eventBus, userStore, taskStore } = opts;
+  const { runLifecycle: reg, runStore, hitlStore, chatStore, eventBus, userStore, taskStore } = opts;
 
   // 全局 nonce 闸：所有路由需 Authorization: Bearer <有效未吊销 nonce>。缺/坏 → 401。
   app.use("*", async (c, next) => {
@@ -61,7 +61,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     const { workflowId, input } = body as { workflowId?: string; input?: unknown };
     if (!workflowId) return c.json({ error: "workflowId required" }, 400);
     try {
-      return c.json(reg.start({ conversationId, workflowId, input: input ?? {} }));
+      return c.json(await reg.start({ conversationId, workflowId, input: input ?? {} }));
     } catch (e) {
       return c.json({ error: (e as Error).message }, 400);
     }

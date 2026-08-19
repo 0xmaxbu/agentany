@@ -180,7 +180,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
     const aborted = queues.abort(conv.id); // 杀当前在跑 turn（无论来源）
-    const stopped = deps.runRegistry?.stopConversationRuns(conv.id) ?? 0; // #19：停该会话所有 running run（kill pi + 置 failed）
+    const stopped = deps.runLifecycle?.stopConversationRuns(conv.id) ?? 0; // #19：停该会话所有 running run（kill pi + 置 failed）
     return c.json({ aborted, stopped });
   });
 
@@ -191,7 +191,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
     queues.abort(conv.id);
-    deps.runRegistry?.stopConversationRuns(conv.id);
+    deps.runLifecycle?.stopConversationRuns(conv.id);
     const row = deps.chatStore.archiveConversation(conv.id);
     return row ? c.json(row) : c.json({ error: "conversation not found" }, 404);
   });
@@ -210,7 +210,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     if (!conv) return c.json({ error: "conversation not found" }, 404);
     if (userRoleOf(c) !== ROLE.admin) return c.json({ error: "admin only" }, 403);
     queues.abort(conv.id); // 先杀后删：在跑 turn 杀 pi 子进程
-    const stopped = deps.runRegistry?.stopConversationRuns(conv.id) ?? 0; // running runs 停（suspended 无进程，仅解绑）
+    const stopped = deps.runLifecycle?.stopConversationRuns(conv.id) ?? 0; // running runs 停（suspended 无进程，仅解绑）
     const sessionDir = resolveScopePaths(scopeOf(conv.workspaceId), conv.workspaceId).sessionDir;
     const filesErased = eraseConversationSessions(sessionDir, conv.id);
     const ok = deps.chatStore.deleteConversation(conv.id);

@@ -214,16 +214,23 @@ export class RunsStore {
     return messageId;
   }
 
-  /** ADR-0025 决策 6 落实（G1）：挂起 = log(suspended) + run status + ask 卡 **同一事务**（孤儿窗口归零）。返 questionId。 */
+  /**
+   * ADR-0025 决策 6 落实（G1）：挂起 = log(suspended) + run status + ask 卡 **同一事务**（孤儿窗口归零）。
+   * A2（ADR-0031 决策 5）：卡素材从 suspendPayload 派生（question/options/context 一等列直写）——引擎唯一挂起点；
+   * resumeData 仅续跑再挂时入 log。返 questionId。
+   */
   suspendedStep(p: {
     runId: string;
     stepId: string;
     input: unknown;
     suspendPayload: unknown; // ask 契约 payload（question/options/context）
     resumeSchema: unknown;
-    conversationId: string;
+    conversationId: string; // 卡归属会话（run 绑会话才有强制卡）
     values: unknown; // AskOption[] 快照（显式 {label,value}，卡自包含）
+    resumeData?: unknown; // 续跑再挂：答案随 log 记录
   }): number {
+    const payload = p.suspendPayload as { question?: string; context?: unknown } | null | undefined;
+    const options = Array.isArray(p.values) ? (p.values as { label: string; value: unknown }[]) : [];
     let qid = 0;
     this.db.transaction((tx) => {
       const row = tx.select({ m: sql<number>`coalesce(max(${workflowRunLog.seq}),0)+1` }).from(workflowRunLog)
@@ -231,52 +238,20 @@ export class RunsStore {
       const seq = row?.m ?? 1;
       tx.insert(workflowRunLog).values({
         runId: p.runId, seq, stepId: p.stepId, status: "suspended",
-        input: J(p.input), suspendPayload: J(p.suspendPayload), resumeSchema: J(p.resumeSchema), ts: now(),
+        input: J(p.input), suspendPayload: J(p.suspendPayload), resumeSchema: J(p.resumeSchema),
+        resumeData: J(p.resumeData), ts: now(),
       }).run();
       tx.update(workflowRuns).set({ status: "suspended", updatedAt: now() }).where(eq(workflowRuns.runId, p.runId)).run();
-      qid = this.insertCardInTx(tx, {
-        runId: p.runId, conversationId: p.conversationId, prompt: "请继续",
-        options: [], values: p.values, resumeSchema: p.resumeSchema, context: undefined,
+      qid = insertQuestion(tx as any, {
+        conversationId: p.conversationId, runId: p.runId, kind: "ask", input: null,
+        prompt: typeof payload?.question === "string" ? payload.question : "请继续",
+        options: J(options.map((o) => ((o as { label?: unknown }).label ?? String(o)) as string)) as string,
+        values: J(options), resumeSchema: J(p.resumeSchema),
+        context: typeof payload?.context === "string" ? payload.context : null,
+        multiple: 0, status: "pending", createdAt: now(),
       });
     });
     return qid;
-  }
-
-  /** ADR-0030：#官方 context 列退役走私前，A1 保留 legacy（A2 删除 deliverAskCard 后废弃）。 */
-  suspendWithAskCard(p: {
-    runId: string;
-    conversationId: string;
-    prompt: string;
-    options: unknown; // labels string[]
-    values: unknown; // AskOption[] 快照
-    resumeSchema?: unknown;
-    input?: unknown; // 兼容旧 {context} 包装（#67 前）；context 直列走 context 字段
-    context?: string;
-  }): number {
-    let qid = 0;
-    this.db.transaction((tx) => {
-      tx.update(workflowRuns).set({ status: "suspended", updatedAt: now() }).where(eq(workflowRuns.runId, p.runId)).run();
-      // 旧调用方仍传 input={context} → 拆出直列（000A1 期兼容；A2 删 legacy）
-      const legacyContext = (() => {
-        const i = P(p.input as string | null);
-        return !!i && typeof i === "object" && typeof (i as { context?: unknown }).context === "string"
-          ? (i as { context: string }).context : undefined;
-      })();
-      qid = this.insertCardInTx(tx, { runId: p.runId, conversationId: p.conversationId, prompt: p.prompt, options: p.options, values: p.values, resumeSchema: p.resumeSchema, context: p.context ?? legacyContext });
-    });
-    return qid;
-  }
-
-  private insertCardInTx(
-    tx: Parameters<Parameters<BunSQLiteDatabase["transaction"]>[0]>[0],
-    v: { runId: string; conversationId: string; prompt: string; options: unknown; values: unknown; resumeSchema?: unknown; context?: string },
-  ): number {
-    return insertQuestion(tx as any, {
-      conversationId: v.conversationId, runId: v.runId, kind: "ask", input: null,
-      prompt: v.prompt, options: J(v.options) as string, values: J(v.values),
-      resumeSchema: J(v.resumeSchema), context: v.context ?? null,
-      multiple: 0, status: "pending", createdAt: now(),
-    });
   }
 
   reset(): void {
@@ -294,15 +269,15 @@ export class RunsStore {
     return (r as any).changes ?? 0;
   }
 
-  /** 终态（completed/failed）且简报未发（brief_message_id NULL）且 brief 已写的 run——对账补发扫描键。排除已删会话。 */
-  listTerminalRunsWithoutBriefMessage(): RunRow[] {
+  /** G2（ADR-0031 决策 6）：终态且 (brief 缺 OR 简报消息缺) 的 run——对账补发扫描键。
+   *  扩窗吸收「终态已落但简报欠谱」的崩溃 run（brief 缺者补发侧从 log 兜底派生）。排除已删会话。 */
+  listReconcileCandidates(): RunRow[] {
     const rows = this.db
       .select()
       .from(workflowRuns)
       .where(and(
         or(eq(workflowRuns.status, "completed"), eq(workflowRuns.status, "failed")),
-        isNull(workflowRuns.briefMessageId),
-        isNotNull(workflowRuns.brief),
+        or(isNull(workflowRuns.brief), isNull(workflowRuns.briefMessageId)),
         isNotNull(workflowRuns.conversationId),
       ))
       .all();

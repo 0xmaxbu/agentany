@@ -1,10 +1,10 @@
 // ADR-0030（#67/A1）验收：createStores 单点装配（四 store 共享同一 db + 单调时钟）
-// + context 一等列（createQuestion/suspendWithAskCard 直列写读、registry 零走私）
-// + RunsStore 原子事务面落位（appendStep/suspendedStep：G1/G2 surface，A2 接入 runner/registry）。
+// + context 一等列（createQuestion/suspendedStep 直列写读、lifecycle 零走私）
+// + RunsStore 原子事务面落位（appendStep/suspendedStep：G1/G2 surface，A2 接入 runner/lifecycle）。
 import { describe, test, expect } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
 import { createStores } from "../src/stores";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import { EventBus } from "../src/chat/eventbus";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
 
@@ -46,11 +46,11 @@ describe("context 一等列（决策 3：退役 input-as-{context} 走私）", (
     expect(hitl.getQuestion(qid)!.input).toBeNull(); // 不再走私进 input 列
   });
 
-  test("suspendWithAskCard 写 context 直列 + registry 零 {context} 包装知识（全链透出）", async () => {
+  test("suspendedStep 写 context 直列 + lifecycle 零 {context} 包装知识（全链透出）", async () => {
     const store = createStores(openDbMigrated(":memory:"));
-    const reg = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), runPiFactory: stubFactory });
+    const reg = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), runPiFactory: stubFactory });
     store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
-    const start = reg.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const start = await reg.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
     expect(start.status).toBe("running");
     const runId = (start as any).runId as string;
     await delayUntil(() => !!store.hitl.getPendingByRun(runId)); // 挂起 + 引擎直建卡

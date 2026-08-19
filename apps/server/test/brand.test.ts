@@ -64,13 +64,14 @@ describe("brand-strategy-analysis · HITL 3 步 + revise 循环", () => {
     store.runs.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input: { brand, region } });
     const ctx = stubCtx(cwd);
 
-    // 1. start → select-angles suspend（ask 契约：question/options/context 预渲染）
+    // 1. start → select-angles suspend（ask 契约：question/options/context 预渲染；ADR-0031：payload 落 log suspendPayload 列）
     let r: any = await run(brandStrategyAnalysis, store.runs, runId, ctx);
     expect(r.status).toBe("suspended");
     expect((r as any).stepId).toBe("select-angles");
-    expect(((r as any).payload as any).question).toContain("请选择要深化的切入角度");
-    expect(((r as any).payload as any).options).toHaveLength(2); // 显式 {label,value}
-    expect(((r as any).payload as any).context).toContain("2 个"); // angles 预渲染进 context
+    const sus1 = store.runs.getLog(runId).at(-1);
+    expect((sus1 as any).suspendPayload?.question).toContain("请选择要深化的切入角度");
+    expect((sus1 as any).suspendPayload?.options).toHaveLength(2); // 显式 {label,value}
+    expect((sus1 as any).suspendPayload?.context).toContain("2 个"); // angles 预渲染进 context
 
     // 2. resume select → generate → approve suspend
     r = await resume(brandStrategyAnalysis, store.runs, runId, { selected: "1" }, ctx);

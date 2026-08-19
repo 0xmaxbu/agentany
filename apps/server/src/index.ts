@@ -2,7 +2,7 @@ import { createApp } from "./app";
 import { openDbMigrated } from "./db/client";
 import { createStores } from "./stores"; // ADR-0030 决策 5：四域 store 单点装配（boot 与 test/deps 共用）
 import { EventBus } from "./chat/eventbus";
-import { RunRegistry } from "./runs/registry";
+import { RunLifecycle } from "./runs/lifecycle";
 import { UserStore } from "./auth/store";
 import { StreamRegistry } from "./chat/stream-registry";
 import { WorkspaceStore } from "./workspaces/store";
@@ -36,10 +36,10 @@ const sweptRuns = taskStore.sweepUnfinishedRuns(); // 重启：执行中崩溃�
 if (sweptRuns > 0) console.log(`[scheduler] swept ${sweptRuns} unfinished run(s) to failed (crash recovery)`);
 const eventBus = new EventBus(); // 共享事件中心：持久流订阅 + bridge run 事件，同一实例
 const conversationQueues = new ConversationQueues(); // 共享 per-conv FIFO：chat 路由与任务执行同实例（#29）——产出会话被用户浏览聊天时任务 turn 仍严格串行
-const runRegistry = new RunRegistry({ runStore, chatStore, hitlStore, eventBus }); // ADR-0030：注册只学三域面
-runRegistry.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed + 「异常终止」brief（进程没在跑了）
-runRegistry.reconcileBriefMessages(); // ADR-0025 决策 3：sweep 之后——终态但简报未发的 run 幂等补发（崩溃区间归零）
-const deps: RunDeps = { runStore, chatStore, hitlStore, feedbackStore, userStore, streamRegistry, workspaceStore, taskStore, imStore: new ImStore(db), eventBus, conversationQueues, runRegistry };
+const runLifecycle = new RunLifecycle({ runStore, chatStore, hitlStore, eventBus }); // ADR-0031：run 生命周期单组合根（只学三域面）
+runLifecycle.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed + 「异常终止」brief（进程没在跑了）
+runLifecycle.reconcileBriefMessages(); // ADR-0025 决策 3：sweep 之后——终态但简报未发的 run 幂等补发（崩溃区间归零）
+const deps: RunDeps = { runStore, chatStore, hitlStore, feedbackStore, userStore, streamRegistry, workspaceStore, taskStore, imStore: new ImStore(db), eventBus, conversationQueues, runLifecycle };
 const scheduler = new TaskScheduler({
   store: taskStore,
   executeTask: makeExecuteTask({ deps, queues: conversationQueues, eventBus }), // #29 真链：runTurn 同构、任务 pi 无 bridge
@@ -76,6 +76,6 @@ const server = Bun.serve({
   idleTimeout: 255, // SSE 持久流长连：默认 10s 会在事件间隙（pi 首 token 延迟常 >10s）掐断 GET /stream
   fetch: (req) => app.fetch(req),
 });
-startBridge(BRIDGE_PORT, { runRegistry, runStore, chatStore, hitlStore, eventBus }); // bridge RPC（loopback:3199，pi↔server；nonce 闸；#11/#14/#16）
+startBridge(BRIDGE_PORT, { runLifecycle, runStore, chatStore, hitlStore, eventBus }); // bridge RPC（loopback:3199，pi↔server；nonce 闸；#11/#14/#16）
 console.log(`agentany server on http://localhost:${server.port}`);
 console.log(`agentany bridge on http://localhost:${BRIDGE_PORT} (pi↔server RPC, nonce-gated)`);

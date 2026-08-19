@@ -4,7 +4,7 @@ import { describe, test, expect } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
 import { createStores, type Stores } from "../src/stores";
 import { EventBus } from "../src/chat/eventbus";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
 
 const stubFactory = (): ConfiguredRunPi => async () => ({ text: "", messages: [], toolResults: [] });
@@ -19,7 +19,7 @@ function newRegistry() {
   const store = createStores(openDbMigrated(":memory:"));
   store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
   const eventBus = new EventBus();
-  const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
+  const registry = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
   return { store, eventBus, registry };
 }
 
@@ -110,6 +110,24 @@ describe("registry · reconcile 幂等补发", () => {
     expect(msgs[0].content).not.toContain("log 重派生文案");
   });
 
+  test("G2 宽窗：终态但 brief IS NULL（引擎落终态→deliverBrief 前崩）→ 从 log 兜底派生补发", async () => {
+    const { store, registry } = newRegistry();
+    // 模拟:引擎把 run 推进到 completed（appendStep 带 runStatus 同事务）但 deliverBrief 未跑——
+    // 旧窄窗(只扫 briefMessageId IS NULL)抓不到;宽窗=终态 ∧ (brief 缺 OR briefMessageId 缺)。
+    store.runs.createRun({ runId: "r-wide", workflowId: "brand-research", workspaceId: "ws_company", conversationId: "c1", input: { brand: "宽窗" } });
+    store.runs.appendStep("r-wide", { stepId: "report", status: "completed", output: { brief: "宽窗简报" }, runStatus: "completed" });
+    expect(store.runs.getRun("r-wide")!.brief).toBeNull(); // 前提:brief 缺(崩窗口正中)
+
+    expect(registry.reconcileBriefMessages()).toBe(1);
+    const row = store.runs.getRun("r-wide")!;
+    expect(row.briefMessageId).toBeGreaterThan(0);
+    expect(row.brief).toContain("宽窗简报"); // brief 由 log 兜底派生回填
+    const msgs = store.chat.listMessages("c1").filter((m) => m.role === "assistant");
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toContain("宽窗简报");
+    expect(registry.reconcileBriefMessages()).toBe(0); // 已持 brief+briefMessageId → 幂等
+  });
+
   test("对账排除已删会话的 run（conversationId 已解绑）", () => {
     const { store, registry } = newRegistry();
     store.runs.createRun({ runId: "r-orphan", workflowId: "w", workspaceId: "ws_company", conversationId: null, input: {} });
@@ -123,7 +141,7 @@ describe("full swing · boot 顺序 sweep → reconcile（无 LLM、经 EventBus
     const { store, eventBus, registry } = newRegistry();
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
-    const started = registry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {}, approved: true });
+    const started = await registry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {}, approved: true });
     if (started.status !== "running") throw new Error("expected running");
     await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
     await registry.resume(started.runId, { decision: "accept" });

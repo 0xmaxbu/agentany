@@ -5,13 +5,16 @@ import { openDbMigrated } from "../src/db/client";
 import { createStores, type Stores } from "../src/stores";
 import type { RunDeps } from "../src/runs";
 import { fullDeps } from "./deps";
+import { RunLifecycle } from "../src/runs/lifecycle";
+import { EventBus } from "../src/chat/eventbus";
 
 function newDeps(): RunDeps {
   const store = createStores(openDbMigrated(":memory:"));
   // synthetic 是纯程序步、不调 runPi；工厂给个 stub 兜底。
   const runPiFactory: RunDeps["runPiFactory"] = () =>
     async () => ({ text: "[stub]", messages: [], toolResults: [] });
-  return fullDeps(store, { runPiFactory });
+  const runLifecycle = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), runPiFactory });
+  return fullDeps(store, { runPiFactory, runLifecycle });
 }
 
 const JSON_HEADERS = { "content-type": "application/json" };
@@ -38,12 +41,20 @@ describe("HTTP · 工作流路由", () => {
       method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ resumeData: { decision: "accept" } }),
     });
     expect(res.status).toBe(200);
-    expect(((await res.json()) as any).status).toBe("completed");
+    expect(((await res.json()) as any).status).toBe("running"); // ADR-0025 决策 11：同步 verdict 即时返，续跑 detached
 
-    const get = await app.request(`/runs/${runId}`);
-    expect(get.status).toBe(200);
-    const gb = (await get.json()) as any;
-    const completed = gb.log.filter((e: any) => e.status === "completed").map((e: any) => e.stepId);
+    // 等 detached 续跑收口 → completed
+    const getRun = async () => ((await (await app.request(`/runs/${runId}`)).json()) as any);
+    let gb: any;
+    for (let i = 0; i < 100; i++) {
+      gb = await getRun();
+      if (gb?.run?.status === "completed") break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(gb.run.status).toBe("completed");
+
+    const full = gb; // 已等 completed，直接复用轮询末帧
+    const completed = full.log.filter((e: any) => e.status === "completed").map((e: any) => e.stepId);
     expect(completed.join(",")).toBe("s1,review,s2");
   });
 

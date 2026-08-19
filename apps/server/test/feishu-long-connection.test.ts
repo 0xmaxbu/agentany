@@ -14,7 +14,7 @@ import { WorkspaceStore } from "../src/workspaces/store";
 import { ScheduledTaskStore } from "../src/scheduled-tasks/store";
 import { EventBus } from "../src/chat/eventbus";
 import { ConversationQueues } from "../src/chat/queue";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import { ImStore } from "../src/im/store";
 import { FeishuTransport } from "../src/im/feishu/transport";
 import { FeishuLongConnection, backoffDelayMs, shouldGiveUp, type ReconnectConfig } from "../src/im/feishu/long-connection";
@@ -189,7 +189,7 @@ describe("T2 e2e：bound 用户 + pending ask → 文本事件 → 判答收口 
       workspaceStore: new WorkspaceStore(db),
       taskStore: new ScheduledTaskStore(db, store.chat),
       eventBus, conversationQueues: queues, imStore: new ImStore(db),
-      runRegistry: new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
+      runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
       runPiStreamFactory: () => stubJudge(deps, log),
     };
     const inbound = makeFeishuInbound(deps, transport);
@@ -236,7 +236,7 @@ describe("T2 e2e：bound 用户 + pending ask → 文本事件 → 判答收口 
       workspaceStore: new WorkspaceStore(db),
       taskStore: new ScheduledTaskStore(db, store.chat),
       eventBus, conversationQueues: queues, imStore: new ImStore(db),
-      runRegistry: new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
+      runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
       runPiStreamFactory: () => stubJudge(deps, log),
     };
     const inbound = makeFeishuInbound(deps, transport);

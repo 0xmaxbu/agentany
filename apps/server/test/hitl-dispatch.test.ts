@@ -11,7 +11,7 @@ import { WorkspaceStore } from "../src/workspaces/store";
 import { ScheduledTaskStore } from "../src/scheduled-tasks/store";
 import { EventBus } from "../src/chat/eventbus";
 import { ConversationQueues } from "../src/chat/queue";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import { deterministicResumeData } from "../src/chat/hitl-dispatch";
 import type { RunDeps } from "../src/runs";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
@@ -33,7 +33,7 @@ async function setup() {
     workspaceStore: new WorkspaceStore(db),
     taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus,
-    runRegistry: new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory }),
+    runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory }),
   };
   store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
   store.chat.createConversation({ id: "c2", workspaceId: "ws_company", userId: m1.id });
@@ -149,8 +149,8 @@ describe("dispatch · approval 卡（收编 #18）", () => {
 describe("dispatch · ask 卡（选项点击确定性 resume）", () => {
   test("挂起即引擎直建强制卡；点选项 → 确定性 resume + markAnswered", async () => {
     // synthetic-3step 的 review 是 ask 步：挂起同事务直建强制卡（options + values 快照 + resumeSchema）
-    const reg = ctx.deps.runRegistry!;
-    const start = reg.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const reg = ctx.deps.runLifecycle!;
+    const start = await reg.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
     expect(start.status).toBe("running");
     const runId = (start as any).runId as string;
     await new Promise((res) => setTimeout(res, 150)); // 等 suspend + 引擎直建卡
@@ -214,8 +214,8 @@ describe("dispatch · ask 卡（选项点击确定性 resume）", () => {
 
   
   test("双击已答强制卡 → 幂等 ack：消息照常落库、不二次派发/起轮", async () => {
-    const reg = ctx.deps.runRegistry!;
-    const start = reg.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const reg = ctx.deps.runLifecycle!;
+    const start = await reg.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
     const runId = (start as any).runId as string;
     await new Promise((res) => setTimeout(res, 150));
     const qid = ctx.store.hitl.getPendingByRun(runId)!.id;

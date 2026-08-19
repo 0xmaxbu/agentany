@@ -1,5 +1,5 @@
 // ticket #19 Part C：真 pi 冒烟（gated on GO_API_KEY/PI_API_KEY）—— 全链。
-// boot 真 server（真 makeRunPiStream + runRegistry + bridge），驱动 chat「跑合成三步」全链：
+// boot 真 server（真 makeRunPiStream + runLifecycle + bridge），驱动 chat「跑合成三步」全链：
 // start_workflow → run_started/step_* → run_suspended → 自动 turn → ask_user → 用户「accept」→ 判答 resume → run_completed。
 // 断【结构帧序列】（非文本——pi 非确定性）。慢、耗 token。须 `DATA_DIR=<temp> bun test` 运行（config.DATA_DIR 模块加载时常量）。
 // 注：完整确定性全链由 e2e/workflow.spec.ts（scripted stub 驱动真桥接真事件）覆盖；本测用真 pi 复核。
@@ -9,7 +9,7 @@ import { fullDeps } from "./deps";
 import { openDbMigrated } from "../src/db/client";
 import { createStores, type Stores } from "../src/stores";
 import { EventBus } from "../src/chat/eventbus";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import { startBridge, BRIDGE_PORT } from "../src/bridge/server";
 
 const HAS_KEY = !!(process.env.PI_API_KEY || process.env.GO_API_KEY);
@@ -49,9 +49,9 @@ describe.skipIf(!HAS_KEY)("真 pi 冒烟 · 跑合成三步全链（#19）", () 
     process.env.AGENTANY_NO_SANDBOX = "1"; // 沙箱在非标准 cwd 挡 pi → exit 1（ADR-0011 A1 WIP）；冒烟验 pi 通路
     const store = createStores(openDbMigrated());
     const eventBus = new EventBus();
-    const runRegistry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
-    const app = createApp(fullDeps(store, { eventBus, runRegistry }));
-    const bridgeSrv = startBridge(BRIDGE_PORT, { runRegistry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const runLifecycle = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const app = createApp(fullDeps(store, { eventBus, runLifecycle }));
+    const bridgeSrv = startBridge(BRIDGE_PORT, { runLifecycle, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", idleTimeout: 255, fetch: (r) => app.fetch(r) });
     baseUrl = `http://127.0.0.1:${server.port}`;
     stopAll = () => { server.stop(); bridgeSrv.stop(); };

@@ -9,7 +9,7 @@ import { fullDeps } from "./deps";
 import { openDbMigrated } from "../src/db/client";
 import { createStores, type Stores } from "../src/stores";
 import { EventBus } from "../src/chat/eventbus";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import { startBridge, BRIDGE_PORT } from "../src/bridge/server";
 import { DATA_DIR } from "../src/config";
 import { readdirSync, readFileSync, rmSync } from "node:fs";
@@ -49,9 +49,9 @@ describe.skipIf(!HAS_KEY)("compaction 实测 · 真 pi 长对话 jsonl（#19）"
     // DATA_DIR 须外部以 `DATA_DIR=<temp> bun test` 设（模块加载时常量）；DATA_DIR 即其解析值。
     const store = createStores(openDbMigrated());
     const eventBus = new EventBus();
-    const runRegistry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
-    const app = createApp(fullDeps(store, { eventBus, runRegistry }));
-    const bridgeSrv = startBridge(BRIDGE_PORT, { runRegistry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const runLifecycle = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
+    const app = createApp(fullDeps(store, { eventBus, runLifecycle }));
+    const bridgeSrv = startBridge(BRIDGE_PORT, { runLifecycle, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", idleTimeout: 255, fetch: (r) => app.fetch(r) });
     baseUrl = `http://127.0.0.1:${server.port}`;
     stopAll = () => { server.stop(); bridgeSrv.stop(); };

@@ -8,7 +8,7 @@ import { createApp } from "./app";
 import { openDbMigrated } from "./db/client";
 import { createStores } from "./stores"; // ADR-0030：四域 store 单点装配
 import { EventBus } from "./chat/eventbus";
-import { RunRegistry } from "./runs/registry";
+import { RunLifecycle } from "./runs/lifecycle";
 import { startBridge, BRIDGE_PORT } from "./bridge/server";
 import { UserStore } from "./auth/store";
 import { StreamRegistry } from "./chat/stream-registry";
@@ -128,7 +128,7 @@ const db = openDbMigrated();
 }
 const { runs: runStore, chat: chatStore, hitl: hitlStore, feedback: feedbackStore } = createStores(db); // 四域共享同一 db
 const eventBus = new EventBus(); // #48/T6 后 run/chat 帧只推流展示（user→turn 内联 POST 路由；bridge run 事件经此到持久流）
-const runRegistry = new RunRegistry({ runStore, chatStore, hitlStore, eventBus, runPiFactory: stubRunPiFactory });
+const runLifecycle = new RunLifecycle({ runStore, chatStore, hitlStore, eventBus, runPiFactory: stubRunPiFactory });
 // #31：定时任务三表 + 调度器（手动跑走真 executeTask——runTurn 用下面的 stub streamFactory 产出确定性文本）
 const taskStore = new ScheduledTaskStore(db, chatStore);
 const deps: RunDeps = {
@@ -137,7 +137,7 @@ const deps: RunDeps = {
   streamRegistry: new StreamRegistry(),
   workspaceStore: new WorkspaceStore(db),
   eventBus,
-  runRegistry,
+  runLifecycle,
   runPiStreamFactory: scriptedStubFactory,
   taskStore,
   conversationQueues: new ConversationQueues(),
@@ -148,7 +148,7 @@ deps.scheduler = new TaskScheduler({
 });
 // auth/鉴权依赖（e2e 走 dev 放行；workspaceStore 公司 ws 由迁移 seed）
 const app = createApp(deps);
-startBridge(BRIDGE_PORT, { runRegistry, runStore, chatStore, hitlStore, eventBus }); // bridge RPC（loopback:3199，stub 经此驱动）
+startBridge(BRIDGE_PORT, { runLifecycle, runStore, chatStore, hitlStore, eventBus }); // bridge RPC（loopback:3199，stub 经此驱动）
 
 const port = Number(process.env.PORT ?? 3000);
 Bun.serve({ port, hostname: "127.0.0.1", fetch: (r) => app.fetch(r) });

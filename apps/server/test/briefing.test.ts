@@ -9,7 +9,7 @@ import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
 import { EventBus } from "../src/chat/eventbus";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle, type StartResult } from "../src/runs/lifecycle";
 import { ConversationQueues } from "../src/chat/queue";
 import type { RunDeps } from "../src/runs";
 import type { ConfiguredRunPi, ConfiguredRunPiStream } from "../src/pi/runPi-factory";
@@ -25,8 +25,8 @@ const delayUntil = async (pred: () => boolean, timeoutMs = 3000): Promise<void> 
   throw new Error("timeout waiting for condition");
 };
 
-// 收敛 StartOutcome → 必 running 的 runId（synthetic/brand-research 在 auto 姿态下直跑）。
-const startedRunning = (s: ReturnType<RunRegistry["start"]>) => {
+// 收敛 StartResult → 必 running 的 runId（synthetic/brand-research 在 auto 姿态下直跑）。
+const startedRunning = (s: StartResult) => {
   if (s.status !== "running") throw new Error(`expected running, got ${s.status}`);
   return s.runId;
 };
@@ -42,24 +42,24 @@ function setup(stubFactory: () => ConfiguredRunPi = okStub) {
   const db = openDbMigrated(":memory:");
   const store = createStores(db);
   const eventBus = new EventBus();
-  const runRegistry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
+  const runLifecycle = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
   const deps: RunDeps = {
     runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
-    workspaceStore: new WorkspaceStore(db), eventBus, runRegistry,
+    workspaceStore: new WorkspaceStore(db), eventBus, runLifecycle,
   };
   store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "dev-user" });
   const app = createApp(deps);
-  return { deps, store, eventBus, app, runRegistry };
+  return { deps, store, eventBus, app, runLifecycle };
 }
 
 describe("T1 简报直投 · completed", () => {
   test("brand-research 完成 → 同事务写 brief+briefMessageId + 简报消息 + 会话 touch + 帧", async () => {
-    const { store, eventBus, runRegistry } = setup(okStub);
+    const { store, eventBus, runLifecycle } = setup(okStub);
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
     const touchedBefore = store.chat.getConversation("c1")!.updatedAt;
 
-    const started = runRegistry.start({ conversationId: "c1", workflowId: "brand-research", input: { brand: "测试" }, approved: true });
+    const started = await runLifecycle.start({ conversationId: "c1", workflowId: "brand-research", input: { brand: "测试" }, approved: true });
     const runId = startedRunning(started);
     await delayUntil(() => frames.some((f) => f.type === "run_completed"));
 
@@ -92,13 +92,13 @@ describe("T1 简报直投 · completed", () => {
   });
 
   test("缺 brief → 步骤列表兜底（不崩、不静默）", async () => {
-    const { store, eventBus, runRegistry } = setup(okStub);
+    const { store, eventBus, runLifecycle } = setup(okStub);
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
 
-    const r = runRegistry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const r = await runLifecycle.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
     await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
-    await runRegistry.resume((r as { runId: string }).runId, { decision: "accept" });
+    await runLifecycle.resume((r as { runId: string }).runId, { decision: "accept" });
     await delayUntil(() => frames.some((f) => f.type === "run_completed"));
 
     const row = store.runs.getRun((r as { runId: string }).runId)!;
@@ -112,11 +112,11 @@ describe("T1 简报直投 · completed", () => {
 
 describe("T1 简报直投 · failed", () => {
   test("runPi 抛错 → note 即简报（截首行/200）+ run_failed 帧 + 简报消息", async () => {
-    const { store, eventBus, runRegistry } = setup(failStub);
+    const { store, eventBus, runLifecycle } = setup(failStub);
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
 
-    const r = runRegistry.start({ conversationId: "c1", workflowId: "brand-research", input: { brand: "失败车" }, approved: true });
+    const r = await runLifecycle.start({ conversationId: "c1", workflowId: "brand-research", input: { brand: "失败车" }, approved: true });
     await delayUntil(() => frames.some((f) => f.type === "run_failed"));
 
     const row = store.runs.getRun((r as { runId: string }).runId)!;
@@ -136,7 +136,7 @@ describe("T6 #48 路由重构 · （真 HTTP POST + 计数 runPiStream）", () =
     store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "dev-user", title: "t" }); // 有 title → 跳过自动命名（不占 LLM 计数）
     const eventBus = new EventBus();
     const queues = new ConversationQueues();
-    const runRegistry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: okStub });
+    const runLifecycle = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: okStub });
     let llmTurns = 0;
     const factory = (): ConfiguredRunPiStream => async (call) => {
       llmTurns++;
@@ -148,7 +148,7 @@ describe("T6 #48 路由重构 · （真 HTTP POST + 计数 runPiStream）", () =
     const deps: RunDeps = {
       runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore: new UserStore(openDbMigrated(":memory:")), streamRegistry: new StreamRegistry(),
       workspaceStore: new WorkspaceStore(openDbMigrated(":memory:")),
-      eventBus, conversationQueues: queues, runRegistry, runPiStreamFactory: factory,
+      eventBus, conversationQueues: queues, runLifecycle, runPiStreamFactory: factory,
     };
     const app = createApp(deps);
     const send = (content: string, inReplyTo?: number) =>
@@ -156,26 +156,26 @@ describe("T6 #48 路由重构 · （真 HTTP POST + 计数 runPiStream）", () =
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify(inReplyTo === undefined ? { content } : { content, inReplyTo }),
       });
-    return { store, eventBus, queues, app, runRegistry, llmCount: () => llmTurns, send };
+    return { store, eventBus, queues, app, runLifecycle, llmCount: () => llmTurns, send };
   }
 
   test("run 终态不再起事件 turn（零 LLM 直投）：synthetic 一路 completed 计数 0", async () => {
-    const { eventBus, runRegistry, llmCount } = routeSetup();
+    const { eventBus, runLifecycle, llmCount } = routeSetup();
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
-    const started = runRegistry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const started = await runLifecycle.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
     const runId = (started as any).runId as string;
     await delayUntil(() => frames.some((f) => f.type === "run_suspended"));
-    await runRegistry.resume(runId, { decision: "accept" });
+    await runLifecycle.resume(runId, { decision: "accept" });
     await delayUntil(() => frames.some((f) => f.type === "run_completed"));
     expect(llmCount()).toBe(0); // 无事件 turn（旧行为会 +1 转述）
   });
 
   test("挂起强制卡点选 → 程序化轮：零 LLM、免入队、cardAnswered 旗标、resume 续跑 + 简报", async () => {
-    const { store, eventBus, queues, runRegistry, llmCount, send } = routeSetup();
+    const { store, eventBus, queues, runLifecycle, llmCount, send } = routeSetup();
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
-    const started = runRegistry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const started = await runLifecycle.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
     const runId = (started as any).runId as string;
     await delayUntil(() => frames.some((f) => f.type === "hitl_request"));
     const qid = store.hitl.getPendingByRun(runId)!.id;
@@ -193,10 +193,10 @@ describe("T6 #48 路由重构 · （真 HTTP POST + 计数 runPiStream）", () =
   });
 
   test("双击已答卡 → 幂等 ack（第二次不二次起轮、不二次派发）", async () => {
-    const { store, eventBus, runRegistry, llmCount, send } = routeSetup();
+    const { store, eventBus, runLifecycle, llmCount, send } = routeSetup();
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
-    const started = runRegistry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const started = await runLifecycle.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
     const runId = (started as any).runId as string;
     await delayUntil(() => frames.some((f) => f.type === "hitl_request"));
     const qid = store.hitl.getPendingByRun(runId)!.id;
@@ -210,7 +210,7 @@ describe("T6 #48 路由重构 · （真 HTTP POST + 计数 runPiStream）", () =
   });
 
   test("自主卡点选 → 卡收口（answer=选项文本）+ LLM 轮照跑（pi 继续对话，不跳轮）", async () => {
-    const { store, runRegistry, llmCount, send } = routeSetup();
+    const { store, runLifecycle, llmCount, send } = routeSetup();
     const autoId = store.hitl.createQuestion({
       conversationId: "c1", kind: "ask", runId: null, prompt: "澄清：目标市场？", options: ["是", "否"],
     });
@@ -224,10 +224,10 @@ describe("T6 #48 路由重构 · （真 HTTP POST + 计数 runPiStream）", () =
   });
 
   test("429 分轨：队列满时点卡仍 202 + resume 执行；文字消息 → 429", async () => {
-    const { store, eventBus, queues, runRegistry, send } = routeSetup();
+    const { store, eventBus, queues, runLifecycle, send } = routeSetup();
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
-    const started = runRegistry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
+    const started = await runLifecycle.start({ conversationId: "c1", workflowId: "synthetic-3step", input: {} });
     const runId = (started as any).runId as string;
     await delayUntil(() => frames.some((f) => f.type === "hitl_request"));
     const qid = store.hitl.getPendingByRun(runId)!.id;
@@ -248,7 +248,7 @@ describe("T6 #48 路由重构 · （真 HTTP POST + 计数 runPiStream）", () =
 describe("T1 read_run 8k 封顶", () => {
   test("latestOutput stringify 截 8000 + 尾注；短输出原样", () => {
     const store = createStores(openDbMigrated(":memory:"));
-    const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), runPiFactory: okStub });
+    const registry = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), runPiFactory: okStub });
 
     store.runs.createRun({ runId: "r-short", workflowId: "w", workspaceId: "ws_company", input: {}, conversationId: null });
     store.runs.appendLog("r-short", { stepId: "s", status: "completed", output: { text: "短" } });

@@ -1,5 +1,5 @@
 // HitlStore（ADR-0030）：HITL 提问卡（ask/approval/task）持久化 + CAS 收口。
-// insertQuestion/toQuestionRow 模块级导出——RunsStore 的原子挂起（suspendedStep/suspendWithAskCard）
+// insertQuestion/toQuestionRow 模块级导出——RunsStore 的原子挂起（suspendedStep）
 // 在复合事务内复用同一字段集（code-review S2 单点收敛保）；context 走一等列（ADR-0030，退役 input 走私）。
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite";

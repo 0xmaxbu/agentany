@@ -128,13 +128,13 @@ const approvalHandler: KindHandler = async ({ deps, q, content, userId, publish 
   // approve：CAS 占位 → createRun（approved:true 跳 policy）→ 回填；失败回滚可重试
   const claimed = deps.hitlStore.markApprovalDecided(q.id, { decision: "approve" }, userId);
   if (!claimed) return { handled: false };
-  if (!deps.runRegistry) {
+  if (!deps.runLifecycle) {
     deps.hitlStore.reopenApproval(q.id);
-    return { handled: true, skipTurn: true, error: "run registry unavailable" };
+    return { handled: true, skipTurn: true, error: "run lifecycle unavailable" };
   }
   let runId: string;
   try {
-    const outcome = deps.runRegistry.start({
+    const outcome = await deps.runLifecycle.start({
       conversationId: q.conversationId, workflowId: q.workflowId!, input: q.input ?? {}, approved: true,
     });
     if (outcome.status !== "running") {
@@ -167,7 +167,7 @@ const askHandler: KindHandler = async ({ deps, q, content, publish }) => {
   if (resumeData === undefined) return { handled: false }; // 无快照不可映射 → slide（卡保 pending）
   let outcome: ResumeOutcome;
   try {
-    outcome = await deps.runRegistry!.resume(q.runId, resumeData);
+    outcome = await deps.runLifecycle!.resume(q.runId, resumeData);
   } catch (e) {
     return { handled: true, skipTurn: true, error: `resume failed: ${(e as Error).message}` };
   }

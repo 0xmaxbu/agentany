@@ -6,13 +6,16 @@ import { openDbMigrated } from "../src/db/client";
 import { createStores, type Stores } from "../src/stores";
 import type { RunDeps } from "../src/runs";
 import { fullDeps } from "./deps";
+import { RunLifecycle } from "../src/runs/lifecycle";
+import { EventBus } from "../src/chat/eventbus";
 
 const JH = { "content-type": "application/json" };
 function newApp() {
   const store = createStores(openDbMigrated(":memory:"));
   const runPiFactory: RunDeps["runPiFactory"] = () =>
     async () => ({ text: "[stub]", messages: [], toolResults: [] });
-  return createApp(fullDeps(store, { runPiFactory }));
+  const runLifecycle = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), runPiFactory });
+  return createApp(fullDeps(store, { runPiFactory, runLifecycle }));
 }
 
 describe("security hotfix · h1 workspaceId 校验（ADR-0018）", () => {

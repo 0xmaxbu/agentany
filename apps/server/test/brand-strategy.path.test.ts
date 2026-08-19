@@ -33,10 +33,12 @@ describe("brand-strategy-analysis · anglesPath 路径卫生", () => {
     const dir = join(CWD, "brand-research", "acme-全国");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "angles.json"), JSON.stringify([{ id: 1, title: "t" }]));
-    const { res } = await startWith(store, { brand: "acme" });
-    expect(res.status).toBe("suspended");
-    expect((res as any).payload.question).toContain("请选择要深化的切入角度");
-    expect((res as any).payload.context).toContain("1. t"); // angles 预渲染进 context
+    const started = await startWith(store, { brand: "acme" });
+    expect(started.res.status).toBe("suspended");
+    const sus = store.runs.getLog(started.runId).at(-1);
+    expect((sus as any).suspendPayload?.question).toContain("请选择要深化的切入角度");
+    expect((sus as any).suspendPayload?.context).toContain("1. t"); // angles 预渲染进 context
+    expect((sus as any).resumeSchema).toBeTruthy(); // ADR-0031：resumeSchema 与 payload 同落 log
   });
 
   test("anglesPath 指向工作区【外】的有效 JSON → failed（防跨区/任意文件读）", async () => {
@@ -58,9 +60,10 @@ describe("brand-strategy-analysis · anglesPath 路径卫生", () => {
   test("anglesPath 指向工作区内有效 JSON → 正常读（灵活性保留）", async () => {
     const store = newStore();
     writeFileSync(join(CWD, "custom-angles.json"), JSON.stringify([{ id: 9 }]));
-    const { res } = await startWith(store, { brand: "acme", anglesPath: "custom-angles.json" });
-    expect(res.status).toBe("suspended");
-    expect((res as any).payload.context).toContain("1. 9"); // 由 {id:9}（无 title → id）预渲染
+    const s2 = await startWith(store, { brand: "acme", anglesPath: "custom-angles.json" });
+    expect(s2.res.status).toBe("suspended");
+    const sus2 = store.runs.getLog(s2.runId).at(-1);
+    expect((sus2 as any).suspendPayload?.context).toContain("1. 9"); // 由 {id:9}（无 title → id）预渲染
   });
 });
 
