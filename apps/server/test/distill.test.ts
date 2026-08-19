@@ -219,17 +219,17 @@ describe("runDistill（#36 蒸馏全链）", () => {
     ensureKnowledgeRepo();
     const { deps } = setup();
     seedSession("2026-08-10T00-00-00-000Z_chat-c1");
-    const llm = stubLlm({ json: { actions: [{ target: "global", op: "revise", content: "x" }], commitMessage: "m" } });
-    // 破坏 commit：把 git 换成必败（PATH 优先目录放假 git）——用 DistillOptions 不可注入 commit，
-    // 这里用真 git 但改 repo 状态制造冲突：commit.message 含换行会被 -m 拒？不会。最稳：临时改 user.name？
-    // 简化：注入坏 commitMessage 使 shell 层出错不可行（execFileSync 数组参数安全）。
-    // 采用：把 .git/index 锁死（写只读文件）→ add 失败 → 同一 try 分支。
-    writeFileSync(join(knowledgeRoot(), ".git", "index.lock"), "locked", "utf8");
-    const res = await runDistill(deps, llm.factory as any);
+    const global = join(knowledgeRoot(), "experience/global.md");
+    mkdirSync(join(global, ".."), { recursive: true });
+    writeFileSync(global, "旧经验", "utf8"); // 预置既有内容（回滚应恢复到它）
+    const llm = stubLlm({ json: { actions: [{ target: "global", op: "revise", content: "新经验" }], commitMessage: "m" } });
+    // C1/#66：commit seam 注入必败——直测快照回滚路径（不再 hack .git/index.lock）
+    const res = await runDistill(deps, llm.factory as any, {
+      commit: () => { throw new Error("模拟 commit 失败"); },
+    });
     expect(res.ok).toBe(false);
     expect(res.note).toContain("commit failed");
-    rmSync(join(knowledgeRoot(), ".git", "index.lock"), { force: true });
-    expect(git(["status", "--porcelain"], knowledgeRoot())).toBe(""); // 写回已回滚（checkout -- .）
+    expect(readFileSync(global, "utf8")).toBe("旧经验"); // 文件级快照回滚（writeBack 恢复，非 git checkout）
     expect(readState().processedFiles).toEqual([]); // 水位未推进
   });
 

@@ -6,8 +6,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { dataDir, generalSessionDir, workspaceSessionDir } from "../config";
-import { COMPANY_WORKSPACE_ID } from "../workspaces/store";
+import { dataDir, forAllWorkspaces, generalSessionDir, workspaceSessionDir } from "../config";
 import { makeRunPi, type MakeRunPiOpts, type ConfiguredRunPi } from "../pi/runPi-factory";
 import { knowledgeRoot, DISTILL_STATE_FILE, ensureKnowledgeRepo } from "./repo";
 import type { RunDeps } from "../runs";
@@ -16,12 +15,8 @@ import type { WorkflowStore } from "../workflow-engine/store";
 /** pi-sessions 根（general + 全部 workspace；水位按文件名集合，跨目录不重名——文件名含时间戳+sessionId）。
  *  路径真相走 config.ts 口径函数（scope.ts 约定）；公司 ws 即 general 目录。 */
 function sessionDirs(deps: RunDeps): string[] {
-  const dirs = [generalSessionDir()];
-  for (const ws of deps.workspaceStore!.listAllWorkspaces()) {
-    if (ws.id === COMPANY_WORKSPACE_ID) continue; // 公司 ws 即 general 目录（scope.ts 口径）
-    dirs.push(workspaceSessionDir(ws.id));
-  }
-  return dirs;
+  // C1/#66：与 system 任务全域共用的 ws 目录枚举单点（config.forAllWorkspaces）——公司 ws 锚 general 目录
+  return forAllWorkspaces(deps.workspaceStore!.listAllWorkspaces(), generalSessionDir(), workspaceSessionDir);
 }
 
 // ── 语料筛选（纯函数）──
@@ -132,6 +127,7 @@ function gitOut(args: string[], cwd: string): string {
 
 export interface DistillOptions {
   push?: () => void; // 注入 push（默认真推；测试注入失败/跳过）
+  commit?: (msg: string) => void; // 注入 commit（默认 git add+commit；测试注入必败以直测回滚路径——不再 hack .git/index.lock）
 }
 
 /**
@@ -243,8 +239,7 @@ export async function runDistill(
   // （水位+经验写回一起丢弃，回到本轮起点——原子性；下轮重读同批素材）。
   const msg = parsed.commitMessage?.trim() || "distill: weekly batch";
   try {
-    gitOut(["add", "-A"], root);
-    gitOut(["commit", "-q", "-m", msg, "--allow-empty"], root);
+    (opts.commit ?? defaultCommit)(msg);
   } catch (e) {
     // 文件级回滚：快照逆序恢复（append 场景同文件多动作要逆序）+ 水位恢复原文；恢复失败仅记 warn
     try {
@@ -285,6 +280,13 @@ function readIfExists(p: string): string {
 function maxFeedbackId(deps: RunDeps, prev: number, rows: ReturnType<WorkflowStore["listFeedbackSince"]>): number {
   const m = rows.reduce((acc, r) => Math.max(acc, r.id), prev);
   return Math.max(m, deps.store.maxFeedbackId());
+}
+
+/** 默认 commit：stage 全部 + commit（水位与写回同 commit 原子）。可经 DistillOptions.commit 注入覆盖（测试直测失败/回滚）。 */
+function defaultCommit(msg: string): void {
+  const root = knowledgeRoot();
+  gitOut(["add", "-A"], root);
+  gitOut(["commit", "-q", "-m", msg, "--allow-empty"], root);
 }
 
 function doPush(opts: DistillOptions, root: string): string {

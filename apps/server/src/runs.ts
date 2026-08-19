@@ -2,6 +2,8 @@
 import { getWorkflow } from "./registry";
 import { run, resume, type RunCtx } from "./workflow-engine/runner";
 import { makeRunPi, makeRunPiStream } from "./pi/runPi-factory";
+import type { RunPiOptions } from "./pi/runPi";
+import type { RunPiResult } from "./workflow-engine/defineWorkflow";
 import { assertValidWorkspaceId } from "./config";
 import { resolveScopePaths, scopeOf } from "./scope";
 import { validate } from "./workflow-engine/schema";
@@ -28,6 +30,7 @@ export interface RunDeps {
   conversationQueues?: ConversationQueues; // 共享 per-conv FIFO（#29）：chat 路由与任务执行同一实例——同会话严格串行（防 pi session 并发写坏）；缺省路由自建（测试兼容）
   runPiFactory?: typeof makeRunPi; // 测试可换 stub（di）
   runPiStreamFactory?: typeof makeRunPiStream; // chat 切片①：测试注确定性 delta stub（di）
+  runPiFn?: (opts: RunPiOptions) => Promise<RunPiResult>; // C1/#66：system-headless 的 runPi 直调 seam（含 sandboxAllow，比 runPiFactory 更全）；缺省真 runPi
   eventBus?: EventBus; // 共享事件中心（持久流 + bridge run 事件；prod 由 index 注入）
   listWorkflows?: () => { id: string; name?: string; description?: string; inputSchema?: unknown }[]; // ADR-0029：runTurn 每轮注入的工作流目录——缺省全局 registry（默认同 listWorkflows）；测试可注 stub 免触全局态
   runRegistry?: RunRegistry; // 异步 run 句柄（bridge /run/* 用）

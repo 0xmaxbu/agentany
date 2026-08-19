@@ -1,5 +1,6 @@
 import { join, resolve, sep } from "node:path";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { COMPANY_WORKSPACE_ID } from "./workspaces/store"; // C1/#66：forAllWorkspaces 的 company 特判（无循环：workspaces/store 不 import config）
 
 // h1：workspaceId 是构建文件系统路径的关键输入，必须严格校验（防 ../../、绝对路径注入 cwd/sessionDir）。
 export class InvalidWorkspaceId extends Error {
@@ -71,6 +72,18 @@ export const generalSessionDir = (): string => resolve(dataDir(), "general", "pi
 // 不复用 generalSessionDir——那是 chat 会话共用区，任务 pi 会 ls 到其它成员会话历史（历史域排除）。
 export const taskSessionDir = (taskId: string): string =>
   resolve(dataDir(), "tasks", taskId, "pi-sessions");
+
+// C1/#66：跨「system 任务全域白名单 / 蒸馏会话语料」共用的 ws 目录枚举——公司 ws 锚 general 路径，
+// 其余按 id 映射。两份同循环曾在 scheduled-tasks/execute.ts 与 knowledge/distill.ts 各自复制
+// （含 company-ws 特判），抽此单点防漂移。
+export function forAllWorkspaces(rows: { id: string }[], generalDir: string, perWs: (id: string) => string): string[] {
+  const dirs = [generalDir]; // 公司 ws（ws_company 锚 general 路径）
+  for (const ws of rows) {
+    if (ws.id === COMPANY_WORKSPACE_ID) continue; // 已含（general 路径）
+    dirs.push(perWs(ws.id));
+  }
+  return Array.from(new Set(dirs));
+}
 
 // 仓库根（skill/extension 绝对路径解析用）。
 export const repoSkillsPath = (name: string): string => `${REPO_ROOT}skills/${name}`;

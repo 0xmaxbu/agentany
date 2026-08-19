@@ -6,7 +6,7 @@
 // 不能 start_workflow/ask_user，loopback 无端口）；错误转为产出会话内的可读说明。
 // system 任务（#32/M4-5）走 headless：无产出会话，pi 一次性跑（makeRunPi 路径，
 // 同 taskId 固定 session 跨执行连续），产出=task_runs 日志（note 记失败详情，管理页可读）。
-import { repoExtensionPath, generalWorkspacePath, workspaceWorkspacePath, taskSessionDir, repoSkillPaths } from "../config";
+import { repoExtensionPath, generalWorkspacePath, workspaceWorkspacePath, taskSessionDir, repoSkillPaths, forAllWorkspaces } from "../config";
 import { runPi } from "../pi/runPi";
 import { startSystemTurn } from "../chat/turn-entry";
 import type { ConversationQueues } from "../chat/queue";
@@ -17,7 +17,7 @@ import { runDistill } from "../knowledge/distill";
 import type { RunDeps } from "../runs";
 import type { ScheduledTaskRow, TaskRunTrigger } from "./store";
 import { WRITE_TOOLS, wsRelativePath } from "./files";
-import { COMPANY_WORKSPACE_ID, type WorkspaceStore } from "../workspaces/store";
+import type { WorkspaceStore } from "../workspaces/store";
 
 // 蒸馏 seed 任务 id（迁移 0013 种的 system 任务——executeTask 以此特判走蒸馏链）。
 export const DISTILL_TASK_ID = "t_seed_distill";
@@ -31,14 +31,10 @@ export const TASK_EXTENSIONS: string[] = [
  * #39/ADR-0023 决策 1：全域=全部 ws 的 workspace 目录（公司 ws→general 路径 + 其余→
  * data/workspaces/<id>/workspace），执行时动态解析（新建 ws 自动纳入）。
  * DB/knowledge/pi-sessions 三域不在列（deny 侧默认拒——不进白名单即不可见）。
+ * C1/#66：ws 目录枚举起用 config.forAllWorkspaces 单点（与蒸馏语料同循环同源，防漂移）。
  */
 export function fullDomainWorkspaceDirs(workspaceStore?: WorkspaceStore): string[] {
-  const dirs = [generalWorkspacePath()]; // 公司 ws（ws_company 锚 general 路径）
-  for (const w of workspaceStore?.listAllWorkspaces() ?? []) {
-    if (w.id === COMPANY_WORKSPACE_ID) continue; // 已含（general 路径）
-    dirs.push(workspaceWorkspacePath(w.id));
-  }
-  return Array.from(new Set(dirs));
+  return forAllWorkspaces(workspaceStore?.listAllWorkspaces() ?? [], generalWorkspacePath(), workspaceWorkspacePath);
 }
 
 // 任务 turn 的 system 追加：无人值守语境（无桥接工具、无交互语义）。
@@ -82,7 +78,8 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
           const wsDirs = fullDomainWorkspaceDirs(deps.workspaceStore);
           const sessionDir = taskSessionDir(task.id);
           const extensions = task.allowSearch ? TASK_EXTENSIONS : [];
-          await runPi({
+          // C1/#66：system headless 的 runPi 直调经 deps.runPiFn 可注入（缺省真 runPi；测试喂假免 spyOn 模块 mock）
+          await (deps.runPiFn ?? runPi)({
             prompt: task.prompt,
             sessionId: `task-${task.id}`,
             sessionDir,
