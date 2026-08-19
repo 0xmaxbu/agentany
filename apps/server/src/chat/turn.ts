@@ -62,7 +62,7 @@ export async function runTurn(
   const cwd = resolveScopePaths(scopeOf(conv.workspaceId), conv.workspaceId).cwd;
   const appendDynamic = composeSystemPrompt({
     projectDoc: loadProjectDoc(cwd),
-    workflows: listWorkflows(),
+    workflows: (deps.listWorkflows ?? listWorkflows)(), // ADR-0029：注入可覆盖（测试免触全局 registry 态）
     suspendedRuns: deps.store.listSuspendedRuns(conversationId),
     pendingAsks: deps.store.listQuestions(conversationId, { includeAnswered: false, kind: "ask" }).map((q) => ({
       // 自主卡（runId null）照注（pi 需知道用户在答什么 + answer_question 的 questionId）

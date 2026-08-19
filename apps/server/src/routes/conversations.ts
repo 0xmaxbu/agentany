@@ -8,7 +8,7 @@ import { streamSSE } from "hono/streaming";
 import type { RunDeps } from "../runs";
 import { ConversationQueues } from "../chat/queue";
 import { EventBus, type Frame } from "../chat/eventbus";
-import { startInlineTurn } from "../chat/inline-turn";
+import { startUserTurn } from "../chat/turn-entry";
 import { canAccessConversation, resolveRequestWorkspace } from "../workspaces/guard";
 import { userIdOf, principalOf, userRoleOf, type AppEnv } from "../auth/middleware";
 import { ROLE } from "../auth/store";
@@ -170,9 +170,9 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
       if (r.error) console.warn(`[hitl-dispatch] question=${questionId}:`, r.error);
       skipTurn = !!r.skipTurn;
     }
-    if (!skipTurn && !queues.wouldAcceptHttpTurn(id)) return c.json({ error: "conversation busy (queue full)" }, 429);
-    // 内联 user→turn（#48/T6，不再绕 EventBus 订阅一跳）；先 429 预检后落库；入队双保险失败 error 帧——见 startInlineTurn
-    startInlineTurn(deps, queues, eventBus, id, content, { skipTurn });
+    // ADR-0029：busy 预检内聚进 startUserTurn（user 写入前；skipTurn 程序化轮绕过永不 429）
+    const res = startUserTurn({ deps, queues, publish: (f) => eventBus.publish(id, f) }, id, content, { skipTurn });
+    if (res.status === "busy") return c.json({ error: "conversation busy (queue full)" }, 429);
     return c.json({ accepted: true }, 202);
   });
 

@@ -301,7 +301,7 @@ describe("双端竞态：Web 点卡 vs IM 内联 turn → CAS 单次执行", () 
     const [imR, webR] = await Promise.all([im, web]);
     expect(webR.status).toBe(202);
     expect(imR.status).toBe("processed"); // IM 文本必进 turn（消息已落）——去重由 CAS/注入收敛
-    await ctx.queues.drained("c1");
+    // （handleImInbound 内部已 await whenDone → 本轮回执完成；不再需要 drained）
     expect(ctx.store.getQuestion(qid)!.status).toBe("answered"); // 卡只 answered 一次
     expect(frames.filter((f) => f.type === "hitl_answered" && f.questionId === qid)).toHaveLength(1);
     await delayUntil(() => ctx.store.getRun(runId)!.status === "completed"); // run 只续跑一次
@@ -324,7 +324,6 @@ describe("双端竞态：Web 点卡 vs IM 内联 turn → CAS 单次执行", () 
     expect(r.status).toBe("processed");
     const webR = await ctx.app.request(`/conversations/c1/messages`, { method: "POST", headers: { ...JH, authorization: token }, body: JSON.stringify({ content: "accept", inReplyTo: qid }) });
     expect(webR.status).toBe(202); // 后点幂等 ack（不 500/不二次执行）
-    await ctx.queues.drained("c1");
     expect(ctx.store.getQuestion(qid)!.status).toBe("answered");
     await delayUntil(() => ctx.store.getRun(runId)!.status === "completed"); // 单次续跑
   });

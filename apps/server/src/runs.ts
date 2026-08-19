@@ -29,6 +29,7 @@ export interface RunDeps {
   runPiFactory?: typeof makeRunPi; // 测试可换 stub（di）
   runPiStreamFactory?: typeof makeRunPiStream; // chat 切片①：测试注确定性 delta stub（di）
   eventBus?: EventBus; // 共享事件中心（持久流 + bridge run 事件；prod 由 index 注入）
+  listWorkflows?: () => { id: string; name?: string; description?: string; inputSchema?: unknown }[]; // ADR-0029：runTurn 每轮注入的工作流目录——缺省全局 registry（默认同 listWorkflows）；测试可注 stub 免触全局态
   runRegistry?: RunRegistry; // 异步 run 句柄（bridge /run/* 用）
   signal?: AbortSignal;
   log?: (...a: unknown[]) => void;
