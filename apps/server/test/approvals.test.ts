@@ -5,7 +5,7 @@
 import { describe, test, expect } from "bun:test";
 import { RunRegistry } from "../src/runs/registry";
 import { EventBus } from "../src/chat/eventbus";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { openDbMigrated } from "../src/db/client";
 import { createApp } from "../src/app";
 import { fullDeps } from "./deps";
@@ -21,10 +21,10 @@ const delayUntil = async (pred: () => boolean, t = 3000): Promise<void> => {
 };
 
 function setup() {
-  const store = new WorkflowStore(openDbMigrated(":memory:"));
-  store.createConversation({ id: "c-appr", workspaceId: "ws_company", userId: "u" });
+  const store = createStores(openDbMigrated(":memory:"));
+  store.chat.createConversation({ id: "c-appr", workspaceId: "ws_company", userId: "u" });
   const eventBus = new EventBus();
-  const registry = new RunRegistry({ store, eventBus, runPiFactory: stubFactory });
+  const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
   return { store, eventBus, registry };
 }
 
@@ -51,7 +51,7 @@ describe("registry.start 门控（#18）", () => {
     if (r.status !== "needs_approval") throw new Error("expected needs_approval");
     expect(r.questionId).toBeGreaterThan(0);
     expect(frames.some((f) => f.type === "run_started")).toBe(false); // 不 createRun
-    const q = store.getQuestion(r.questionId)!;
+    const q = store.hitl.getQuestion(r.questionId)!;
     expect(q.kind).toBe("approval");
     expect(q.runId).toBeNull();
     expect(q.workflowId).toBe("brand-research");
@@ -74,7 +74,7 @@ describe("registry.start 门控（#18）", () => {
     expect(r2.status).toBe("needs_approval");
     if (r2.status !== "needs_approval") throw new Error("expected needs_approval");
     expect(r2.questionId).toBe(r1.questionId);
-    expect(store.listQuestions("c-appr", { includeAnswered: true, kind: "approval" })).toHaveLength(1);
+    expect(store.hitl.listQuestions("c-appr", { includeAnswered: true, kind: "approval" })).toHaveLength(1);
     expect(frames.length).toBe(before); // 无新 hitl_request
   });
 
@@ -107,7 +107,7 @@ describe("审批卡应答（统一卡应答 · 消息绑定，#28 重构）", ()
     expect(resp.status).toBe(202);
     await delayUntil(() => frames.some((f) => f.type === "run_started"));
     expect(frames.some((f) => f.type === "run_started")).toBe(true);
-    const q = store.getQuestion(r.questionId)!;
+    const q = store.hitl.getQuestion(r.questionId)!;
     expect(q.status).toBe("answered");
     expect(q.runId).toBeTruthy();
     expect(q.decidedBy).toBe("dev-user");
@@ -126,7 +126,7 @@ describe("审批卡应答（统一卡应答 · 消息绑定，#28 重构）", ()
     expect(resp.status).toBe(202);
     await delay(30);
     expect(frames.some((f) => f.type === "run_started")).toBe(false); // 不 createRun
-    const q = store.getQuestion(r.questionId)!;
+    const q = store.hitl.getQuestion(r.questionId)!;
     expect(q.status).toBe("answered");
     expect(q.runId).toBeNull();
     expect(q.answer).toEqual({ decision: "deny" });
@@ -138,10 +138,10 @@ describe("审批卡应答（统一卡应答 · 消息绑定，#28 重构）", ()
     const r = registry.start({ conversationId: "c-appr", workflowId: "brand-research", input: { brand: "x" } });
     if (r.status !== "needs_approval") throw new Error("expected needs_approval");
     await answerCard(app, r.questionId, "批准");
-    const runAfterFirst = store.getQuestion(r.questionId)!.runId;
+    const runAfterFirst = store.hitl.getQuestion(r.questionId)!.runId;
     const resp2 = await answerCard(app, r.questionId, "批准");
     expect(resp2.status).toBe(202); // 消息正常落库
-    expect(store.getQuestion(r.questionId)!.runId).toBe(runAfterFirst); // 不重复建 run
+    expect(store.hitl.getQuestion(r.questionId)!.runId).toBe(runAfterFirst); // 不重复建 run
   });
 
 
@@ -150,7 +150,7 @@ describe("审批卡应答（统一卡应答 · 消息绑定，#28 重构）", ()
 describe("审批只人类 enforce + HTTP 旁路（#18）", () => {
   test("enforce：bridge 无消息端点 → pi 持 nonce 也无法发审批消息（无自批路径）", async () => {
     const { store, eventBus, registry } = setup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-appr");
     try {
       const resp = await fetch(`http://127.0.0.1:${port}/conversations/c-appr/messages`, { method: "POST", headers: { authorization: `Bearer ${token}`, ...JH }, body: JSON.stringify({ content: "批准", inReplyTo: 1 }) });
@@ -165,7 +165,7 @@ describe("审批只人类 enforce + HTTP 旁路（#18）", () => {
     eventBus.subscribe("c-appr", (f) => frames.push(f));
     await app.request("/workflows/brand-research/runs", { method: "POST", headers: JH, body: JSON.stringify({ input: { brand: "x" } }) });
     // 不经审批门：无 approval 卡
-    expect(store.listQuestions("c-appr", { includeAnswered: true, kind: "approval" })).toHaveLength(0);
+    expect(store.hitl.listQuestions("c-appr", { includeAnswered: true, kind: "approval" })).toHaveLength(0);
     expect(frames.some((f) => f.type === "hitl_request" && f.kind === "approval")).toBe(false);
   });
 });
@@ -180,7 +180,7 @@ describe("approve CAS 顺序 + 失败回滚（#codex review：占位不得永久
     const resp = await answerCard(app, r.questionId, "批准");
     expect(resp.status).toBe(202); // 消息本身正常
     await delay(20);
-    expect(store.getQuestion(r.questionId)!.status).toBe("pending"); // 回滚/未执行 → 可重试
+    expect(store.hitl.getQuestion(r.questionId)!.status).toBe("pending"); // 回滚/未执行 → 可重试
   });
 
   test("start() 抛错 → 500 + 回滚卡为 pending（可重试，不永久卡死）", async () => {
@@ -193,6 +193,6 @@ describe("approve CAS 顺序 + 失败回滚（#codex review：占位不得永久
     const resp = await answerCard(app, r.questionId, "批准");
     expect(resp.status).toBe(202);
     await delay(20);
-    expect(store.getQuestion(r.questionId)!.status).toBe("pending"); // 回滚 → 可重试
+    expect(store.hitl.getQuestion(r.questionId)!.status).toBe("pending"); // 回滚 → 可重试
   });
 });

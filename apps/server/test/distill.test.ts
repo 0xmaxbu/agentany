@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -27,13 +27,13 @@ const git = (args: string[], cwd: string) =>
 
 function setup() {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const deps: RunDeps = {
-    store,
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback,
     userStore: new UserStore(db),
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
   };
   return { deps, store };
@@ -272,13 +272,13 @@ describe("runDistill（#36 蒸馏全链）", () => {
   test("新 feedback → 已处理关联文件重新入队", async () => {
     ensureKnowledgeRepo();
     const { deps } = setup();
-    const conv = deps.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u1" });
+    const conv = deps.chatStore.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u1" });
     seedSession("2026-08-10T00-00-00-000Z_chat-c1");
     const llm1 = stubLlm({ json: { actions: [], commitMessage: "first" } });
     await runDistill(deps, llm1.factory as any); // c1 已处理
     // 落一条 message 级 feedback（targetId=message id → conversation c1）
-    const msgId = deps.store.appendMessage({ conversationId: "c1", role: "assistant", content: "答" });
-    deps.store.addFeedback({ targetKind: "message", targetId: String(msgId), text: "很好用", rating: 5 });
+    const msgId = deps.chatStore.appendMessage({ conversationId: "c1", role: "assistant", content: "答" });
+    deps.feedbackStore.addFeedback({ targetKind: "message", targetId: String(msgId), text: "很好用", rating: 5 });
     const llm2 = stubLlm({ json: { actions: [], commitMessage: "second" } });
     await runDistill(deps, llm2.factory as any);
     expect(llm2.calls[0].prompt).toContain("chat-c1"); // 重新入队

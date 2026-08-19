@@ -2,12 +2,12 @@
 import { describe, test, expect } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import type { RunDeps } from "../src/runs";
 import { fullDeps } from "./deps";
 
 function newDeps(): RunDeps {
-  const store = new WorkflowStore(openDbMigrated(":memory:"));
+  const store = createStores(openDbMigrated(":memory:"));
   // synthetic 是纯程序步、不调 runPi；工厂给个 stub 兜底。
   const runPiFactory: RunDeps["runPiFactory"] = () =>
     async () => ({ text: "[stub]", messages: [], toolResults: [] });

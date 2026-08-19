@@ -3,7 +3,7 @@
 // fullDomainWorkspaceDirs 纯函数直测（全域解析+三域排除的白名单构成）。
 import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -20,10 +20,10 @@ afterEach(() => { delete process.env.DATA_DIR; });
 
 function mkDeps(): RunDeps {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   return {
-    store, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
-    workspaceStore: new WorkspaceStore(db), taskStore: new ScheduledTaskStore(db, store),
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
+    workspaceStore: new WorkspaceStore(db), taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
   };
 }

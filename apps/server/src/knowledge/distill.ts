@@ -10,7 +10,7 @@ import { dataDir, forAllWorkspaces, generalSessionDir, workspaceSessionDir } fro
 import { makeRunPi, type MakeRunPiOpts, type ConfiguredRunPi } from "../pi/runPi-factory";
 import { knowledgeRoot, DISTILL_STATE_FILE, ensureKnowledgeRepo } from "./repo";
 import type { RunDeps } from "../runs";
-import type { WorkflowStore } from "../workflow-engine/store";
+import type { FeedbackStore } from "../feedback/store"; // ADR-0030：蒸馏只学 feedback 面
 
 /** pi-sessions 根（general + 全部 workspace；水位按文件名集合，跨目录不重名——文件名含时间戳+sessionId）。
  *  路径真相走 config.ts 口径函数（scope.ts 约定）；公司 ws 即 general 目录。 */
@@ -34,7 +34,7 @@ export function selectCorpusFiles(all: string[], processed: string[]): string[] 
   });
 }
 
-/** message 级 feedback 的 targetId（message id）→ conversationId（重入队映射用）——见 WorkflowStore.conversationIdOfMessage。 */
+/** message 级 feedback 的 targetId（message id）→ conversationId（重入队映射用）——见 FeedbackStore.conversationIdOfMessage。 */
 
 // ── 写回白名单（纯函数）──
 export interface DistillAction {
@@ -155,10 +155,10 @@ export async function runDistill(
   let corpus = selectCorpusFiles(allNames, state.processedFiles);
 
   // 2) feedback 增量：id > lastFeedbackId 的行 → 关联文件重入队 + feedback 内容进语料
-  const feedbacks = deps.store.listFeedbackSince(state.lastFeedbackId);
+  const feedbacks = deps.feedbackStore.listFeedbackSince(state.lastFeedbackId);
   const reQueued: string[] = [];
   for (const fb of feedbacks) {
-    const convId = deps.store.conversationOfFeedbackTarget(fb.targetKind, fb.targetId)?.id;
+    const convId = deps.feedbackStore.conversationOfFeedbackTarget(fb.targetKind, fb.targetId)?.id;
     if (!convId) continue;
     for (const name of allNames.filter((n) => n.endsWith(`chat-${convId}.jsonl`))) {
       if (!corpus.includes(name)) { corpus.push(name); reQueued.push(name); }
@@ -275,11 +275,11 @@ function readIfExists(p: string): string {
   return existsSync(p) ? readFileSync(p, "utf8") : "(空)";
 }
 
-// ── feedback 增量/反查：直调 WorkflowStore（listFeedbackSince / conversationOfFeedbackTarget）──
+// ── feedback 增量/反查：直调 FeedbackStore（listFeedbackSince / conversationOfFeedbackTarget）──
 
-function maxFeedbackId(deps: RunDeps, prev: number, rows: ReturnType<WorkflowStore["listFeedbackSince"]>): number {
+function maxFeedbackId(deps: RunDeps, prev: number, rows: ReturnType<FeedbackStore["listFeedbackSince"]>): number {
   const m = rows.reduce((acc, r) => Math.max(acc, r.id), prev);
-  return Math.max(m, deps.store.maxFeedbackId());
+  return Math.max(m, deps.feedbackStore.maxFeedbackId());
 }
 
 /** 默认 commit：stage 全部 + commit（水位与写回同 commit 原子）。可经 DistillOptions.commit 注入覆盖（测试直测失败/回滚）。 */

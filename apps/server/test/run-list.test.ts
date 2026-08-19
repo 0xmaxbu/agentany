@@ -3,7 +3,7 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -13,10 +13,10 @@ const JH = { "content-type": "application/json" };
 
 async function setup() {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const userStore = new UserStore(db);
   const deps: RunDeps = {
-    store, userStore, streamRegistry: new StreamRegistry(), workspaceStore: new WorkspaceStore(db),
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore, streamRegistry: new StreamRegistry(), workspaceStore: new WorkspaceStore(db),
   };
   await userStore.createUser({ username: "m1", password: "pw-long-enough", role: "member" });
   await userStore.createUser({ username: "m2", password: "pw-long-enough", role: "member" });
@@ -35,17 +35,17 @@ beforeEach(async () => { ctx = await setup(); });
 
 describe("GET /conversations/:id/runs（#53/T4）", () => {
   function seedRun(runId: string, workflowId: string, convId: string, status: "running" | "completed", brief?: string) {
-    ctx.store.createRun({ runId, workflowId, workspaceId: "ws_company", conversationId: convId, input: {} });
+    ctx.store.runs.createRun({ runId, workflowId, workspaceId: "ws_company", conversationId: convId, input: {} });
     if (status === "completed") {
-      ctx.store.updateRunStatus(runId, "completed");
-      if (brief) ctx.store.setTerminalBrief({ runId, status: "completed", brief, messageContent: "", conversationId: convId }); // messageContent 空 → 不写气泡
+      ctx.store.runs.updateRunStatus(runId, "completed");
+      if (brief) ctx.store.runs.setTerminalBrief({ runId, status: "completed", brief, messageContent: "", conversationId: convId }); // messageContent 空 → 不写气泡
     }
     return runId;
   }
 
   test("按会话返 run 列表（runId/status/workflowId/steps/brief）；空会话 → []", async () => {
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: ctx.m1.id });
-    ctx.store.createConversation({ id: "c2", workspaceId: "ws_company", userId: ctx.m1.id });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: ctx.m1.id });
+    ctx.store.chat.createConversation({ id: "c2", workspaceId: "ws_company", userId: ctx.m1.id });
     seedRun("r_completed", "synthetic-3step", "c1", "completed", "简报：完成");
     seedRun("r_suspended", "brand-research", "c1", "running");
     // c2 无 run
@@ -62,12 +62,12 @@ describe("GET /conversations/:id/runs（#53/T4）", () => {
   });
 
   test("步骤从 log 收敛：同一步多次状态取最新（running→completed），不同步保出现序", async () => {
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: ctx.m1.id });
-    ctx.store.createRun({ runId: "r_log", workflowId: "wf-x", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    ctx.store.appendLog("r_log", { stepId: "review", status: "running", ts: "t1" });
-    ctx.store.appendLog("r_log", { stepId: "s1", status: "running", ts: "t2" });
-    ctx.store.appendLog("r_log", { stepId: "review", status: "completed", ts: "t3" }); // review 终态覆盖
-    ctx.store.appendLog("r_log", { stepId: "s1", status: "completed", ts: "t4" });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: ctx.m1.id });
+    ctx.store.runs.createRun({ runId: "r_log", workflowId: "wf-x", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    ctx.store.runs.appendLog("r_log", { stepId: "review", status: "running", ts: "t1" });
+    ctx.store.runs.appendLog("r_log", { stepId: "s1", status: "running", ts: "t2" });
+    ctx.store.runs.appendLog("r_log", { stepId: "review", status: "completed", ts: "t3" }); // review 终态覆盖
+    ctx.store.runs.appendLog("r_log", { stepId: "s1", status: "completed", ts: "t4" });
     const token = await ctx.login("m1");
     const r = await ctx.app.request("/conversations/c1/runs", { headers: { authorization: token } });
     const { runs } = await r.json() as { runs: any[] };
@@ -79,7 +79,7 @@ describe("GET /conversations/:id/runs（#53/T4）", () => {
   });
 
   test("鉴权：他人会话 / 不存在会话 → 404（错误隔离不泄漏存在）", async () => {
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: ctx.m1.id }); // m1 私有
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: ctx.m1.id }); // m1 私有
     const token2 = await ctx.login("m2");
     const other = await ctx.app.request("/conversations/c1/runs", { headers: { authorization: token2 } });
     expect(other.status).toBe(404); // m2 见不到 m1 的会话
@@ -88,7 +88,7 @@ describe("GET /conversations/:id/runs（#53/T4）", () => {
   });
 
   test("既有 GET /runs/:id（单 run）不受影响（回归护栏）", async () => {
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: ctx.m1.id });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: ctx.m1.id });
     seedRun("r_solo", "synthetic-3step", "c1", "completed", "简报");
     const token = await ctx.login("m1");
     const r = await ctx.app.request("/runs/r_solo", { headers: { authorization: token } });

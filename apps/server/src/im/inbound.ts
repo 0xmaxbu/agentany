@@ -4,7 +4,7 @@
 //   >1 张 → 文本归属不明：choice_needed（缓存文本 + 发选择卡由调用方渲染），点选后回 judgeAskCard（T6）。
 // - 响应只处理一次 = 域表 CAS（余者幂等）＋队列 FIFO 串行（同一会话同时只一条 turn），非投递层保证。
 import type { RunDeps } from "../runs";
-import type { QuestionRow } from "../workflow-engine/store";
+import type { QuestionRow } from "../hitl/store"; // ADR-0030：卡类型随 hitl 域文件带
 import { ConversationQueues } from "../chat/queue";
 import { startUserTurn } from "../chat/turn-entry";
 import type { PendingTextCache } from "./pending-text";
@@ -33,7 +33,7 @@ export async function handleImInbound(deps: RunDeps, input: ImInboundInput, pend
   if (!user) return { status: "discarded" };
 
   // 2. 扫该用户全部活跃会话的 pending 卡（T6 口径：不限最新——文本可应答对象是 ask 卡，kind 拦截在决策层）
-  const all = deps.store.listPendingCardsForUser(user.userId);
+  const all = deps.hitlStore.listPendingCardsForUser(user.userId);
 
   // 3. 三分支：0 / 1 / >1 张 ask 卡
   const askCards = all.filter((q) => q.kind === "ask");
@@ -76,6 +76,6 @@ export async function judgeAskCard(deps: RunDeps, q: QuestionRow, text: string):
   if (outcome.status === "aborted") {
     return { status: "processed", conversationId: convId, questionId: q.id, messageId: res.messageId, reply: "已处理" }; // 无 assistant 产出（终止）
   }
-  const msg = deps.store.listMessages(convId).find((m) => m.id === outcome.messageId); // 按 messageId 定向读（非「最后一条」扫描）
+  const msg = deps.chatStore.listMessages(convId).find((m) => m.id === outcome.messageId); // 按 messageId 定向读（非「最后一条」扫描）
   return { status: "processed", conversationId: convId, questionId: q.id, messageId: res.messageId, reply: msg?.content ?? "已处理" };
 }

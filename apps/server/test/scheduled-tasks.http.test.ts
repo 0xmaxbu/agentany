@@ -59,7 +59,7 @@ describe("POST /scheduled-tasks（建任务 tracer）", () => {
     expect(task.cron).toBe("0 */4 * * *");
     expect(task.enabled).toBe(true);
     // 产出会话：挂任务同 ws（缺省公司 ws）、标题=displayName、创建者=建任务的人
-    const conv = deps.store.getConversation(task.outputConversationId);
+    const conv = deps.chatStore.getConversation(task.outputConversationId);
     expect(conv).toBeDefined();
     expect(conv!.title).toBe("新闻汇总");
     expect(conv!.workspaceId).toBe("ws_company");
@@ -79,7 +79,7 @@ describe("POST /scheduled-tasks（建任务 tracer）", () => {
     });
     expect(post.status).toBe(201);
     const task = (await post.json()) as any;
-    expect(deps.store.getConversation(task.outputConversationId)!.workspaceId).toBe("ws_company");
+    expect(deps.chatStore.getConversation(task.outputConversationId)!.workspaceId).toBe("ws_company");
   });
 
   test("scope=system 经 API 直建：member 403（#39/ADR-0023 决策 4——admin 放开，member 仍拒）", async () => {

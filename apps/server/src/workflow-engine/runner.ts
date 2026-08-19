@@ -2,7 +2,7 @@
 // **纯**：只接收 ctx.runPi 并用，不 import pi、不装配（装配在 src/runs.ts 组合根）。
 import { validate } from "./schema";
 import type { RunPiResult, StepContext, StepDef, Workflow } from "./defineWorkflow";
-import type { WorkflowStore, RunStatus } from "./store";
+import type { RunsStore, RunStatus } from "../runs/store"; // ADR-0030 决策 6：引擎只学 runs 面
 
 export interface RunCtx {
   runPi: (opts: { prompt: string; timeoutMs?: number }) => Promise<RunPiResult>;
@@ -18,7 +18,7 @@ type Phase =
   | { phase: "done" }
   | { phase: "failed"; note?: string };
 
-function loadState(store: WorkflowStore, wf: Workflow, runId: string): Phase {
+function loadState(store: RunsStore, wf: Workflow, runId: string): Phase {
   const run = store.getRun(runId);
   if (!run) throw new Error(`run not found: ${runId}`);
   const log = store.getLog(runId);
@@ -58,7 +58,7 @@ function mkCtx(st: { input: unknown }, runId: string, ctx: RunCtx, resumed: unkn
 // run()/resumeInner() 共用：修「step.execute 抛错 → 状态卡 running、resume 见空/completed 日志当幂等 no-op → 永远不可恢复」。
 type ExecResult = { ok: true; result: any } | { ok: false; note: string };
 async function execStep(
-  store: WorkflowStore, runId: string, stepId: string,
+  store: RunsStore, runId: string, stepId: string,
   step: StepDef | undefined, input: unknown, resumed: unknown, ctx: RunCtx,
 ): Promise<ExecResult> {
   if (!step) {
@@ -90,7 +90,7 @@ export type RunProgress =
   | { type: "step_completed"; stepId: string; status: "completed" | "suspended" | "failed"; output?: unknown; payload?: unknown; resumeSchema?: unknown };
 
 export async function run(
-  wf: Workflow, store: WorkflowStore, runId: string, ctx: RunCtx,
+  wf: Workflow, store: RunsStore, runId: string, ctx: RunCtx,
   onProgress?: (p: RunProgress) => void,
 ): Promise<RunOutcome> {
   store.updateRunStatus(runId, "running");
@@ -161,7 +161,7 @@ async function withResumeLock<T>(runId: string, fn: () => Promise<T>): Promise<T
 }
 
 async function resumeInner(
-  wf: Workflow, store: WorkflowStore, runId: string, resumeData: unknown, ctx: RunCtx,
+  wf: Workflow, store: RunsStore, runId: string, resumeData: unknown, ctx: RunCtx,
   onProgress?: (p: RunProgress) => void,
 ): Promise<ResumeOutcome> {
   const log = store.getLog(runId);
@@ -202,7 +202,7 @@ async function resumeInner(
 }
 
 export async function resume(
-  wf: Workflow, store: WorkflowStore, runId: string, resumeData: unknown, ctx: RunCtx,
+  wf: Workflow, store: RunsStore, runId: string, resumeData: unknown, ctx: RunCtx,
   onProgress?: (p: RunProgress) => void,
 ): Promise<ResumeOutcome> {
   return withResumeLock(runId, () => resumeInner(wf, store, runId, resumeData, ctx, onProgress));

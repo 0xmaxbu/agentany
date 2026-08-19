@@ -7,7 +7,7 @@
 // 幂等：已答/并发 → dispatch 返回 skipTurn → 响应「该卡已被处理」卡 + toast（不二次执行——CAS 收口）。
 // 响应格式（v1 契约，live smoke 最终验收）：{ toast: {type, content}, card: <已答卡 2.0> }。
 import type { RunDeps } from "../../runs";
-import type { QuestionRow } from "../../workflow-engine/store";
+import type { QuestionRow } from "../../hitl/store"; // ADR-0030：卡类型随 hitl 域文件带
 import { dispatchCardAnswer } from "../../chat/hitl-dispatch";
 import { cardInputOf, renderAnsweredCard } from "../card";
 import { judgeAskCard } from "../inbound";
@@ -64,7 +64,7 @@ export async function handleCardAction(
   if (!m) return undefined;
   const user = deps.imStore?.resolve(m.openId, "feishu");
   if (!user) return { toast: { type: "error", content: "请先在 Web 绑定飞书后再操作" } };
-  const q = deps.store.getQuestion(m.questionId);
+  const q = deps.hitlStore.getQuestion(m.questionId);
   if (!q) return { toast: { type: "error", content: "卡已失效" } };
   if (q.status !== "pending") return answeredCardRsp(q, "该卡已被处理", "info"); // 陈旧点击：幂等，不二执
   const res = await dispatchCardAnswer(deps, q.conversationId, m.questionId, m.value, user.userId);
@@ -86,7 +86,7 @@ async function handleSelectAnswer(
 ): Promise<unknown> {
   const user = deps.imStore?.resolve(sel.openId, "feishu");
   if (!user) return { toast: { type: "error", content: "请先在 Web 绑定飞书后再操作" } };
-  const q = deps.store.getQuestion(sel.questionId);
+  const q = deps.hitlStore.getQuestion(sel.questionId);
   if (!q) return { toast: { type: "error", content: "卡已失效" } };
   if (q.status !== "pending") return answeredCardRsp(q, "该卡已被处理", "info"); // 已被并发处理 → 明确收口
   if (!textPending) return { toast: { type: "error", content: "选择卡未就绪，请重新输入回答" } };
@@ -96,7 +96,7 @@ async function handleSelectAnswer(
   void (async () => {
     try {
       await judgeAskCard(deps, q, text);
-      const after = deps.store.getQuestion(sel.questionId);
+      const after = deps.hitlStore.getQuestion(sel.questionId);
       if (!after || after.status !== "answered") {
         await sendText?.(sel.openId, "暂时无法据此推进，请重试或点选卡片选项"); // 归一化失败，缓存保留
         return;

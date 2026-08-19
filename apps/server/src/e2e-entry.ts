@@ -6,7 +6,7 @@
 // （start→step→suspend→自动 turn→ask_user→判答 resume→completed→总结）。
 import { createApp } from "./app";
 import { openDbMigrated } from "./db/client";
-import { WorkflowStore } from "./workflow-engine/store";
+import { createStores } from "./stores"; // ADR-0030：四域 store 单点装配
 import { EventBus } from "./chat/eventbus";
 import { RunRegistry } from "./runs/registry";
 import { startBridge, BRIDGE_PORT } from "./bridge/server";
@@ -126,13 +126,13 @@ const db = openDbMigrated();
   // f4 e2e：member 账号（管理页无权限段用——dev-user 是 admin 角色走不了 403 路径）
   if (!us.getUserByUsername("member-e2e")) await us.createUser({ username: "member-e2e", password: "member-e2e-pw-1", displayName: "E2E Member", role: "member" });
 }
-const store = new WorkflowStore(db);
+const { runs: runStore, chat: chatStore, hitl: hitlStore, feedback: feedbackStore } = createStores(db); // 四域共享同一 db
 const eventBus = new EventBus(); // #48/T6 后 run/chat 帧只推流展示（user→turn 内联 POST 路由；bridge run 事件经此到持久流）
-const runRegistry = new RunRegistry({ store, eventBus, runPiFactory: stubRunPiFactory });
+const runRegistry = new RunRegistry({ runStore, chatStore, hitlStore, eventBus, runPiFactory: stubRunPiFactory });
 // #31：定时任务三表 + 调度器（手动跑走真 executeTask——runTurn 用下面的 stub streamFactory 产出确定性文本）
-const taskStore = new ScheduledTaskStore(db, store);
+const taskStore = new ScheduledTaskStore(db, chatStore);
 const deps: RunDeps = {
-  store,
+  runStore, chatStore, hitlStore, feedbackStore,
   userStore: new UserStore(db),
   streamRegistry: new StreamRegistry(),
   workspaceStore: new WorkspaceStore(db),
@@ -148,7 +148,7 @@ deps.scheduler = new TaskScheduler({
 });
 // auth/鉴权依赖（e2e 走 dev 放行；workspaceStore 公司 ws 由迁移 seed）
 const app = createApp(deps);
-startBridge(BRIDGE_PORT, { runRegistry, store, eventBus }); // bridge RPC（loopback:3199，stub 经此驱动）
+startBridge(BRIDGE_PORT, { runRegistry, runStore, chatStore, hitlStore, eventBus }); // bridge RPC（loopback:3199，stub 经此驱动）
 
 const port = Number(process.env.PORT ?? 3000);
 Bun.serve({ port, hostname: "127.0.0.1", fetch: (r) => app.fetch(r) });

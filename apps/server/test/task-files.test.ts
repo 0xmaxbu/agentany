@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -25,16 +25,16 @@ const JH = { "content-type": "application/json" };
 // ── 共用装配 ──
 async function setup() {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const userStore = new UserStore(db);
   await userStore.createUser({ username: "m1", password: "pw-long-enough", role: "member" });
   const m1 = userStore.getUserByUsername("m1")!;
   await userStore.createUser({ username: "ad", password: "pw-long-enough", role: "admin" });
   const ad = userStore.getUserByUsername("ad")!;
   const deps: RunDeps = {
-    store, userStore, streamRegistry: new StreamRegistry(),
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore, streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
   };
   const app = createApp(deps);
@@ -101,11 +101,11 @@ describe("executeTask 产出文件收集（#30）", () => {
       ],
     }]);
     const db = openDbMigrated(":memory:");
-    const store = new WorkflowStore(db);
+    const store = createStores(db);
     const deps: RunDeps = {
-      store, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
+      runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
       workspaceStore: new WorkspaceStore(db),
-      taskStore: new ScheduledTaskStore(db, store), eventBus: new EventBus(),
+      taskStore: new ScheduledTaskStore(db, store.chat), eventBus: new EventBus(),
       runPiStreamFactory: stub.factory as any,
     };
     const task = deps.taskStore!.createWorkspaceTask({
@@ -128,11 +128,11 @@ describe("executeTask 产出文件收集（#30）", () => {
   test("无 write 类工具 → task_files 空", async () => {
     const stub = stubStreamFactory([{ text: "只有文本", blocks: [toolUseStart("t1", "read", { path: "a.md" }), blockEnd("t1")] }]);
     const db = openDbMigrated(":memory:");
-    const store = new WorkflowStore(db);
+    const store = createStores(db);
     const deps: RunDeps = {
-      store, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
+      runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
       workspaceStore: new WorkspaceStore(db),
-      taskStore: new ScheduledTaskStore(db, store), eventBus: new EventBus(),
+      taskStore: new ScheduledTaskStore(db, store.chat), eventBus: new EventBus(),
       runPiStreamFactory: stub.factory as any,
     };
     const task = deps.taskStore!.createWorkspaceTask({

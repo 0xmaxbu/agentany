@@ -4,7 +4,7 @@ import { startBridge } from "../src/bridge/server";
 import { issueNonce, _clearNonces } from "../src/bridge/nonce";
 import { RunRegistry } from "../src/runs/registry";
 import { EventBus } from "../src/chat/eventbus";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { openDbMigrated } from "../src/db/client";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
 
@@ -16,17 +16,17 @@ const delayUntil = async (p: () => boolean, t = 3000) => {
 };
 
 function setup() {
-  const store = new WorkflowStore(openDbMigrated(":memory:"));
-  store.createConversation({ id: "c-bridge", workspaceId: "ws_company", userId: "u" });
+  const store = createStores(openDbMigrated(":memory:"));
+  store.chat.createConversation({ id: "c-bridge", workspaceId: "ws_company", userId: "u" });
   const eventBus = new EventBus();
-  const registry = new RunRegistry({ store, eventBus, runPiFactory: stubFactory });
+  const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
   return { store, eventBus, registry };
 }
 
 describe("bridge /run/start + /run/read（ticket #14）", () => {
   test("/run/start（有效 nonce）→ {runId, running}；/run/read → suspended（synthetic 挂起）", async () => {
     const { store, eventBus, registry } = setup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-bridge");
     try {
       const r = await fetch(`http://127.0.0.1:${port}/run/start`, {
@@ -51,7 +51,7 @@ describe("bridge /run/start + /run/read（ticket #14）", () => {
 
   test("无 nonce / 坏 nonce → 401", async () => {
     const { store, eventBus, registry } = setup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     try {
       const noAuth = await fetch(`http://127.0.0.1:${port}/run/start`, { method: "POST", body: "{}" });
       expect(noAuth.status).toBe(401);
@@ -65,7 +65,7 @@ describe("bridge /run/start + /run/read（ticket #14）", () => {
 
   test("read 不存在的 run → 404；缺 workflowId → 400", async () => {
     const { store, eventBus, registry } = setup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-bridge");
     try {
       const rd = await fetch(`http://127.0.0.1:${port}/run/read?runId=nope`, { headers: { authorization: `Bearer ${token}` } });
@@ -84,7 +84,7 @@ describe("bridge /run/start + /run/read（ticket #14）", () => {
 
   test("#18 /run/start 透传三态：brand-research（auto=require_approval）→ {needs_approval, questionId}（不 throw）", async () => {
     const { store, eventBus, registry } = setup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-bridge");
     try {
       const r = await fetch(`http://127.0.0.1:${port}/run/start`, {
@@ -96,7 +96,7 @@ describe("bridge /run/start + /run/read（ticket #14）", () => {
       const data: any = await r.json();
       expect(data.status).toBe("needs_approval");
       expect(data.questionId).toBeGreaterThan(0);
-      expect(store.getPendingApproval("c-bridge", "brand-research")?.id).toBe(data.questionId);
+      expect(store.hitl.getPendingApproval("c-bridge", "brand-research")?.id).toBe(data.questionId);
     } finally {
       stop();
       _clearNonces();
@@ -105,8 +105,8 @@ describe("bridge /run/start + /run/read（ticket #14）", () => {
 
   test("#codex /run/read 跨会话 guard：B 的 nonce 读 A 的 run → 403（同 /ask_user /run/resume）；A 自读 → 200", async () => {
     const { store, eventBus, registry } = setup();
-    store.createConversation({ id: "c-other", workspaceId: "ws_company", userId: "u" });
-    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    store.chat.createConversation({ id: "c-other", workspaceId: "ws_company", userId: "u" });
+    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const tokenA = issueNonce("c-bridge");
     try {
       // A（c-bridge）起一个 run
@@ -134,7 +134,7 @@ describe("bridge /run/start + /run/read（ticket #14）", () => {
 describe("bridge /run/resume（T4 #44 ADR-0025 决策 11：即时 verdict）", () => {
   test("clean → 立即返 {status:running}（续跑 detached）；rejected → 409；idempotent → alreadyAnswered", async () => {
     const { store, eventBus, registry } = setup();
-    const { port, stop } = startBridge(0, { runRegistry: registry, store, eventBus });
+    const { port, stop } = startBridge(0, { runRegistry: registry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const token = issueNonce("c-bridge");
     const post = (runId: string, resumeData: unknown) =>
       fetch(`http://127.0.0.1:${port}/run/resume`, {

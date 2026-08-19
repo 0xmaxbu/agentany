@@ -3,7 +3,7 @@
 import { describe, test, expect } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { WorkspaceStore } from "../src/workspaces/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
@@ -17,10 +17,10 @@ async function makeAuthApp() {
   const db = openDbMigrated(":memory:");
   const userStore = new UserStore(db);
   const workspaceStore = new WorkspaceStore(db);
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   await userStore.createUser({ username: "root", password: "pw-admin-1", role: "admin" });
   await userStore.createUser({ username: "meme", password: "pw-member-1", role: "member" });
-  const deps: RunDeps = { store, userStore, workspaceStore, streamRegistry: new StreamRegistry() };
+  const deps: RunDeps = { runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore, workspaceStore, streamRegistry: new StreamRegistry() };
   const app = createApp(deps);
   const tokenOf = async (username: string) => {
     const r = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username, password: username === "root" ? "pw-admin-1" : "pw-member-1" }) });
@@ -31,8 +31,8 @@ async function makeAuthApp() {
 
 const auth = (tok: string) => ({ "content-type": "application/json", authorization: `Bearer ${tok}` });
 
-const makeConv = (store: WorkflowStore, userId: string, workspaceId: string, n: number) => {
-  for (let i = 0; i < n; i++) store.createConversation({ id: `c_${workspaceId}_${userId}_${i}`, workspaceId, userId });
+const makeConv = (store: Stores, userId: string, workspaceId: string, n: number) => {
+  for (let i = 0; i < n; i++) store.chat.createConversation({ id: `c_${workspaceId}_${userId}_${i}`, workspaceId, userId });
 };
 
 describe("手风琴 · GET /workspaces 聚合", () => {
@@ -103,7 +103,7 @@ describe("手风琴 · ws 归档", () => {
     const adminTok = await tokenOf("root");
     const me = (await (await app.request("/me", { headers: auth(adminTok) })).json()) as { id: string };
     const ws: any = await (await app.request("/workspaces", { method: "POST", headers: auth(adminTok), body: JSON.stringify({ name: "archsend", allUsers: true }) })).json() as any[];
-    const conv = store.createConversation({ id: "c_archsend_1", workspaceId: ws.id, userId: me.id });
+    const conv = store.chat.createConversation({ id: "c_archsend_1", workspaceId: ws.id, userId: me.id });
     await app.request(`/workspaces/${ws.id}/archive`, { method: "PATCH", headers: auth(adminTok) });
 
     // GET messages 200（可看）

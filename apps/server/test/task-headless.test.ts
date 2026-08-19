@@ -4,7 +4,7 @@
 // seam：直构 executeTask + deps.runPiFn 注入；DATA_DIR 隔离（防触真实 data/）。
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -19,10 +19,10 @@ afterEach(() => { delete process.env.DATA_DIR; });
 
 function mkDeps(): RunDeps {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   return {
-    store, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
-    workspaceStore: new WorkspaceStore(db), taskStore: new ScheduledTaskStore(db, store),
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
+    workspaceStore: new WorkspaceStore(db), taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
   };
 }
@@ -68,7 +68,7 @@ describe("headless 执行（#32 system 任务）", () => {
     expect(runs[0].finishedAt).not.toBeNull();
     expect(runs[0].outputMessageId).toBeNull();
     // 无会话消息产生（headless 不落 messages 表）
-    expect(deps.store.listConversations("u", undefined, false).length).toBeGreaterThanOrEqual(0); // 不炸即证（无会话可写）
+    expect(deps.chatStore.listConversations("u", undefined, false).length).toBeGreaterThanOrEqual(0); // 不炸即证（无会话可写）
   });
 
   test("pi 抛错 → failed + note 记错误详情（管理页历史可读）", async () => {

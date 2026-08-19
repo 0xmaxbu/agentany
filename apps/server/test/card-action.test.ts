@@ -3,7 +3,7 @@
 //   点按钮 → 长连接 card 帧 → handleCardAction → dispatch（CAS）→ 响应（更新卡+toast）经 ack data 断言 + 落库断言。
 import { describe, test, expect, afterEach } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -62,17 +62,17 @@ describe("T4 e2e：按钮回调闭环（假飞书 WS）", () => {
   async function scene() {
     const fake = fakeFeishuWs();
     const db = openDbMigrated(":memory:");
-    const store = new WorkflowStore(db);
+    const store = createStores(db);
     const userStore = new UserStore(db);
     const eventBus = new EventBus();
     const queues = new ConversationQueues();
     const deps: RunDeps = {
-      store, userStore,
+      runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore,
       streamRegistry: new StreamRegistry(),
       workspaceStore: new WorkspaceStore(db),
-      taskStore: new ScheduledTaskStore(db, store),
+      taskStore: new ScheduledTaskStore(db, store.chat),
       eventBus, conversationQueues: queues, imStore: new ImStore(db),
-      runRegistry: new RunRegistry({ store, eventBus, runPiFactory: stubRunPiFactory }),
+      runRegistry: new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
       runPiStreamFactory: (): ConfiguredRunPiStream => async (call) => ({ text: "", messages: [], toolResults: [] }),
     };
     const lc = new FeishuLongConnection({
@@ -94,9 +94,9 @@ describe("T4 e2e：按钮回调闭环（假飞书 WS）", () => {
   test("approval 卡点[拒绝] → 落定 deny + hitl_answered + 更新卡 + toast「已审批」", async () => {
     s = await scene();
     const m1 = await s.newUser("m1");
-    s.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    s.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     s.deps.imStore!.bind("ou_1", "feishu", m1.id);
-    const qid = s.store.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "批准本次发布？", options: ["批准", "拒绝"] });
+    const qid = s.store.hitl.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "批准本次发布？", options: ["批准", "拒绝"] });
     const frames: any[] = []; s.eventBus.subscribe("c1", (f) => frames.push(f));
 
     const { ack } = await s.fake.pushCardAction(cardActionEvent("ou_1", qid, "拒绝"));
@@ -108,7 +108,7 @@ describe("T4 e2e：按钮回调闭环（假飞书 WS）", () => {
     expect(respCard.body.elements.some((e: any) => e.tag === "action")).toBe(false);
     expect(respCard.body.elements.some((e: any) => e.tag === "div" && String(e.text?.content).includes("已处理"))).toBe(true);
     // 落库：approval deny 已决（决策人即点击者 m1）
-    const decided = s.store.getQuestion(qid)!;
+    const decided = s.store.hitl.getQuestion(qid)!;
     expect(decided.status).toBe("answered");
     expect(frames.some((f) => f.type === "hitl_answered" && f.questionId === qid && f.kind === "approval" && (f.answer as any).decision === "deny")).toBe(true);
   });
@@ -116,14 +116,14 @@ describe("T4 e2e：按钮回调闭环（假飞书 WS）", () => {
   test("ask run 绑定卡：点[accept] → CAS 收口 → resume → answered + hitl_answered + 响应卡", async () => {
     s = await scene();
     const m1 = await s.newUser("m1");
-    s.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    s.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     s.deps.imStore!.bind("ou_1", "feishu", m1.id);
     const runId = "r_card";
-    s.store.createRun({ runId, workflowId: "synthetic-3step", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    s.store.updateRunStatus(runId, "suspended");
-    s.store.appendLog(runId, { stepId: "review", status: "suspended", suspendPayload: { options: ["accept", "redirect"] },
+    s.store.runs.createRun({ runId, workflowId: "synthetic-3step", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    s.store.runs.updateRunStatus(runId, "suspended");
+    s.store.runs.appendLog(runId, { stepId: "review", status: "suspended", suspendPayload: { options: ["accept", "redirect"] },
       resumeSchema: { _t: "object", shape: { decision: { _t: "enum", vals: ["accept", "redirect"] }, focus: { _t: "optional", inner: { _t: "string" } } } } });
-    const qid = s.store.createQuestion({ conversationId: "c1", runId, prompt: "选哪个？", options: ["accept", "redirect"],
+    const qid = s.store.hitl.createQuestion({ conversationId: "c1", runId, prompt: "选哪个？", options: ["accept", "redirect"],
       resumeSchema: { _t: "object", shape: { decision: { _t: "enum", vals: ["accept", "redirect"] }, focus: { _t: "optional", inner: { _t: "string" } } } },
       values: [{ label: "accept", value: { decision: "accept" } }, { label: "redirect", value: { decision: "redirect" } }] });
     const frames: any[] = []; s.eventBus.subscribe("c1", (f) => frames.push(f));
@@ -131,59 +131,59 @@ describe("T4 e2e：按钮回调闭环（假飞书 WS）", () => {
     const { ack } = await s.fake.pushCardAction(cardActionEvent("ou_1", qid, "accept"));
     expect(ack.code).toBe(200);
     expect((ack.data as any).toast.content).toBe("已处理");
-    await delayUntil(() => s.store.getRun(runId)!.status === "completed", 3000); // run 续跑收口
-    expect(s.store.getQuestion(qid)!.status).toBe("answered");
+    await delayUntil(() => s.store.runs.getRun(runId)!.status === "completed", 3000); // run 续跑收口
+    expect(s.store.hitl.getQuestion(qid)!.status).toBe("answered");
     expect(frames.some((f) => f.type === "hitl_answered" && f.questionId === qid && (f.answer as any).decision === "accept")).toBe(true);
   });
 
   test("陈旧点击（已答卡）→ 幂等「该卡已被处理」+ 已答卡，不二次执行", async () => {
     s = await scene();
     const m1 = await s.newUser("m1");
-    s.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    s.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     s.deps.imStore!.bind("ou_1", "feishu", m1.id);
-    const qid = s.store.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "批准？", options: ["批准", "拒绝"] });
-    s.store.markApprovalDecided(qid, { decision: "approve" }, m1.id); // 已答（模拟 Web 先处理）
+    const qid = s.store.hitl.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "批准？", options: ["批准", "拒绝"] });
+    s.store.hitl.markApprovalDecided(qid, { decision: "approve" }, m1.id); // 已答（模拟 Web 先处理）
     const { ack } = await s.fake.pushCardAction(cardActionEvent("ou_1", qid, "拒绝"));
     expect(ack.code).toBe(200);
     const rsp: any = ack.data;
     expect(rsp.toast).toEqual({ type: "info", content: "该卡已被处理" });
     // 未二次执行：仍是 approve 结果（deny 没发生）
-    expect(s.store.getQuestion(qid)!.status).toBe("answered");
+    expect(s.store.hitl.getQuestion(qid)!.status).toBe("answered");
   });
 
   test("未绑定用户点按钮 → toast 提示绑定，不派发", async () => {
     s = await scene();
     const m1 = await s.newUser("m1");
-    s.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    s.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     // 不绑定 ou_2
-    const qid = s.store.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "批准？", options: ["批准", "拒绝"] });
+    const qid = s.store.hitl.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "批准？", options: ["批准", "拒绝"] });
     const { ack } = await s.fake.pushCardAction(cardActionEvent("ou_2", qid, "批准"));
     expect(ack.code).toBe(200);
     expect((ack.data as any).toast.type).toBe("error");
-    expect(s.store.getQuestion(qid)!.status).toBe("pending"); // 未派发
+    expect(s.store.hitl.getQuestion(qid)!.status).toBe("pending"); // 未派发
   });
 
   test("自主 ask 卡点选 → label 命中 → 统计收口（answered + hitl_answered + 响应卡）", async () => {
     s = await scene();
     const m1 = await s.newUser("m1");
-    s.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    s.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     s.deps.imStore!.bind("ou_1", "feishu", m1.id);
-    const qid = s.store.createQuestion({ conversationId: "c1", runId: null, prompt: "预算？", options: ["<10w"] });
+    const qid = s.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "预算？", options: ["<10w"] });
     const frames: any[] = []; s.eventBus.subscribe("c1", (f) => frames.push(f));
     const { ack } = await s.fake.pushCardAction(cardActionEvent("ou_1", qid, "<10w"));
     expect(ack.code).toBe(200);
-    await delayUntil(() => s.store.getQuestion(qid)!.status === "answered", 3000);
+    await delayUntil(() => s.store.hitl.getQuestion(qid)!.status === "answered", 3000);
     expect((ack.data as any).toast.content).toBe("已处理");
-    expect(s.store.getQuestion(qid)!.status).toBe("answered");
+    expect(s.store.hitl.getQuestion(qid)!.status).toBe("answered");
     expect(frames.some((f) => f.type === "hitl_answered" && f.questionId === qid)).toBe(true);
   });
 
   test("T3 嵌入的按钮 value 与 T4 解析契约一致（renderImCard→handleCardAction 闭合）", async () => {
     s = await scene();
     const m1 = await s.newUser("m1");
-    s.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    s.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     s.deps.imStore!.bind("ou_1", "feishu", m1.id);
-    const qid = s.store.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "批准？", options: ["批准", "拒绝"] });
+    const qid = s.store.hitl.createQuestion({ conversationId: "c1", kind: "approval", workflowId: "brand-research", input: {}, prompt: "批准？", options: ["批准", "拒绝"] });
     // T3 渲染的卡 → 取按钮嵌入 value → 组点按钮事件 → T4 解析 → dispatch 生效（deny 侧，避开 registry 依赖）
     const sentCard: any = renderImCard({ questionId: qid, kind: "approval", prompt: "批准？", options: [{ label: "拒绝", value: "拒绝" }, { label: "批准", value: "批准" }] });
     const embedded = (sentCard.body.elements.find((e: any) => e.tag === "button") as any).behaviors[0].value;

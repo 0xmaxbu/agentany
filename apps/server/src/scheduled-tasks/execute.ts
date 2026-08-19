@@ -107,7 +107,7 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
     }
     const convId = task.outputConversationId;
     // 悬空引用（会话已被 admin 硬删）：直接 failed，不写孤儿消息
-    if (!deps.store.getConversation(convId)) {
+    if (!deps.chatStore.getConversation(convId)) {
       const rid = own ? deps.taskStore!.recordRun({ taskId: task.id, trigger, status: "failed" }) : runIdProvided!;
       if (!own) deps.taskStore!.finishRun(rid, { status: "failed" });
       return;
@@ -116,7 +116,7 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
     const runId = own ? deps.taskStore!.recordRun({ taskId: task.id, trigger, status: "ok", startedAt: new Date().toISOString() }) : runIdProvided!;
 
     // #30 产出文件收集：钩 block_start(tool_use) 的 write/edit 路径 → run 收口时登记 task_files。
-    const convRow = deps.store.getConversation(convId)!;
+    const convRow = deps.chatStore.getConversation(convId)!;
     const wsCwd = resolveScopePaths(scopeOf(convRow.workspaceId), convRow.workspaceId).cwd;
     const written = new Set<string>();
     const collectFile = (f: Frame): void => {
@@ -163,7 +163,7 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
     if (failure) {
       // 可读错误说明落会话（runTurn 出错只发 error 帧不写消息——历史里会凭空消失，补一条系统说明）
       const errMsg = `定时任务「${task.displayName}」执行失败：${failure}`;
-      const errId = deps.store.appendMessage({ conversationId: convId, role: "assistant", content: errMsg });
+      const errId = deps.chatStore.appendMessage({ conversationId: convId, role: "assistant", content: errMsg });
       outputMessageId = String(errId);
     }
     deps.taskStore!.finishRun(runId, { status: failure ? "failed" : "ok", outputMessageId });

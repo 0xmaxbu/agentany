@@ -5,7 +5,8 @@
 // uuid 派生 `${questionId}:${frame.type}`：平台层幂等键（飞书 1h 去重窗）——瞬时故障重试不双发卡/回执。
 import type { Frame } from "../chat/eventbus";
 import { EventBus } from "../chat/eventbus";
-import type { WorkflowStore } from "../workflow-engine/store";
+import type { ChatStore } from "../chat/store"; // ADR-0030：出站路由只学 chat+hitl 面
+import type { HitlStore } from "../hitl/store";
 import { ImStore } from "./store";
 import { renderHitlFrame } from "./outbound";
 import { renderImCard, cardJsonSize, cardInputOf } from "./card";
@@ -14,7 +15,8 @@ import type { IMPlatform, ImOutboundMessage } from "./transport";
 const MAX_CARD_CHARS = 30 * 1024; // 飞书整卡上限；超限回落纯文本（不丢通知）
 
 export interface OutboundRouterDeps {
-  store: WorkflowStore;
+  chatStore: ChatStore;
+  hitlStore: HitlStore;
   imStore: ImStore;
   bus: EventBus;
   platform: IMPlatform;
@@ -41,7 +43,7 @@ export class ImOutboundRouter {
   }
 
   private activeConversationsOf(userId: string): string[] {
-    return this.deps.store.listConversations(userId) // 缺省 archived=false → 仅活跃
+    return this.deps.chatStore.listConversations(userId) // 缺省 archived=false → 仅活跃
       .filter((c) => !c.archivedAt)
       .map((c) => c.id);
   }
@@ -55,7 +57,7 @@ export class ImOutboundRouter {
 
   /** hitl_request → 交互卡（或用 question 行打素材）；卡不可用/超限 → 回落纯文本。 */
   private async sendCard(convId: string, f: Extract<Frame, { type: "hitl_request" }>): Promise<void> {
-    const q = this.deps.store.getQuestion(f.questionId);
+    const q = this.deps.hitlStore.getQuestion(f.questionId);
     if (!q) return; // 卡已不在（清理/关会话）→ 不追发
     const input = cardInputOf(q);
     const card = renderImCard(input);
@@ -69,7 +71,7 @@ export class ImOutboundRouter {
   }
 
   private async sendToOwner(convId: string, msg: ImOutboundMessage, uuid: string): Promise<void> {
-    const conv = this.deps.store.getConversation(convId);
+    const conv = this.deps.chatStore.getConversation(convId);
     if (!conv) return;
     const bound = this.deps.imStore.reverseResolve(conv.userId, this.deps.platform.platform);
     if (!bound) return; // owner 未绑此平台 → 只走 Web/App，不发 IM

@@ -5,7 +5,7 @@
 //     两卡并存 → 打字 → 选择卡 → 点选 → 缓存文本判答收口 → 更新卡/toast；并发双点 CAS；归一化失败重试提示
 import { describe, test, expect, beforeEach } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -41,7 +41,7 @@ const makeJudgeStream = (deps: RunDeps, log: { calls: number }): ConfiguredRunPi
   if (askEl) {
     const qid = askEl.match(/answer_question\((\d+)/)?.[1];
     if (qid) {
-      const row = deps.store.markQuestionAnswered(Number(qid), { plan: "按 IM 文本归一化" });
+      const row = deps.hitlStore.markQuestionAnswered(Number(qid), { plan: "按 IM 文本归一化" });
       if (row) deps.eventBus?.publish(row.conversationId, { type: "hitl_answered", questionId: row.id, answer: { plan: "按 IM 文本归一化" }, kind: "ask" });
     }
   }
@@ -60,19 +60,19 @@ const makeFailStream = (deps: RunDeps, log: { calls: number }): ConfiguredRunPiS
 
 function setup(streamCtor: (deps: RunDeps, log: { calls: number }) => ConfiguredRunPiStream = makeJudgeStream) {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const userStore = new UserStore(db);
   const eventBus = new EventBus();
   const queues = new ConversationQueues();
   const log = { calls: 0 };
   const pending = makePendingTextCache(10 * 60 * 1000);
   const deps: RunDeps = {
-    store, userStore,
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore,
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus, conversationQueues: queues, imStore: new ImStore(db),
-    runRegistry: new RunRegistry({ store, eventBus, runPiFactory: stubRunPiFactory }),
+    runRegistry: new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
     runPiStreamFactory: () => streamCtor(deps, log),
   };
   const fake = fakeFeishuWs();
@@ -98,9 +98,9 @@ describe("handleImInbound 三分支（扫描全部 ask 卡）", () => {
     let u = ctx.userStore.getUserByUsername(tag);
     if (!u) { await ctx.userStore.createUser({ username: tag, password: "pw-long-enough", role: "member" }); u = ctx.userStore.getUserByUsername(tag)!; }
     ctx.deps.imStore!.bind(openId, "feishu", u.id);
-    ctx.store.createConversation({ id: `c_${tag}_${n}`, workspaceId: "ws_company", userId: u.id });
+    ctx.store.chat.createConversation({ id: `c_${tag}_${n}`, workspaceId: "ws_company", userId: u.id });
     const ids: number[] = [];
-    for (let i = 0; i < n; i++) ids.push(ctx.store.createQuestion({ conversationId: `c_${tag}_${n}`, runId: null, prompt: `澄清${i}`, options: ["A"] }));
+    for (let i = 0; i < n; i++) ids.push(ctx.store.hitl.createQuestion({ conversationId: `c_${tag}_${n}`, runId: null, prompt: `澄清${i}`, options: ["A"] }));
     return { u, ids };
   };
 
@@ -116,7 +116,7 @@ describe("handleImInbound 三分支（扫描全部 ask 卡）", () => {
     const { ids: ids2 } = await boot(1, "m2", "ou_2"); // 恰一张（独立用户）→ 直接判答
     const r2 = await handleImInbound(ctx.deps, { imUserId: "ou_2", platform: "feishu", text: "答这张" }, ctx.pending);
     expect(r2.status).toBe("processed");
-    expect(ctx.store.getQuestion(ids2[0])!.status).toBe("answered");
+    expect(ctx.store.hitl.getQuestion(ids2[0])!.status).toBe("answered");
   });
 
   test("缓存：新文本覆盖；TTL 过期清理", async () => {
@@ -166,10 +166,10 @@ describe("e2e：两卡并存 → 选择卡 → 点选判答", () => {
 
   test("打字 → 选择卡发出（interactive）→ 点选目标卡 → 缓存文本判答收口 + 更新卡/toast；二次点选 → 已处理", async () => {
     const m1 = await e2eUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     ctx.deps.imStore!.bind("ou_1", "feishu", m1.id);
-    const q1 = ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "预算？", options: ["<10w"] });
-    const q2 = ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "方向？", options: ["A方向"] });
+    const q1 = ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "预算？", options: ["<10w"] });
+    const q2 = ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "方向？", options: ["A方向"] });
     ctx.lc.start();
     await delayUntil(() => ctx.fake.state.wsClients === 1, 3000);
 
@@ -185,8 +185,8 @@ describe("e2e：两卡并存 → 选择卡 → 点选判答", () => {
     // 点选第 2 张（q2）→ ack 立即「已收到」（3s 窗内不跑 LLM）→ 异步判答收口 → 回执文本「已处理」
     const { ack } = await ctx.fake.pushCardAction(selEvent("ou_1", q2));
     expect((ack.data as any).toast).toEqual({ type: "info", content: "已收到，正在处理…" });
-    await delayUntil(() => ctx.store.getQuestion(q2)!.status === "answered", 3000);
-    expect(ctx.store.getQuestion(q2)!.status).toBe("answered");
+    await delayUntil(() => ctx.store.hitl.getQuestion(q2)!.status === "answered", 3000);
+    expect(ctx.store.hitl.getQuestion(q2)!.status).toBe("answered");
     await delayUntil(() => ctx.fake.state.sent.some((s) => s.msgType === "text" && (s.content as any)?.text === "已处理"), 3000);
     expect(ctx.fake.state.sent.some((s) => s.msgType === "text" && (s.content as any)?.text === "已处理")).toBe(true); // 异步回执经独立 send 通道
     // 缓存已消费：再点另一张（q1）→ 过期提示（旧选卡已失效）
@@ -198,10 +198,10 @@ describe("e2e：两卡并存 → 选择卡 → 点选判答", () => {
 
   test("并发双点（同一目标 q2）→ 卡恰收口一次；两发都有效 ack（CAS 幂等，无 error toast）", async () => {
     const m1 = await e2eUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     ctx.deps.imStore!.bind("ou_1", "feishu", m1.id);
-    ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "预算？", options: ["<10w"] });
-    const q2 = ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "方向？", options: ["A方向"] });
+    ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "预算？", options: ["<10w"] });
+    const q2 = ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "方向？", options: ["A方向"] });
     ctx.lc.start();
     await delayUntil(() => ctx.fake.state.wsClients === 1, 3000);
     await ctx.inbound(receiveTextEvent("ou_1", "十 万"));
@@ -209,9 +209,9 @@ describe("e2e：两卡并存 → 选择卡 → 点选判答", () => {
 
     const a = ctx.fake.pushCardAction(selEvent("ou_1", q2));
     const b = ctx.fake.pushCardAction(selEvent("ou_1", q2));
-    await delayUntil(() => ctx.store.getQuestion(q2)!.status === "answered", 3000);
+    await delayUntil(() => ctx.store.hitl.getQuestion(q2)!.status === "answered", 3000);
     const [ra, rb] = await Promise.all([a, b]);
-    expect(ctx.store.getQuestion(q2)!.status).toBe("answered"); // 恰 1 次收口（DB CAS）
+    expect(ctx.store.hitl.getQuestion(q2)!.status).toBe("answered"); // 恰 1 次收口（DB CAS）
     // 两发 ack 都即时且无 error（幂等分支：首发「已收到」/后发「该卡已被处理」）；回执「已处理」恰达一次（CAS 单收口）
     const toasts = [ra.ack.data, rb.ack.data].map((d: any) => (d as any)?.toast).filter(Boolean).map((t: any) => t.content);
     expect(toasts.every((t: any) => t === "已收到，正在处理…" || t === "该卡已被处理")).toBe(true);
@@ -223,10 +223,10 @@ describe("e2e：两卡并存 → 选择卡 → 点选判答", () => {
   test("归一化失败（判答不落 answered）→ ack「已收到」+ 回执「暂时无法据此推进」 + 卡 pending + 缓存保留可重试", async () => {
     const fail = setup(makeFailStream);
     const m1 = await (async () => { if (!fail.userStore.getUserByUsername("m")) await fail.userStore.createUser({ username: "m", password: "pw-long-enough", role: "member" }); return fail.userStore.getUserByUsername("m")!; })();
-    fail.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    fail.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     fail.deps.imStore!.bind("ou_1", "feishu", m1.id);
-    const q1 = fail.store.createQuestion({ conversationId: "c1", runId: null, prompt: "预算？", options: ["<10w"] });
-    fail.store.createQuestion({ conversationId: "c1", runId: null, prompt: "方向？", options: ["A"] });
+    const q1 = fail.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "预算？", options: ["<10w"] });
+    fail.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "方向？", options: ["A"] });
     fail.lc.start();
     await delayUntil(() => fail.fake.state.wsClients === 1, 3000);
     await fail.inbound(receiveTextEvent("ou_1", "十 万"));
@@ -235,7 +235,7 @@ describe("e2e：两卡并存 → 选择卡 → 点选判答", () => {
     const { ack } = await fail.fake.pushCardAction(selEvent("ou_1", q1));
     expect((ack.data as any).toast.content).toBe("已收到，正在处理…"); // 3s 窗即时 ack
     await delayUntil(() => fail.fake.state.sent.some((s) => s.msgType === "text" && (s.content as any)?.text.includes("暂时无法据此推进")), 3000);
-    expect(fail.store.getQuestion(q1)!.status).toBe("pending"); // 未收口
+    expect(fail.store.hitl.getQuestion(q1)!.status).toBe("pending"); // 未收口
     expect(fail.pending.get("ou_1")).toBe("十 万"); // 缓存保留 → 可重试
     fail.lc.stop(); fail.fake.close();
   });

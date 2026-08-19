@@ -4,7 +4,7 @@
 import { describe, test, expect } from "bun:test";
 import { EventBus } from "../src/chat/eventbus";
 import { ConversationQueues } from "../src/chat/queue";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { openDbMigrated } from "../src/db/client";
 import { fullDeps } from "./deps";
 import { startUserTurn, startSystemTurn, type TurnEntryResult } from "../src/chat/turn-entry";
@@ -38,8 +38,8 @@ function makeStub(throwOn?: string): StubRec {
 
 function makeHarness(throwOn?: string) {
   const st = makeStub(throwOn);
-  const store = new WorkflowStore(openDbMigrated(":memory:"));
-  store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u1" });
+  const store = createStores(openDbMigrated(":memory:"));
+  store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u1" });
   const deps: RunDeps = fullDeps(store, {
     runPiStreamFactory: st.factory as never,
     listWorkflows: () => [], // ADR-0029：注入免触全局 registry 态
@@ -59,8 +59,8 @@ describe("startUserTurn — ADR-0029 入口三态 + whenDone", () => {
     expect(r.status).toBe("accepted");
     const out = await (r as { status: "accepted"; whenDone: Promise<any> }).whenDone;
     expect(out.status).toBe("done");
-    expect(store.listMessages("c1").find((m) => m.role === "user")?.content).toBe("hello");
-    expect(store.listMessages("c1").find((m) => m.id === out.messageId && m.role === "assistant")?.content).toBe("PONG");
+    expect(store.chat.listMessages("c1").find((m) => m.role === "user")?.content).toBe("hello");
+    expect(store.chat.listMessages("c1").find((m) => m.id === out.messageId && m.role === "assistant")?.content).toBe("PONG");
     expect(frames.some((f) => f.type === "user_message" && f.content === "hello")).toBe(true);
     expect(frames.some((f) => f.type === "done")).toBe(true);
     expect(st.calls[0]?.bridge).toBeDefined(); // user flavor 缺省带 bridge（nonce+url）
@@ -72,7 +72,7 @@ describe("startUserTurn — ADR-0029 入口三态 + whenDone", () => {
     for (let i = 0; i < 5; i++) queues.enqueueHttpTurn("c1", () => new Promise<void>(() => {})); // 灌满 cap
     const r = startUserTurn(entry, "c1", "hi", {});
     expect(r.status).toBe("busy");
-    expect(store.listMessages("c1")).toHaveLength(0); // 未落库
+    expect(store.chat.listMessages("c1")).toHaveLength(0); // 未落库
     expect(frames.some((f) => f.type === "user_message")).toBe(false); // 未发布
   });
 
@@ -81,7 +81,7 @@ describe("startUserTurn — ADR-0029 入口三态 + whenDone", () => {
     for (let i = 0; i < 5; i++) queues.enqueueHttpTurn("c1", () => new Promise<void>(() => {}));
     const r = startUserTurn(entry, "c1", "accept", { skipTurn: true });
     expect(r.status).toBe("accepted");
-    expect(store.listMessages("c1")).toHaveLength(1); // 程序化收口轮照常落库
+    expect(store.chat.listMessages("c1")).toHaveLength(1); // 程序化收口轮照常落库
     const um = frames.find((f) => f.type === "user_message");
     expect(um?.cardAnswered).toBe(true); // 前端免 LLM 占位旗标
     expect((r as { whenDone?: Promise<unknown> }).whenDone).toBeUndefined(); // 确定性收口无 LLM whenDone
@@ -99,7 +99,7 @@ describe("startUserTurn — ADR-0029 入口三态 + whenDone", () => {
     bus.subscribe("c1", (f) => frames2.push(f));
     const r = startUserTurn({ deps, queues: fakeQueues, publish: (f: any) => bus.publish("c1", f) }, "c1", "hi", {});
     expect(r.status).toBe("appended_only");
-    expect(store.listMessages("c1")).toHaveLength(1);
+    expect(store.chat.listMessages("c1")).toHaveLength(1);
     expect(frames2.some((f) => f.type === "error" && f.message.includes("busy"))).toBe(true);
   });
 

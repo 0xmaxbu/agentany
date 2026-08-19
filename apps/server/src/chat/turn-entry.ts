@@ -72,8 +72,8 @@ function core(ctx: TurnEntryCtx, convId: string, content: string, o: CoreOpts): 
     return { status: "busy" };
   }
 
-  const messageId = deps.store.appendMessage({ conversationId: convId, role: "user", content });
-  deps.store.touchConversation(convId); // updatedAt = 列表排序锚（#20）
+  const messageId = deps.chatStore.appendMessage({ conversationId: convId, role: "user", content });
+  deps.chatStore.touchConversation(convId); // updatedAt = 列表排序锚（#20）
   publish({
     type: "user_message", id: messageId, content,
     ...(o.skipTurn ? { cardAnswered: true } : {}), // 程序化轮旗标（前端免 LLM 占位）

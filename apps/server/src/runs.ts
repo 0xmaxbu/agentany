@@ -8,7 +8,10 @@ import { assertValidWorkspaceId } from "./config";
 import { resolveScopePaths, scopeOf } from "./scope";
 import { validate } from "./workflow-engine/schema";
 import type { Workflow } from "./workflow-engine/defineWorkflow";
-import type { WorkflowStore } from "./workflow-engine/store";
+import type { RunsStore } from "./runs/store"; // ADR-0030 决策 6：RunDeps 只见 runs 面，跨域经 deps.*Store
+import type { ChatStore } from "./chat/store";
+import type { HitlStore } from "./hitl/store";
+import type { FeedbackStore } from "./feedback/store";
 import type { EventBus } from "./chat/eventbus";
 import type { RunRegistry } from "./runs/registry";
 import type { UserStore } from "./auth/store";
@@ -20,7 +23,10 @@ import type { ConversationQueues } from "./chat/queue";
 import type { ImStore } from "./im/store";
 
 export interface RunDeps {
-  store: WorkflowStore;
+  runStore: RunsStore; // run/log 域（ADR-0030：跨域生命周期事务按 subject=run 归此）
+  chatStore: ChatStore; // conversations + messages
+  hitlStore: HitlStore; // hitl 提问卡（ask/approval/task）
+  feedbackStore: FeedbackStore; // 反馈（多态挂载 + 蒸馏增量水位）
   userStore: UserStore; // 真 auth（ADR-0014）：身份解析 + 用户/token CRUD
   streamRegistry: StreamRegistry; // 活跃 SSE 登记：token 吊销时强断（不杀 run）
   workspaceStore: WorkspaceStore; // 工作空间 + 名单（ADR-0018）：鉴权边界唯一口径
@@ -83,14 +89,14 @@ export async function startRun(deps: RunDeps, workflowId: string, workspaceId: s
   const v = validate(wf.inputSchema as any, input); // h2：按 inputSchema 校验
   if (!v.ok) throw new InvalidInput(v.error);
   const runId = makeRunId();
-  deps.store.createRun({ runId, workflowId, workspaceId, input });
-  return run(wf, deps.store, runId, buildCtx(wf, workspaceId, runId, deps));
+  deps.runStore.createRun({ runId, workflowId, workspaceId, input });
+  return run(wf, deps.runStore, runId, buildCtx(wf, workspaceId, runId, deps));
 }
 
 export async function resumeRun(deps: RunDeps, runId: string, resumeData: unknown) {
-  const row = deps.store.getRun(runId);
+  const row = deps.runStore.getRun(runId);
   if (!row) throw new RunNotFound(runId);
   const wf = getWorkflow(row.workflowId);
   if (!wf) throw new WorkflowNotFound(row.workflowId);
-  return resume(wf, deps.store, runId, resumeData, buildCtx(wf, row.workspaceId, runId, deps));
+  return resume(wf, deps.runStore, runId, resumeData, buildCtx(wf, row.workspaceId, runId, deps));
 }

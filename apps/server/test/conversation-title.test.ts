@@ -4,7 +4,7 @@
 import { describe, test, expect } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { fullDeps } from "./deps";
 import type { ConfiguredRunPiStream } from "../src/pi/runPi-factory";
 
@@ -70,7 +70,7 @@ async function openStream(app: ReturnType<typeof createApp>, convId: string) {
 }
 
 function newApp(factory: () => ConfiguredRunPiStream) {
-  const store = new WorkflowStore(openDbMigrated(":memory:"));
+  const store = createStores(openDbMigrated(":memory:"));
   const deps = fullDeps(store, { runPiStreamFactory: factory });
   return { app: createApp(deps), store };
 }
@@ -94,10 +94,10 @@ describe("会话自动命名（#命名）", () => {
     // 命名调用真的发生（prompt 含指令 + 原文素材）
     expect(n.prompts().some((p) => p.includes(TITLE_MARK) && p.includes("帮我想几个品牌名"))).toBe(true);
     // title 落库且 = LLM 输出
-    const conv = store.getConversation(c.id)!;
+    const conv = store.chat.getConversation(c.id)!;
     expect(conv.title).toBe(LLM_TITLE);
     // updatedAt 不被重命名改写（排序锚只属于 touch——POST 消息 touch 过一次，命名须在其之前或相等）
-    expect(conv.updatedAt <= (store.getConversation(c.id)!.updatedAt)).toBe(true);
+    expect(conv.updatedAt <= (store.chat.getConversation(c.id)!.updatedAt)).toBe(true);
     // title 帧在流上（前端实时换名）——delayUntil 只保证落库，帧读取异步再等一拍
     await delayUntil(() => s.frames.some((f) => f.type === "title"), 1000);
     expect(s.frames.filter((f) => f.type === "title")).toEqual([{ type: "title", title: LLM_TITLE }]);
@@ -128,7 +128,7 @@ describe("会话自动命名（#命名）", () => {
     await postMsg(app, c.id, "你好");
     await delayUntil(() => s.frames.some((f) => f.type === "done"));
     await delay(100);
-    expect(store.getConversation(c.id)!.title).toBeNull();
+    expect(store.chat.getConversation(c.id)!.title).toBeNull();
     expect(n.prompts().some((p) => p.includes(TITLE_MARK))).toBe(false);
 
     // 第二轮：补充实质内容（累计 ≥8 字）→ 命名触发，素材含两轮消息
@@ -137,7 +137,7 @@ describe("会话自动命名（#命名）", () => {
     const namingPrompt = n.prompts().find((p) => p.includes(TITLE_MARK))!;
     expect(namingPrompt).toContain("你好"); // 素材 = 累计 user 消息（非仅本轮）
     expect(namingPrompt).toContain("帮我想几个品牌名");
-    expect(store.getConversation(c.id)!.title).toBe(LLM_TITLE);
+    expect(store.chat.getConversation(c.id)!.title).toBe(LLM_TITLE);
     await s.reader.cancel();
   });
 
@@ -158,7 +158,7 @@ describe("会话自动命名（#命名）", () => {
     await postMsg(app, c.id, "帮我想几个品牌名，要中文的");
     await delayUntil(() => s.frames.some((f) => f.type === "done"));
     await delay(100); // 命名若落库也该已完成
-    expect(store.getConversation(c.id)!.title).toBeNull(); // 不命名 = 保持「新会话」
+    expect(store.chat.getConversation(c.id)!.title).toBeNull(); // 不命名 = 保持「新会话」
     expect(s.frames.some((f: any) => f.type === "title")).toBe(false); // 也不发帧
     await s.reader.cancel();
   });
@@ -177,7 +177,7 @@ describe("会话自动命名（#命名）", () => {
     await postMsg(app, c.id, "这是一条足够长的用户消息用于触发命名");
     await delayUntil(() => s.frames.some((f) => f.type === "done"));
     await delay(100);
-    expect(store.getConversation(c.id)!.title).toBeNull(); // 失败 = 不命名，等下轮重试
+    expect(store.chat.getConversation(c.id)!.title).toBeNull(); // 失败 = 不命名，等下轮重试
     await s.reader.cancel();
   });
 

@@ -74,7 +74,7 @@ async function handleFeishuCommand(deps: RunDeps, platform: IMPlatform, openId: 
   const row = deps.imStore?.bind(openId, platform.platform, claimed.userId);
   if (!row) return "绑定失败：该账号可能已在飞书绑定过其他身份。请先 #unbind 旧绑定再试。";
   // 成功 → 一次性补发全部存量 pending 卡（素材与出站路由同源 cardOptionsOf；uuid 同路由幂等键）
-  const pendings = deps.store.listPendingCardsForUser(claimed.userId);
+  const pendings = deps.hitlStore.listPendingCardsForUser(claimed.userId);
   for (const q of pendings) {
     const card = renderImCard(cardInputOf(q));
     await platform.send(openId, { cardJson: card }, { uuid: `${q.id}:hitl_request` })

@@ -12,7 +12,9 @@ import { resolveScopePaths, scopeOf, type Scope } from "../scope";
 import { validate } from "../workflow-engine/schema";
 import { decide } from "../security/policy";
 import { buildBriefMessage, extractArtifacts, extractBrief, extractNoteBrief, stepListFallback, truncateForRead } from "./briefing";
-import type { WorkflowStore, RunRow, RunStatus } from "../workflow-engine/store";
+import type { RunsStore, RunRow, RunStatus } from "../runs/store"; // ADR-0030：跨域经 runStore/hitlStore/chatStore
+import type { HitlStore } from "../hitl/store";
+import type { ChatStore } from "../chat/store";
 import type { Workflow } from "../workflow-engine/defineWorkflow";
 import type { EventBus, Frame } from "../chat/eventbus";
 import { WorkflowNotFound, InvalidInput, makeRunId } from "../runs";
@@ -27,7 +29,9 @@ export interface RunHandle {
 }
 
 export interface RunRegistryDeps {
-  store: WorkflowStore;
+  runStore: RunsStore; // run/log 域（引擎契约面）
+  chatStore: ChatStore; // getConversation（start 定位会话 ws/scope）
+  hitlStore: HitlStore; // 审批门（幂等查/建卡）
   eventBus: EventBus;
   runPiFactory?: (opts: { extensions?: string[]; scope: Scope; workspaceId: string | null; sessionId: string }) => ConfiguredRunPi;
 }
@@ -60,13 +64,13 @@ export class RunRegistry {
       }
     }
 
-    const conv = this.deps.store.getConversation(p.conversationId);
+    const conv = this.deps.chatStore.getConversation(p.conversationId);
     if (!conv) throw new Error(`conversation not found: ${p.conversationId}`);
     const workspaceId = conv.workspaceId;
     const scope = scopeOf(workspaceId);
 
     const runId = makeRunId();
-    this.deps.store.createRun({ runId, workflowId: p.workflowId, workspaceId, conversationId: p.conversationId, input: p.input });
+    this.deps.runStore.createRun({ runId, workflowId: p.workflowId, workspaceId, conversationId: p.conversationId, input: p.input });
 
     const abortCtrl = new AbortController();
     const ctx = this.ctxFor(wf, scope, workspaceId, runId, abortCtrl);
@@ -79,9 +83,9 @@ export class RunRegistry {
   private requireApproval(p: { conversationId: string; workflowId: string; input: unknown }, wf: Workflow): StartOutcome {
     const prompt = `启动工作流「${wf.name ?? p.workflowId}」需审批`;
     const options = ["批准", "拒绝"];
-    const existing = this.deps.store.getPendingApproval(p.conversationId, p.workflowId);
+    const existing = this.deps.hitlStore.getPendingApproval(p.conversationId, p.workflowId);
     if (existing) return { status: "needs_approval", questionId: existing.id }; // 幂等：防 pi 重调堆卡
-    const questionId = this.deps.store.createQuestion({
+    const questionId = this.deps.hitlStore.createQuestion({
       conversationId: p.conversationId, runId: null, kind: "approval",
       workflowId: p.workflowId, input: p.input, prompt, options,
     });
@@ -96,7 +100,7 @@ export class RunRegistry {
    *  同步段只判 verdict 即时返（rejected/idempotent/clean→running）；clean → detached 续跑（对齐 start 语义，
    *  不再阻塞 HTTP 分钟级）。续跑帧经 DB + EventBus；双击幂等由 runner 串行锁承担（第二次 idempotent 静默）。 */
   async resume(runId: string, resumeData: unknown): Promise<ResumeOutcome> {
-    const row = this.deps.store.getRun(runId);
+    const row = this.deps.runStore.getRun(runId);
     if (!row) throw new Error(`run not found: ${runId}`);
     const verdict = this.resumeVerdict(runId, resumeData);
     if (verdict.kind === "rejected") return { status: "suspended", runId, rejected: true, error: verdict.error };
@@ -113,10 +117,10 @@ export class RunRegistry {
     | { kind: "running" }
     | { kind: "rejected"; error: string }
     | { kind: "idempotent"; status: RunStatus } {
-    const log = this.deps.store.getLog(runId);
+    const log = this.deps.runStore.getLog(runId);
     const last = log[log.length - 1];
     if (!last || last.status !== "suspended") {
-      const r = this.deps.store.getRun(runId);
+      const r = this.deps.runStore.getRun(runId);
       return { kind: "idempotent", status: r?.status ?? "failed" };
     }
     const v = validate(last.resumeSchema as any, resumeData);
@@ -136,10 +140,10 @@ export class RunRegistry {
       const ctx = this.ctxFor(wf, scopeOf(row.workspaceId), row.workspaceId, runId, abortCtrl);
       let outcome: ResumeOutcome;
       try {
-        outcome = await resume(wf, this.deps.store, runId, resumeData, ctx, onProgress);
+        outcome = await resume(wf, this.deps.runStore, runId, resumeData, ctx, onProgress);
       } catch (e) {
         const note = (e as Error)?.message ?? String(e); // 顶抛：标 failed + 推 run_failed（同 runDetached catch）
-        this.deps.store.updateRunStatus(runId, "failed");
+        this.deps.runStore.updateRunStatus(runId, "failed");
         publish({ type: "run_failed", runId, note });
         return;
       }
@@ -153,9 +157,9 @@ export class RunRegistry {
 
   /** 读 run 状态/步骤/最新输出（chat read_run 经 bridge 调）。 */
   read(runId: string): { runId: string; status: string; steps: { seq: number; stepId: string; status: string }[]; latestOutput: unknown } | null {
-    const r = this.deps.store.getRun(runId);
+    const r = this.deps.runStore.getRun(runId);
     if (!r) return null;
-    const log = this.deps.store.getLog(runId);
+    const log = this.deps.runStore.getLog(runId);
     const last = log[log.length - 1];
     return {
       runId,
@@ -177,13 +181,13 @@ export class RunRegistry {
 
   /** boot 调：DB 里仍 running 的 run 标 failed（重启=进程没在跑了）——同步写「异常终止」brief（决策 3）。返处理数。 */
   sweepCrashed(): number {
-    return this.deps.store.markRunningAsFailed();
+    return this.deps.runStore.markRunningAsFailed();
   }
 
   /** ADR-0025 决策 3（#45/T2）boot 对账：sweep 之后扫 brief_message_id IS NULL 的终态 run 幂等补发简报消息
    *  （同交付通道 deliverBrief：写消息 + 回填 backfill）；排除已删会话。返补发数。 */
   reconcileBriefMessages(): number {
-    const rows = this.deps.store.listTerminalRunsWithoutBriefMessage();
+    const rows = this.deps.runStore.listTerminalRunsWithoutBriefMessage();
     let n = 0;
     for (const row of rows) {
       const publish = (frame: Frame) => {
@@ -191,7 +195,7 @@ export class RunRegistry {
       };
       if (row.status === "completed") {
         // 补发文案用列里 brief（单一真相）——不重溯 log 派生（code-review：与原发保字面一致）
-        this.deliverBrief(publish, row.runId, row, "completed", { log: this.deps.store.getLog(row.runId), note: undefined, briefOverride: row.brief ?? undefined });
+        this.deliverBrief(publish, row.runId, row, "completed", { log: this.deps.runStore.getLog(row.runId), note: undefined, briefOverride: row.brief ?? undefined });
       } else {
         this.deliverBrief(publish, row.runId, row, "failed", { log: [], note: row.brief as string });
       }
@@ -202,7 +206,7 @@ export class RunRegistry {
 
   /** #19 abort：停该会话所有 running run。有句柄→abortCtrl.abort()（杀 pi → runDetached catch 自负 status+publish run_failed，单次）；无句柄（重启 stale）→直接 failed+publish。返停数。 */
   stopConversationRuns(conversationId: string): number {
-    const ids = this.deps.store.listRunningRunIds(conversationId);
+    const ids = this.deps.runStore.listRunningRunIds(conversationId);
     for (const runId of ids) {
       const h = this.handles.get(runId);
       if (h) {
@@ -230,7 +234,7 @@ export class RunRegistry {
     const onProgress = (p: RunProgress) => publish({ ...p, runId }); // run_started 由 run() 发、经此透传（带 runId）
     let outcome: RunOutcome;
     try {
-      outcome = await run(wf, this.deps.store, runId, ctx, onProgress);
+      outcome = await run(wf, this.deps.runStore, runId, ctx, onProgress);
     } catch (e) {
       const note = (e as Error)?.message ?? String(e);
       outcome = { status: "failed", runId, note }; // 顶抛（loadState 等）→ 同走 publishOutcome（终态简报统一）
@@ -243,9 +247,9 @@ export class RunRegistry {
   // ADR-0025（#41/T1 + #46/T3）：completed/failed **零 LLM 直投**（同事务终态+brief+简报消息+touch + 简报块）；
   // suspended → ask 契约直投强制卡（同事务挂起+卡片，无伴生消息）。
   private publishOutcome(publish: (f: Frame) => void, runId: string, outcome: RunOutcome): void {
-    const run = this.deps.store.getRun(runId);
+    const run = this.deps.runStore.getRun(runId);
     if (outcome.status === "completed") {
-      this.deliverBrief(publish, runId, run, "completed", { log: this.deps.store.getLog(runId), note: undefined });
+      this.deliverBrief(publish, runId, run, "completed", { log: this.deps.runStore.getLog(runId), note: undefined });
     } else if (outcome.status === "failed") {
       this.deliverBrief(publish, runId, run, "failed", { log: [], note: outcome.note });
     } else if (outcome.status === "suspended") {
@@ -263,16 +267,16 @@ export class RunRegistry {
     if (!payload || typeof payload.question !== "string" || !run?.conversationId) return;
     const options = Array.isArray(payload.options) ? (payload.options as { label: string; value: unknown }[]) : [];
     // resumeSchema：outcome 兜底 log（历史路径/健壮性——卡必须自含校验契约）
-    const resumeSchema = outcome.resumeSchema ?? this.deps.store.getLog(runId).at(-1)?.resumeSchema ?? null;
+    const resumeSchema = outcome.resumeSchema ?? this.deps.runStore.getLog(runId).at(-1)?.resumeSchema ?? null;
     const context = typeof payload.context === "string" ? payload.context : undefined;
-    const questionId = this.deps.store.suspendWithAskCard({
+    const questionId = this.deps.runStore.suspendWithAskCard({
       runId,
       conversationId: run.conversationId,
       prompt: payload.question,
       options: options.map((o) => o.label),
       values: options, // 快照（显式 {label,value}；value 只服务端消费）
       resumeSchema,
-      input: context !== undefined ? { context } : null,
+      context, // ADR-0030 决策 3：context 一等列——registry 零 {context} 包装走私知识
     });
     publish({
       type: "hitl_request", questionId, runId, kind: "ask",
@@ -292,7 +296,7 @@ export class RunRegistry {
     runId: string,
     run: RunRow | undefined,
     terminal: "completed" | "failed",
-    src: { log: ReturnType<WorkflowStore["getLog"]>; note: string | undefined; briefOverride?: string },
+    src: { log: ReturnType<RunsStore["getLog"]>; note: string | undefined; briefOverride?: string },
   ): void {
     if (!run) {
       // 行被删/不存在：仍发边界帧（展示流不受影响），不写库。
@@ -308,7 +312,7 @@ export class RunRegistry {
     const msg = buildBriefMessage({
       workflowId: run.workflowId, terminal, brief, artifacts, workspaceId: run.workspaceId,
     });
-    const messageId = this.deps.store.setTerminalBrief({
+    const messageId = this.deps.runStore.setTerminalBrief({
       runId, status: terminal, brief, messageContent: msg, conversationId: run.conversationId,
     });
 

@@ -2,7 +2,7 @@
 // 断言外部行为：产出会话落了什么消息 / task_runs 收成什么 / extension 集内容。
 import { describe, test, expect } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -30,13 +30,13 @@ function stubStreamFactory(results: Array<{ text?: string; error?: Error }>) {
 
 function mkDeps(factory: ReturnType<typeof stubStreamFactory>["factory"]) {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const deps: RunDeps = {
-    store,
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback,
     userStore: new UserStore(db),
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
     runPiStreamFactory: factory as any,
   };
@@ -68,7 +68,7 @@ describe("makeExecuteTask（#29 真执行链）", () => {
     // prompt 进了 pi（带任务目标）
     expect(stub.calls.map((c) => c.prompt)).toContain("去网站读新闻发摘要");
     // user 消息（任务 prompt）+ assistant 产出 都落在产出会话
-    const msgs = deps.store.listMessages(task.outputConversationId!);
+    const msgs = deps.chatStore.listMessages(task.outputConversationId!);
     expect(msgs.some((m) => m.role === "user" && m.content.includes("去网站读新闻发摘要"))).toBe(true);
     expect(msgs.some((m) => m.role === "assistant" && m.content === "这是摘要产出")).toBe(true);
     // task_runs：ok + outputMessageId 指向 assistant 消息
@@ -106,7 +106,7 @@ describe("makeExecuteTask（#29 真执行链）", () => {
     await new Promise((r) => setTimeout(r, 20));
     const runs = deps.taskStore!.listRuns(task.id);
     expect(runs[0].status).toBe("failed");
-    const msgs = deps.store.listMessages(task.outputConversationId!);
+    const msgs = deps.chatStore.listMessages(task.outputConversationId!);
     expect(msgs.some((m) => m.role === "assistant" && m.content.includes("pi crashed"))).toBe(true);
   });
 
@@ -140,7 +140,7 @@ describe("makeExecuteTask（#29 真执行链）", () => {
   test("与 TaskScheduler 集成：到点 tick → 真链跑通（markFired 先行）", async () => {
     const stub = stubStreamFactory([{ text: "第1次" }, { text: "第2次" }]);
     const deps = mkDeps(stub.factory);
-    const conv = deps.store.createConversation({ id: "c_exec", workspaceId: "ws_company", userId: "u", title: "T2" });
+    const conv = deps.chatStore.createConversation({ id: "c_exec", workspaceId: "ws_company", userId: "u", title: "T2" });
     const t2 = deps.taskStore!.createTask({
       scope: "workspace", workspaceId: "ws_company", displayName: "T2", cron: "0 * * * *",
       prompt: "p2", outputConversationId: conv.id, creatorId: "u",
@@ -154,7 +154,7 @@ describe("makeExecuteTask（#29 真执行链）", () => {
     const runs = deps.taskStore!.listRuns(t2.id);
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe("ok");
-    expect(deps.store.listMessages(conv.id).some((m) => m.content === "第1次")).toBe(true);
+    expect(deps.chatStore.listMessages(conv.id).some((m) => m.content === "第1次")).toBe(true);
     expect(new Date(deps.taskStore!.getTask(t2.id)!.nextFireAt).getTime()).toBeGreaterThan(Date.now() - 1000);
   });
 });

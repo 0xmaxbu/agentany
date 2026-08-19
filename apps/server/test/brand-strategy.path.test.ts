@@ -4,12 +4,12 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { run, resume, type RunCtx } from "../src/workflow-engine/runner";
 import { brandStrategyAnalysis } from "../src/workflows/brand-strategy-analysis";
 
 const CWD = `/tmp/agentany-bsa-test-${process.pid}`;
-const newStore = () => new WorkflowStore(openDbMigrated(":memory:"));
+const newStore = () => createStores(openDbMigrated(":memory:"));
 const newRunId = () => "r_" + Math.random().toString(36).slice(2, 10);
 
 beforeEach(() => { rmSync(CWD, { recursive: true, force: true }); mkdirSync(CWD, { recursive: true }); });
@@ -21,10 +21,10 @@ function ctx(capture?: { p: string }): RunCtx {
     workspaceId: "ws_test", cwd: CWD, signal: new AbortController().signal, log: () => {},
   };
 }
-async function startWith(store: WorkflowStore, input: unknown) {
+async function startWith(store: Stores, input: unknown) {
   const runId = newRunId();
-  store.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input });
-  return { runId, res: await run(brandStrategyAnalysis, store, runId, ctx()) };
+  store.runs.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input });
+  return { runId, res: await run(brandStrategyAnalysis, store.runs, runId, ctx()) };
 }
 
 describe("brand-strategy-analysis · anglesPath 路径卫生", () => {
@@ -71,7 +71,7 @@ describe("brand-strategy-analysis · reportPath slugify", () => {
     expect(res.status).toBe("suspended");
 
     const cap = { p: "" };
-    const r = await resume(brandStrategyAnalysis, store, runId, { selected: "all" }, ctx(cap));
+    const r = await resume(brandStrategyAnalysis, store.runs, runId, { selected: "all" }, ctx(cap));
     expect(r.status).toBe("suspended"); // approve-report 挂起
     // 从 generate-report 的 prompt 抽 reportPath：修复前 join("../evil-…") 会逃到 CWD 根（不在 reports/）。
     const m = cap.p.match(/写报告 → (.+?)（执行摘要/);

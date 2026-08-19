@@ -2,7 +2,7 @@
 // brief_message_id IS NULL 的终态 run 幂等补发简报消息；sweep 先于 reconcile；排除已删会话。
 import { describe, test, expect } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { EventBus } from "../src/chat/eventbus";
 import { RunRegistry } from "../src/runs/registry";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
@@ -16,22 +16,22 @@ const delayUntil = async (pred: () => boolean, timeoutMs = 3000): Promise<void> 
 };
 
 function newRegistry() {
-  const store = new WorkflowStore(openDbMigrated(":memory:"));
-  store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+  const store = createStores(openDbMigrated(":memory:"));
+  store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
   const eventBus = new EventBus();
-  const registry = new RunRegistry({ store, eventBus, runPiFactory: stubFactory });
+  const registry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
   return { store, eventBus, registry };
 }
 
 describe("store · sweep 写「异常终止」brief", () => {
   test("markRunningAsFailed → status failed + brief=异常终止（对账补发的文案真相）", () => {
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    store.updateRunStatus("r1", "running");
+    const store = createStores(openDbMigrated(":memory:"));
+    store.runs.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    store.runs.updateRunStatus("r1", "running");
 
-    const n = store.markRunningAsFailed();
+    const n = store.runs.markRunningAsFailed();
     expect(n).toBe(1);
-    const row = store.getRun("r1")!;
+    const row = store.runs.getRun("r1")!;
     expect(row.status).toBe("failed");
     expect(row.brief).toBe("异常终止（进程重启）");
     expect(row.briefMessageId).toBeNull();
@@ -40,27 +40,27 @@ describe("store · sweep 写「异常终止」brief", () => {
 
 describe("store · setTerminalBrief 原子回填（code-review P4：事务外回填=重启重复简报窗口）", () => {
   test("简报消息与 briefMessageId 同事务落库——不依赖第二个调用", () => {
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
-    store.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    const mid = store.setTerminalBrief({
+    const store = createStores(openDbMigrated(":memory:"));
+    store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+    store.runs.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    const mid = store.runs.setTerminalBrief({
       runId: "r1", status: "completed", brief: "done",
       messageContent: "📋 工作流 w 完成：done", conversationId: "c1",
     });
     expect(mid).toBeGreaterThan(0);
     // 此前 briefMessageId 靠事务外 backfill——崩在两写之间，重启 reconcile 会再插一条重复简报
-    expect(store.getRun("r1")!.briefMessageId).toBe(mid);
+    expect(store.runs.getRun("r1")!.briefMessageId).toBe(mid);
   });
 
   test("幂等 guard：已发简报的 run 再 setTerminalBrief → 不插第二条、返已有 id", () => {
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
-    store.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    const store = createStores(openDbMigrated(":memory:"));
+    store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+    store.runs.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
     const p = { runId: "r1", status: "completed", brief: "done", messageContent: "📋 工作流 w 完成：done", conversationId: "c1" } as const;
-    const m1 = store.setTerminalBrief(p);
-    const m2 = store.setTerminalBrief(p); // 重放（reconcile/双发路径）
+    const m1 = store.runs.setTerminalBrief(p);
+    const m2 = store.runs.setTerminalBrief(p); // 重放（reconcile/双发路径）
     expect(m2).toBe(m1);
-    expect(store.listMessages("c1").filter((m) => m.role === "assistant")).toHaveLength(1);
+    expect(store.chat.listMessages("c1").filter((m) => m.role === "assistant")).toHaveLength(1);
   });
 });
 
@@ -68,43 +68,43 @@ describe("registry · reconcile 幂等补发", () => {
   test("终态 run brief_message_id IS NULL → 补发简报消息 + 回填；重跑只补一次", async () => {
     const { store, eventBus, registry } = newRegistry();
     // 模拟崩溃残留：completed 但简报未发（T1 同事务写 brief，发信后回填前崩）
-    store.createRun({ runId: "r-crash", workflowId: "brand-research", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    store.setTerminalBrief({ runId: "r-crash", status: "completed", brief: "「X」调研完成", messageContent: "", conversationId: "c1" });
+    store.runs.createRun({ runId: "r-crash", workflowId: "brand-research", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    store.runs.setTerminalBrief({ runId: "r-crash", status: "completed", brief: "「X」调研完成", messageContent: "", conversationId: "c1" });
 
     const n = registry.reconcileBriefMessages();
     expect(n).toBe(1);
-    const row = store.getRun("r-crash")!;
+    const row = store.runs.getRun("r-crash")!;
     expect(row.briefMessageId).toBeGreaterThan(0);
-    const msgs = store.listMessages("c1").filter((m) => m.role === "assistant");
+    const msgs = store.chat.listMessages("c1").filter((m) => m.role === "assistant");
     expect(msgs).toHaveLength(1);
     expect(msgs[0].content).toContain("📋 工作流 brand-research 完成");
 
     // 幂等：重跑对账不再补
     const n2 = registry.reconcileBriefMessages();
     expect(n2).toBe(0);
-    expect(store.listMessages("c1").filter((m) => m.role === "assistant")).toHaveLength(1);
+    expect(store.chat.listMessages("c1").filter((m) => m.role === "assistant")).toHaveLength(1);
   });
 
   test("sweep 标 failed 的 run → 对账补发「异常终止」简报（文案诚实）", async () => {
     const { store, registry } = newRegistry();
-    store.createRun({ runId: "r-swept", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    store.runs.createRun({ runId: "r-swept", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
     registry.sweepCrashed(); // → failed + brief=异常终止
-    store.createRun({ runId: "r-swept2", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    store.updateRunStatus("r-swept2", "running"); // running 不 sweep（等下一个进程）
+    store.runs.createRun({ runId: "r-swept2", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    store.runs.updateRunStatus("r-swept2", "running"); // running 不 sweep（等下一个进程）
     const n = registry.reconcileBriefMessages();
     expect(n).toBe(1);
-    const msgs = store.listMessages("c1").filter((m) => m.role === "assistant");
+    const msgs = store.chat.listMessages("c1").filter((m) => m.role === "assistant");
     expect(msgs[0].content).toContain("异常终止");
   });
 
   test("补发文案用 row.brief（列是单一真相），不重溯 log 派生", async () => {
     const { store, registry } = newRegistry();
-    store.createRun({ runId: "r-b", workflowId: "brand-research", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    store.appendLog("r-b", { stepId: "report", status: "completed", output: { brief: "log 重派生文案" } });
-    store.setTerminalBrief({ runId: "r-b", status: "completed", brief: "列里真相", messageContent: "", conversationId: "c1" });
+    store.runs.createRun({ runId: "r-b", workflowId: "brand-research", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    store.runs.appendLog("r-b", { stepId: "report", status: "completed", output: { brief: "log 重派生文案" } });
+    store.runs.setTerminalBrief({ runId: "r-b", status: "completed", brief: "列里真相", messageContent: "", conversationId: "c1" });
 
     expect(registry.reconcileBriefMessages()).toBe(1);
-    const msgs = store.listMessages("c1").filter((m) => m.role === "assistant");
+    const msgs = store.chat.listMessages("c1").filter((m) => m.role === "assistant");
     expect(msgs).toHaveLength(1);
     expect(msgs[0].content).toContain("列里真相");
     expect(msgs[0].content).not.toContain("log 重派生文案");
@@ -112,8 +112,8 @@ describe("registry · reconcile 幂等补发", () => {
 
   test("对账排除已删会话的 run（conversationId 已解绑）", () => {
     const { store, registry } = newRegistry();
-    store.createRun({ runId: "r-orphan", workflowId: "w", workspaceId: "ws_company", conversationId: null, input: {} });
-    store.setTerminalBrief({ runId: "r-orphan", status: "failed", brief: "x", messageContent: "", conversationId: null });
+    store.runs.createRun({ runId: "r-orphan", workflowId: "w", workspaceId: "ws_company", conversationId: null, input: {} });
+    store.runs.setTerminalBrief({ runId: "r-orphan", status: "failed", brief: "x", messageContent: "", conversationId: null });
     expect(registry.reconcileBriefMessages()).toBe(0); // 无会话 → 不补发（消息无处可落）
   });
 });
@@ -131,6 +131,6 @@ describe("full swing · boot 顺序 sweep → reconcile（无 LLM、经 EventBus
 
     // 正常路径：简报已发 → 对账 no-op
     expect(registry.reconcileBriefMessages()).toBe(0);
-    expect(store.getRun(started.runId)!.briefMessageId).toBeGreaterThan(0);
+    expect(store.runs.getRun(started.runId)!.briefMessageId).toBeGreaterThan(0);
   });
 });

@@ -1,4 +1,4 @@
-// 用户 + opaque token 数据访问（ADR-0014 真 auth）。照搬 WorkflowStore 写法：引擎外唯一耦合 db 的本域文件。
+// 用户 + opaque token 数据访问（ADR-0014 真 auth）。照搬域 store 写法：引擎外唯一耦合 db 的本域文件。
 // 密码 = argon2id（Bun.password 内置零依赖）；token = 落库 sha256（非明文），注销/改密/重置=删行。
 import { and, eq, ne } from "drizzle-orm";
 import { createHash } from "node:crypto";

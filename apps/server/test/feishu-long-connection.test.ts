@@ -7,7 +7,7 @@
 //   - e2e：绑定的用户 + pending ask 卡 → push 文本事件 → handleImInbound 判答收口 → 回复经 send 回发
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -165,7 +165,7 @@ describe("T2 e2e：bound 用户 + pending ask → 文本事件 → 判答收口 
     if (askEl) {
       const qid = askEl.match(/answer_question\((\d+)/)?.[1];
       if (qid) {
-        const row = deps.store.markQuestionAnswered(Number(qid), { plan: "按 IM 文本归一化" });
+        const row = deps.hitlStore.markQuestionAnswered(Number(qid), { plan: "按 IM 文本归一化" });
         if (row) deps.eventBus?.publish(row.conversationId, { type: "hitl_answered", questionId: row.id, answer: { plan: "按 IM 文本归一化" }, kind: "ask" });
       }
     }
@@ -178,18 +178,18 @@ describe("T2 e2e：bound 用户 + pending ask → 文本事件 → 判答收口 
     const fake = fakeFeishuWs();
     const transport = new FeishuTransport({ appId: "cli_x", appSecret: "s_y", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app) });
     const db = openDbMigrated(":memory:");
-    const store = new WorkflowStore(db);
+    const store = createStores(db);
     const userStore = new UserStore(db);
     const eventBus = new EventBus();
     const queues = new ConversationQueues();
     const log = { calls: 0 };
     const deps: RunDeps = {
-      store, userStore,
+      runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore,
       streamRegistry: new StreamRegistry(),
       workspaceStore: new WorkspaceStore(db),
-      taskStore: new ScheduledTaskStore(db, store),
+      taskStore: new ScheduledTaskStore(db, store.chat),
       eventBus, conversationQueues: queues, imStore: new ImStore(db),
-      runRegistry: new RunRegistry({ store, eventBus, runPiFactory: stubRunPiFactory }),
+      runRegistry: new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
       runPiStreamFactory: () => stubJudge(deps, log),
     };
     const inbound = makeFeishuInbound(deps, transport);
@@ -204,16 +204,16 @@ describe("T2 e2e：bound 用户 + pending ask → 文本事件 → 判答收口 
     // 场景：m1 绑 ou_1，会话 + 一张 pending ask 卡
     await userStore.createUser({ username: "m1", password: "pw-long-enough", role: "member" });
     const m1 = userStore.getUserByUsername("m1")!;
-    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     deps.imStore!.bind("ou_1", "feishu", m1.id);
-    const qid = store.createQuestion({ conversationId: "c1", runId: null, prompt: "澄清：预算区间？", options: ["<10w", ">50w"] });
+    const qid = store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "澄清：预算区间？", options: ["<10w", ">50w"] });
 
     await fake.pushEvent(receiveTextEvent("ou_1", "不超过 10 万"));
-    await delayUntil(() => store.getQuestion(qid)!.status === "answered", 3000);
+    await delayUntil(() => store.hitl.getQuestion(qid)!.status === "answered", 3000);
 
     expect(log.calls).toBeGreaterThan(0); // 起过一轮 chat turn
-    expect(store.listMessages("c1").some((m) => m.role === "user" && m.content === "不超过 10 万")).toBe(true); // 文本进历史
-    expect(store.getQuestion(qid)!.status).toBe("answered");
+    expect(store.chat.listMessages("c1").some((m) => m.role === "user" && m.content === "不超过 10 万")).toBe(true); // 文本进历史
+    expect(store.hitl.getQuestion(qid)!.status).toBe("answered");
     expect(fake.state.sent).toHaveLength(1); // 回复经 T1 send 回发
     expect(fake.state.sent[0].receiveId).toBe("ou_1");
     expect(String((fake.state.sent[0].content as any).text)).toContain("回答已记录");
@@ -225,18 +225,18 @@ describe("T2 e2e：bound 用户 + pending ask → 文本事件 → 判答收口 
     const fake = fakeFeishuWs();
     const transport = new FeishuTransport({ appId: "cli_x", appSecret: "s_y", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app) });
     const db = openDbMigrated(":memory:");
-    const store = new WorkflowStore(db);
+    const store = createStores(db);
     const userStore = new UserStore(db);
     const eventBus = new EventBus();
     const queues = new ConversationQueues();
     const log = { calls: 0 };
     const deps: RunDeps = {
-      store, userStore,
+      runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore,
       streamRegistry: new StreamRegistry(),
       workspaceStore: new WorkspaceStore(db),
-      taskStore: new ScheduledTaskStore(db, store),
+      taskStore: new ScheduledTaskStore(db, store.chat),
       eventBus, conversationQueues: queues, imStore: new ImStore(db),
-      runRegistry: new RunRegistry({ store, eventBus, runPiFactory: stubRunPiFactory }),
+      runRegistry: new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
       runPiStreamFactory: () => stubJudge(deps, log),
     };
     const inbound = makeFeishuInbound(deps, transport);

@@ -6,7 +6,7 @@
 // 落卡形态整体删除：旧 hitl-dispatch 的 deterministicResumeData===undefined → markTaskCardDecided 分支
 // 已废（answered 后注入消失 + pi 不读 messages → resume 无人职守）；强制卡恒有快照、自主卡滑 LLM。
 import type { RunDeps } from "../runs";
-import type { QuestionRow } from "../workflow-engine/store";
+import type { QuestionRow } from "../hitl/store"; // ADR-0030：卡类型随 hitl 域文件带
 import type { ResumeOutcome } from "../workflow-engine/runner";
 import { SystemTaskProtected } from "../scheduled-tasks/store";
 import type { Frame } from "./eventbus";
@@ -32,10 +32,10 @@ export async function dispatchCardAnswer(
   content: string,
   userId: string,
 ): Promise<DispatchResult> {
-  const q = deps.store.getQuestion(questionId);
+  const q = deps.hitlStore.getQuestion(questionId);
   if (!q || q.conversationId !== conversationId) return { handled: false };
   if (q.status !== "pending") return { handled: false, skipTurn: true }; // 已答双击：消息落库、不二次派发/起轮
-  const conv = deps.store.getConversation(conversationId);
+  const conv = deps.chatStore.getConversation(conversationId);
   if (!conv) return { handled: false };
 
   const publish = (frame: Frame) => deps.eventBus?.publish(conversationId, frame);
@@ -78,7 +78,7 @@ const taskHandler: KindHandler = async ({ deps, q, content, publish }) => {
   };
 
   if (!confirm) {
-    deps.store.markTaskCardDecided(q.id, { decision: "cancel", message: content });
+    deps.hitlStore.markTaskCardDecided(q.id, { decision: "cancel", message: content });
     publish({ type: "hitl_answered", questionId: q.id, kind: "task", answer: { decision: "cancel" } });
     return { handled: true, skipTurn: true };
   }
@@ -93,24 +93,24 @@ const taskHandler: KindHandler = async ({ deps, q, content, publish }) => {
       throw e;
     }
     if (!row) {
-      deps.store.markTaskCardDecided(q.id, { decision: "cancel", message: "task no longer exists" });
+      deps.hitlStore.markTaskCardDecided(q.id, { decision: "cancel", message: "task no longer exists" });
       publish({ type: "hitl_answered", questionId: q.id, kind: "task", answer: { decision: "cancel" } });
       return { handled: true, skipTurn: true, error: "task no longer exists" };
     }
     if (patch.cron) deps.taskStore!.recomputeNextFire(taskId);
-    deps.store.markTaskCardDecided(q.id, { decision: "confirm", taskId });
+    deps.hitlStore.markTaskCardDecided(q.id, { decision: "confirm", taskId });
     publish({ type: "hitl_answered", questionId: q.id, kind: "task", answer: { decision: "confirm", taskId } });
     return { handled: true, skipTurn: true };
   }
 
   if (!input.displayName || !input.cron || !input.prompt) return { handled: true, skipTurn: true, error: "card payload incomplete" };
-  const conv = deps.store.getConversation(q.conversationId)!;
+  const conv = deps.chatStore.getConversation(q.conversationId)!;
   const task = deps.taskStore!.createWorkspaceTask({
     displayName: input.displayName, cron: input.cron, prompt: input.prompt,
     workspaceId: conv.workspaceId, creatorId: conv.userId,
     firstFireAt: validateCronAndFirstFire(input.cron),
   });
-  deps.store.markTaskCardDecided(q.id, { decision: "confirm", taskId: task.id });
+  deps.hitlStore.markTaskCardDecided(q.id, { decision: "confirm", taskId: task.id });
   publish({ type: "hitl_answered", questionId: q.id, kind: "task", answer: { decision: "confirm", taskId: task.id } });
   return { handled: true, skipTurn: true };
 };
@@ -120,16 +120,16 @@ const approvalHandler: KindHandler = async ({ deps, q, content, userId, publish 
   const idx = optionIndex(q.options as string[], content);
   if (idx < 0) return { handled: false };
   if (idx === 1) { // deny
-    const row = deps.store.markApprovalDecided(q.id, { decision: "deny" }, userId);
+    const row = deps.hitlStore.markApprovalDecided(q.id, { decision: "deny" }, userId);
     if (!row) return { handled: false }; // CAS 失败（并发已决）
     publish({ type: "hitl_answered", questionId: q.id, kind: "approval", answer: { decision: "deny" } });
     return { handled: true, skipTurn: true };
   }
   // approve：CAS 占位 → createRun（approved:true 跳 policy）→ 回填；失败回滚可重试
-  const claimed = deps.store.markApprovalDecided(q.id, { decision: "approve" }, userId);
+  const claimed = deps.hitlStore.markApprovalDecided(q.id, { decision: "approve" }, userId);
   if (!claimed) return { handled: false };
   if (!deps.runRegistry) {
-    deps.store.reopenApproval(q.id);
+    deps.hitlStore.reopenApproval(q.id);
     return { handled: true, skipTurn: true, error: "run registry unavailable" };
   }
   let runId: string;
@@ -138,15 +138,15 @@ const approvalHandler: KindHandler = async ({ deps, q, content, userId, publish 
       conversationId: q.conversationId, workflowId: q.workflowId!, input: q.input ?? {}, approved: true,
     });
     if (outcome.status !== "running") {
-      deps.store.reopenApproval(q.id);
+      deps.hitlStore.reopenApproval(q.id);
       return { handled: true, skipTurn: true, error: `unexpected start outcome: ${outcome.status}` };
     }
     runId = outcome.runId;
   } catch (e) {
-    deps.store.reopenApproval(q.id);
+    deps.hitlStore.reopenApproval(q.id);
     return { handled: true, skipTurn: true, error: `failed to start: ${(e as Error).message}` };
   }
-  deps.store.backfillApprovalRunId(q.id, runId);
+  deps.hitlStore.backfillApprovalRunId(q.id, runId);
   publish({ type: "hitl_answered", questionId: q.id, kind: "approval", runId, answer: { decision: "approve" } });
   return { handled: true, skipTurn: true };
 };
@@ -159,7 +159,7 @@ const askHandler: KindHandler = async ({ deps, q, content, publish }) => {
   if (idx < 0) return { handled: false }; // 打字（非选项文本）→ 滑 LLM 轮（pi 归一化，答案消费者是 pi）
   if (!q.runId) {
     // 自主卡（决策 10 修订）：回答即 solved——记录答案上卡，问题不再悬置；pi 轮照跑（注入引导 answer_question/续答）
-    const row = deps.store.markQuestionAnswered(q.id, content);
+    const row = deps.hitlStore.markQuestionAnswered(q.id, content);
     if (row) publish({ type: "hitl_answered", questionId: q.id, answer: content, kind: "ask" });
     return { handled: true }; // skipTurn 不设 → LLM 轮照常入队（429 语义同普通消息）
   }
@@ -174,7 +174,7 @@ const askHandler: KindHandler = async ({ deps, q, content, publish }) => {
   if ("rejected" in outcome) return { handled: true, skipTurn: true, error: `resume rejected: ${outcome.error}` }; // 保持 pending 供重试
   if ("idempotent" in outcome) return { handled: true, skipTurn: true }; // 重复点击/已答：不二次起轮（幂等 ack）
   // clean（ADR-0025 决策 11：即时 running，续跑 detached）→ 答案已确定性派发：markAnswered + hitl_answered
-  const row = deps.store.markPendingAnsweredByRun(q.runId, resumeData);
+  const row = deps.hitlStore.markPendingAnsweredByRun(q.runId, resumeData);
   if (row) publish({ type: "hitl_answered", questionId: q.id, answer: resumeData, kind: "ask", runId: q.runId });
   return { handled: true, skipTurn: true };
 };

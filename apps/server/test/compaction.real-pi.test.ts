@@ -7,7 +7,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { createApp } from "../src/app";
 import { fullDeps } from "./deps";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { EventBus } from "../src/chat/eventbus";
 import { RunRegistry } from "../src/runs/registry";
 import { startBridge, BRIDGE_PORT } from "../src/bridge/server";
@@ -47,11 +47,11 @@ describe.skipIf(!HAS_KEY)("compaction 实测 · 真 pi 长对话 jsonl（#19）"
   beforeAll(() => {
     process.env.AGENTANY_NO_SANDBOX = "1"; // 沙箱在非标准 cwd 挡 pi（spawn 时读，beforeAll 设有效）
     // DATA_DIR 须外部以 `DATA_DIR=<temp> bun test` 设（模块加载时常量）；DATA_DIR 即其解析值。
-    const store = new WorkflowStore(openDbMigrated());
+    const store = createStores(openDbMigrated());
     const eventBus = new EventBus();
-    const runRegistry = new RunRegistry({ store, eventBus });
+    const runRegistry = new RunRegistry({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const app = createApp(fullDeps(store, { eventBus, runRegistry }));
-    const bridgeSrv = startBridge(BRIDGE_PORT, { runRegistry, store, eventBus });
+    const bridgeSrv = startBridge(BRIDGE_PORT, { runRegistry, runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus });
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", idleTimeout: 255, fetch: (r) => app.fetch(r) });
     baseUrl = `http://127.0.0.1:${server.port}`;
     stopAll = () => { server.stop(); bridgeSrv.stop(); };

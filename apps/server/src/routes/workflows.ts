@@ -34,7 +34,7 @@ export function registerWorkflowRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
   app.post("/runs/:id/resume", async (c) => {
     const id = c.req.param("id");
     const body = await jsonBody(c);
-    const run = deps.store.getRun(id);
+    const run = deps.runStore.getRun(id);
     if (!run) return c.json({ error: "run not found" }, 404);
     if (!canAccessWorkspace(deps.workspaceStore, run.workspaceId, principalOf(c))) {
       return c.json({ error: "run not found" }, 404);
@@ -49,11 +49,11 @@ export function registerWorkflowRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
 
   app.get("/runs/:id", (c) => {
     const id = c.req.param("id");
-    const run = deps.store.getRun(id);
+    const run = deps.runStore.getRun(id);
     if (!run) return c.json({ error: "run not found" }, 404);
     if (!canAccessWorkspace(deps.workspaceStore, run.workspaceId, principalOf(c))) {
       return c.json({ error: "run not found" }, 404);
     }
-    return c.json({ run, log: deps.store.getLog(id) });
+    return c.json({ run, log: deps.runStore.getLog(id) });
   });
 }
