@@ -1,6 +1,6 @@
 // IM 路由（spec #49 决策 6 + #55/T5 修订）：绑定≠admin 专属——自助绑（Web 发码 → 私聊 `#bind` 消费），
 // admin 只读列表 + 兜底强制解绑（离职/异常场景），不可新增绑定。
-// 路由只做鉴权 + 转发 ImStore；业务（命令/发码消费/补发）在 im/feishu/inbound.ts + im/store.ts。
+// 路由只做鉴权 + 转发 ImStore；业务（命令/发码消费/补发）在 im/dispatch.ts（handleImCommand）+ im/store.ts。
 import type { Context, Hono } from "hono";
 import { userIdOf, userRoleOf, type AppEnv } from "../auth/middleware";
 import { ROLE } from "../auth/store";

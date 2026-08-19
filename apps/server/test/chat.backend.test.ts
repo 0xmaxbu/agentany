@@ -4,7 +4,7 @@
 import { describe, test, expect } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { fullDeps } from "./deps";
 import type { ConfiguredRunPiStream } from "../src/pi/runPi-factory";
 
@@ -72,7 +72,7 @@ const emitTextBlock = (call: { onBlock?: (b: import("../src/blocks").StreamBlock
 };
 
 function newApp(streamFactory: () => ConfiguredRunPiStream) {
-  const store = new WorkflowStore(openDbMigrated(":memory:"));
+  const store = createStores(openDbMigrated(":memory:"));
   const deps = fullDeps(store, { runPiStreamFactory: streamFactory });
   return { app: createApp(deps), store };
 }
@@ -123,7 +123,7 @@ describe("chat 切片② · 事件驱动（POST=202 + 持久流）", () => {
     // 复现实机 bug（2026-08-15）：turnTrigger.attach 只在建会话时调；attached 是内存 Set——
     // 后端重启后旧会话永不重订阅 → user_message 无人响应 → turn 不跑（消息落 DB 但 pi session 无）。
     // 模拟：app1 建会话（attach 发生）→ app2 = 同 store + 全新实例（attached 空）→ app2 POST 消息。
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
+    const store = createStores(openDbMigrated(":memory:"));
     const app1 = createApp(fullDeps(store, { runPiStreamFactory: countingFactory().factory }));
     const c: any = await (await app1.request("/conversations", { method: "POST", headers: JH, body: JSON.stringify({}) })).json();
     const app2 = createApp(fullDeps(store, { runPiStreamFactory: countingFactory().factory })); // 「重启」

@@ -1,9 +1,12 @@
 // T3（#52）：IM 出站通知渲染——hitl_request 一帧多端：EventBus 订阅渲染器把卡转纯文本（prompt + options label），
-// hitl_answered → 「已处理：…」确认文本。纯函数 + 平台无关适配器壳（真实 IM 平台接缝下游）。
-// seam：renderHitlFrame 纯函数（输入 Frame → text|null）+ ImOutboundAdapter 真 EventBus 订阅（多会话隔离）。
+// hitl_answered → 「已处理：…」确认文本。ADR-0032 决策 7：ImOutboundAdapter 死码已删；renderHitlFrame 迁入 im/deliver.ts。
+// seam：renderHitlFrame 纯函数（输入 Frame → text|null）+ sendCardGuarded 守卫（optionless→文本兜底）。
 import { describe, test, expect } from "bun:test";
-import { EventBus, type Frame } from "../src/chat/eventbus";
-import { ImOutboundAdapter, renderHitlFrame } from "../src/im/outbound";
+import type { Frame } from "../src/chat/eventbus";
+import { renderHitlFrame, sendCardGuarded } from "../src/im/deliver";
+import { cardInputOf } from "../src/im/card-model";
+import { FeishuPlatformAdapter } from "../src/im/feishu/adapter";
+import type { FeishuTransport } from "../src/im/feishu/transport";
 
 const ask = (over: Partial<Extract<Frame, { type: "hitl_request" }>> = {}): Extract<Frame, { type: "hitl_request" }> => ({
   type: "hitl_request", questionId: 1, runId: null, prompt: "选哪个方案？", options: ["方案A", "方案B"], ...over,
@@ -82,47 +85,52 @@ describe("renderHitlFrame：非 hitl 帧 → null（不产出 IM 文本）", () 
   });
 });
 
-describe("ImOutboundAdapter：EventBus 订阅随帧渲染（生命周期/多会话隔离）", () => {
-  test("订阅后 hitl_request 帧 → deliver 收到渲染文本；解订阅后不再接收", () => {
-    const bus = new EventBus();
-    const delivered: string[] = [];
-    const adapter = new ImOutboundAdapter(bus, (t) => delivered.push(t));
-    const unsub = adapter.subscribe("c1");
-    bus.publish("c1", { type: "hitl_request", questionId: 1, runId: null, prompt: "选哪个？", options: ["A", "B"] });
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0]).toContain("A");
-    unsub();
-    bus.publish("c1", { type: "hitl_request", questionId: 2, runId: null, prompt: "再选", options: ["C"] });
-    expect(delivered).toHaveLength(1); // 退订后不再渲染
+describe("sendCardGuarded（ADR-0032 决策 4/5：领域投递守卫）", () => {
+  // memory adapter：记录出站调用（验证 optionless/有选项/超限 各分支落在哪个出口）。
+  function memAdapter() {
+    const calls: { kind: "text" | "card"; to: string; text?: string; card?: Parameters<typeof import("../src/im/feishu/render").renderImCard>[0] }[] = [];
+    const adapter = {
+      platform: "memory",
+      sendText: async (to: string, text: string) => { calls.push({ kind: "text", to, text }); },
+      sendCard: async (to: string, card: any) => { calls.push({ kind: "card", to, card }); },
+      parseInbound: () => null,
+      start: () => ({ stop: () => {} }),
+    };
+    return { adapter, calls };
+  }
+
+  test("有选项 → sendCard（交 adapter 渲染/超限自判）", async () => {
+    const { adapter, calls } = memAdapter();
+    await sendCardGuarded(adapter, "ou_1", cardInputOf({ id: 5, kind: "ask", prompt: "选？", options: ["A"] }));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ kind: "card", to: "ou_1" });
   });
 
-  test("多会话隔离：c1 的帧只进 c1 deliver，不串到 c2", () => {
-    const bus = new EventBus();
-    const c1: string[] = [], c2: string[] = [];
-    const adapter = new ImOutboundAdapter(bus); // 无默认 deliver——subscribe 时逐会话注入
-    const a1 = adapter.subscribe("c1", (t) => c1.push(t));
-    const a2 = adapter.subscribe("c2", (t) => c2.push(t));
-    bus.publish("c1", { type: "hitl_request", questionId: 1, runId: null, prompt: "c1 的问题", options: ["X"] });
-    bus.publish("c2", { type: "hitl_answered", questionId: 2, answer: { ok: 1 } });
-    expect(c1).toHaveLength(1);
-    expect(c1[0]).toContain("c1 的问题");
-    expect(c2).toHaveLength(1);
-    expect(c2[0]).toContain("已处理");
-    a1(); a2();
-  });
+  test("optionless（无按钮形态不可能）→ sendText 兜底（textFallback 优先；缺省领域卡文本）", async () => {
+    const { adapter, calls } = memAdapter();
+    await sendCardGuarded(adapter, "ou_1", cardInputOf({ id: 5, kind: "approval", prompt: "无选项审批", options: [] }), { textFallback: "无按钮：请去 Web 处理" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ kind: "text", to: "ou_1", text: "无按钮：请去 Web 处理" });
 
-  test("非 hitl 帧不产出（SSE 显卡路径不受损：第三订阅者仍收原始帧）", () => {
-    const bus = new EventBus();
-    const imOut: string[] = [];
-    const rawFrames: Frame[] = [];
-    const adapter = new ImOutboundAdapter(bus, (t) => imOut.push(t));
-    const unsubIm = adapter.subscribe("c1");
-    const unsubRaw = bus.subscribe("c1", (f) => rawFrames.push(f)); // 模拟 SSE 持久流订阅
-    bus.publish("c1", { type: "block_delta", blockId: "b", delta: "tok" });
-    bus.publish("c1", { type: "hitl_request", questionId: 9, runId: "r_9", prompt: "批吗", options: ["批", "否"], kind: "approval" });
-    expect(imOut).toHaveLength(1); // 仅 hitl 帧被 IM 渲染
-    expect(rawFrames).toHaveLength(2); // SSE 端原始帧全收（含非 hitl），无回归
-    expect(rawFrames[0].type).toBe("block_delta");
-    unsubIm(); unsubRaw();
+    const { adapter: a2, calls: c2 } = memAdapter();
+    await sendCardGuarded(a2, "ou_2", cardInputOf({ id: 6, kind: "ask", prompt: "t", options: [] }));
+    expect(c2[0]).toMatchObject({ kind: "text", to: "ou_2" });
+    expect(c2[0].text).toContain("t"); // 缺省 textFallback = 领域卡文本（prompt 在）
+  });
+});
+
+describe("oversize 降级（ADR-0032 决策 4：FeishuPlatformAdapter 内部自判自降）", () => {
+  test("超 30KB 卡 → sendCard 回落 sendText（textFallback；无裸 cardJson 出口）", async () => {
+    // 真实 adapter + stub transport（记录 send 载荷）：oversize 判别在 adapter.sendCard 内部
+    type Sent = { to: string; text?: string; cardJson?: unknown };
+    const sent: Sent[] = [];
+    const adapter = new FeishuPlatformAdapter({
+      transport: { send: async (to: string, msg: { text?: string; cardJson?: unknown }) => { sent.push({ to, text: msg.text, cardJson: msg.cardJson }); } } as unknown as FeishuTransport,
+    });
+    const big = cardInputOf({ id: 5, kind: "ask", prompt: "长".repeat(40 * 1024), options: ["A"] }); // prompt ≈40KB → 整卡必超 30KB
+    await adapter.sendCard("ou_9", big, { textFallback: "卡太长发不了，请看 Web" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toBe("卡太长发不了，请看 Web");
+    expect(sent[0].cardJson).toBeUndefined(); // 无裸 cardJson 出口
   });
 });

@@ -6,7 +6,7 @@ import { startBridge } from "../src/bridge/server";
 import { issueNonce, _clearNonces } from "../src/bridge/nonce";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -23,13 +23,13 @@ const login = (app: any, u: string) =>
 
 async function setup() {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const userStore = new UserStore(db);
   const eventBus = new EventBus();
   const deps: RunDeps = {
-    store, userStore, streamRegistry: new StreamRegistry(),
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore, streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus,
   };
   // member u1 / admin ua（直接 userStore 造号，不走 /users 路由——bridge 测试聚焦工具层）
@@ -37,9 +37,9 @@ async function setup() {
   const m1 = userStore.getUserByUsername("m1")!;
   await userStore.createUser({ username: "ad", password: "pw-long-enough", displayName: "AD", role: "admin" });
   const ua = userStore.getUserByUsername("ad")!;
-  store.createConversation({ id: "c_m1", workspaceId: "ws_company", userId: m1.id });
-  store.createConversation({ id: "c_ua", workspaceId: "ws_company", userId: ua.id });
-  const { port, stop } = startBridge(0, { store, eventBus, userStore, taskStore: deps.taskStore });
+  store.chat.createConversation({ id: "c_m1", workspaceId: "ws_company", userId: m1.id });
+  store.chat.createConversation({ id: "c_ua", workspaceId: "ws_company", userId: ua.id });
+  const { port, stop } = startBridge(0, { runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, userStore, taskStore: deps.taskStore });
   const app = createApp(deps);
   const bearer = (conv: string) => `Bearer ${issueNonce(conv)}`;
   const call = (conv: string, path: string, body?: unknown) =>
@@ -64,7 +64,7 @@ describe("bridge /task/create（#28 任务卡）", () => {
     expect(r.status).toBe(200);
     const data: any = await r.json();
     expect(data.status).toBe("asked");
-    const q = ctx.store.getQuestion(data.questionId);
+    const q = ctx.store.hitl.getQuestion(data.questionId);
     expect(q!.kind).toBe("task");
     expect((q!.input as any).displayName).toBe("新闻汇总");
     expect(Array.isArray((q!.input as any).next3)).toBe(true); // 未来 3 次执行时间
@@ -78,7 +78,7 @@ describe("bridge /task/create（#28 任务卡）", () => {
       displayName: "x", cron: "*/30 * * * *", prompt: "p",
     });
     expect(r.status).toBe(422);
-    expect(ctx.store.listQuestions("c_m1")).toHaveLength(0);
+    expect(ctx.store.hitl.listQuestions("c_m1")).toHaveLength(0);
   });
 
   test("cron 非法 → 400", async () => {
@@ -114,11 +114,11 @@ describe("任务卡确认流（统一卡应答 · 消息绑定，#28 重构）",
     const task = mine[0];
     expect(task.displayName).toBe("新闻汇总");
     // 产出会话派生（标题=displayName）
-    const conv = ctx.store.getConversation(task.outputConversationId!);
+    const conv = ctx.store.chat.getConversation(task.outputConversationId!);
     expect(conv!.title).toBe("新闻汇总");
     expect(conv!.userId).toBe(ctx.m1.id);
     // 卡 answered + 帧
-    expect(ctx.store.getQuestion(questionId)!.status).toBe("answered");
+    expect(ctx.store.hitl.getQuestion(questionId)!.status).toBe("answered");
     expect(frames.some((f) => f.type === "hitl_answered")).toBe(true);
     // 任务归属创建者
     expect(mine[0].creatorId).toBe(ctx.m1.id);
@@ -131,7 +131,7 @@ describe("任务卡确认流（统一卡应答 · 消息绑定，#28 重构）",
     const cancel = await answerCard(ctx.app, tok, "c_m1", questionId, "取消");
     expect(cancel.status).toBe(202);
     await new Promise((res) => setTimeout(res, 20));
-    expect(ctx.store.getQuestion(questionId)!.status).toBe("answered");
+    expect(ctx.store.hitl.getQuestion(questionId)!.status).toBe("answered");
     expect(ctx.deps.taskStore!.listTasks({ creatorId: ctx.m1.id })).toHaveLength(0);
   });
 
@@ -142,7 +142,7 @@ describe("任务卡确认流（统一卡应答 · 消息绑定，#28 重构）",
     const r = await answerCard(ctx.app, tok, "c_m1", questionId, "确认创建");
     expect(r.status).toBe(202); // 消息正常落库
     await new Promise((res) => setTimeout(res, 20));
-    expect(ctx.store.getQuestion(questionId)!.status).toBe("pending"); // task 卡限卡主（自建自批）
+    expect(ctx.store.hitl.getQuestion(questionId)!.status).toBe("pending"); // task 卡限卡主（自建自批）
     expect(ctx.deps.taskStore!.listTasks({ creatorId: ctx.m1.id })).toHaveLength(0);
   });
 });
@@ -172,7 +172,7 @@ describe("bridge /task/list + /task/update + /task/delete + /task/enable", () =>
     const r = await ctx.call("c_m1", "/task/update", { taskId: task.id, cron: "0 */2 * * *" });
     expect(r.status).toBe(200);
     const { questionId } = await r.json() as any;
-    const q = ctx.store.getQuestion(questionId)!;
+    const q = ctx.store.hitl.getQuestion(questionId)!;
     expect(q.kind).toBe("task");
     expect((q.input as any).update?.taskId).toBe(task.id);
     // 未确认不动

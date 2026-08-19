@@ -4,12 +4,12 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { brandResearch } from "../src/workflows/brand-research";
 import { brandStrategyAnalysis } from "../src/workflows/brand-strategy-analysis";
 import { run, resume, type RunCtx } from "../src/workflow-engine/runner";
 
-const newStore = () => new WorkflowStore(openDbMigrated(":memory:"));
+const newStore = () => createStores(openDbMigrated(":memory:"));
 const stubCtx = (cwd: string): RunCtx => ({
   runPi: async () => ({ text: "[stub-report]", messages: [], toolResults: [] }),
   workspaceId: "ws_test",
@@ -24,10 +24,10 @@ describe("brand-research · 全自动 1 步", () => {
     const store = newStore();
     const cwd = mkdtempSync(join(tmpdir(), "br-"));
     const runId = newRunId();
-    store.createRun({ runId, workflowId: brandResearch.id, workspaceId: "ws_test", input: { brand: "测试品牌", region: "重庆" } });
-    const r = await run(brandResearch, store, runId, stubCtx(cwd));
+    store.runs.createRun({ runId, workflowId: brandResearch.id, workspaceId: "ws_test", input: { brand: "测试品牌", region: "重庆" } });
+    const r = await run(brandResearch, store.runs, runId, stubCtx(cwd));
     expect(r.status).toBe("completed");
-    const log = store.getLog(runId);
+    const log = store.runs.getLog(runId);
     expect(log.at(-1)?.status).toBe("completed");
     expect(log.at(-1)?.stepId).toBe("research");
     const out = log.at(-1)?.output as any;
@@ -39,9 +39,9 @@ describe("brand-research · 全自动 1 步", () => {
     const store = newStore();
     const cwd = mkdtempSync(join(tmpdir(), "br-"));
     const runId = newRunId();
-    store.createRun({ runId, workflowId: brandResearch.id, workspaceId: "ws_test", input: { brand: "X" } });
-    await run(brandResearch, store, runId, stubCtx(cwd));
-    const out = store.getLog(runId).at(-1)?.output as any;
+    store.runs.createRun({ runId, workflowId: brandResearch.id, workspaceId: "ws_test", input: { brand: "X" } });
+    await run(brandResearch, store.runs, runId, stubCtx(cwd));
+    const out = store.runs.getLog(runId).at(-1)?.output as any;
     expect(out.region).toBe("全国");
     expect(out.reportPath).toContain("X-全国");
   });
@@ -61,31 +61,32 @@ describe("brand-strategy-analysis · HITL 3 步 + revise 循环", () => {
       JSON.stringify([{ id: 1, title: "t1", insight: "i1" }, { id: 2, title: "t2", insight: "i2" }]),
     );
     const runId = newRunId();
-    store.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input: { brand, region } });
+    store.runs.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input: { brand, region } });
     const ctx = stubCtx(cwd);
 
-    // 1. start → select-angles suspend（ask 契约：question/options/context 预渲染）
-    let r: any = await run(brandStrategyAnalysis, store, runId, ctx);
+    // 1. start → select-angles suspend（ask 契约：question/options/context 预渲染；ADR-0031：payload 落 log suspendPayload 列）
+    let r: any = await run(brandStrategyAnalysis, store.runs, runId, ctx);
     expect(r.status).toBe("suspended");
     expect((r as any).stepId).toBe("select-angles");
-    expect(((r as any).payload as any).question).toContain("请选择要深化的切入角度");
-    expect(((r as any).payload as any).options).toHaveLength(2); // 显式 {label,value}
-    expect(((r as any).payload as any).context).toContain("2 个"); // angles 预渲染进 context
+    const sus1 = store.runs.getLog(runId).at(-1);
+    expect((sus1 as any).suspendPayload?.question).toContain("请选择要深化的切入角度");
+    expect((sus1 as any).suspendPayload?.options).toHaveLength(2); // 显式 {label,value}
+    expect((sus1 as any).suspendPayload?.context).toContain("2 个"); // angles 预渲染进 context
 
     // 2. resume select → generate → approve suspend
-    r = await resume(brandStrategyAnalysis, store, runId, { selected: "1" }, ctx);
+    r = await resume(brandStrategyAnalysis, store.runs, runId, { selected: "1" }, ctx);
     expect(r.status).toBe("suspended");
     expect((r as any).stepId).toBe("approve-report");
 
     // 3. resume approve revise → 循环 generate → 再 approve suspend
-    r = await resume(brandStrategyAnalysis, store, runId, { decision: "revise", comments: "再深一点" }, ctx);
+    r = await resume(brandStrategyAnalysis, store.runs, runId, { decision: "revise", comments: "再深一点" }, ctx);
     expect(r.status).toBe("suspended");
     expect((r as any).stepId).toBe("approve-report");
-    const gen = store.getLog(runId).filter((e) => e.stepId === "generate-report" && e.status === "completed");
+    const gen = store.runs.getLog(runId).filter((e) => e.stepId === "generate-report" && e.status === "completed");
     expect(gen.length).toBe(2); // 循环：2 条 generate-report
 
     // 4. resume approve → completed
-    r = await resume(brandStrategyAnalysis, store, runId, { decision: "approve" }, ctx);
+    r = await resume(brandStrategyAnalysis, store.runs, runId, { decision: "approve" }, ctx);
     expect(r.status).toBe("completed");
   });
 
@@ -96,13 +97,13 @@ describe("brand-strategy-analysis · HITL 3 步 + revise 循环", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "angles.json"), "[]");
     const runId = newRunId();
-    store.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input: { brand: "B" } });
+    store.runs.createRun({ runId, workflowId: brandStrategyAnalysis.id, workspaceId: "ws_test", input: { brand: "B" } });
     const ctx = stubCtx(cwd);
-    await run(brandStrategyAnalysis, store, runId, ctx); // → select suspend
+    await run(brandStrategyAnalysis, store.runs, runId, ctx); // → select suspend
     // 选完到 approve suspend
-    await resume(brandStrategyAnalysis, store, runId, { selected: "all" }, ctx);
+    await resume(brandStrategyAnalysis, store.runs, runId, { selected: "all" }, ctx);
     // 坏 decision
-    const bad = await resume(brandStrategyAnalysis, store, runId, { decision: "bogus" }, ctx);
+    const bad = await resume(brandStrategyAnalysis, store.runs, runId, { decision: "bogus" }, ctx);
     expect((bad as any).rejected).toBe(true);
   });
 });

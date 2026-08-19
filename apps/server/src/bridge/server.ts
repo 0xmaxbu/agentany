@@ -4,8 +4,10 @@
 // 仅绑 127.0.0.1 + nonce 闸：只有本机持有效 nonce 的 pi 子进程能调。
 import { Hono } from "hono";
 import { verifyNonce, nonceConversation } from "./nonce";
-import type { RunRegistry } from "../runs/registry";
-import type { WorkflowStore } from "../workflow-engine/store";
+import type { RunLifecycle } from "../runs/lifecycle";
+import type { RunsStore } from "../runs/store"; // ADR-0030：bridge 只学三域面（run/hitl/chat）
+import type { HitlStore } from "../hitl/store";
+import type { ChatStore } from "../chat/store";
 import type { EventBus, Frame } from "../chat/eventbus";
 import type { ResumeOutcome } from "../workflow-engine/runner";
 import type { UserStore } from "../auth/store";
@@ -28,8 +30,10 @@ function bearerToken(auth: string | undefined): string | null {
 }
 
 export interface BridgeDeps {
-  runRegistry?: RunRegistry;
-  store?: WorkflowStore;
+  runLifecycle?: RunLifecycle;
+  runStore?: RunsStore; // /run/*（读 run 跨会话 guard）
+  hitlStore?: HitlStore; // /ask_user /ask_answer /task/*（卡 CRUD）
+  chatStore?: ChatStore; // taskCtx（nonce→conv）
   eventBus?: EventBus;
   userStore?: UserStore; // #28：nonce→conv→userId→role（任务工具权限分野）
   taskStore?: ScheduledTaskStore; // #28：/task/* 端点
@@ -37,7 +41,7 @@ export interface BridgeDeps {
 
 export function createBridgeApp(opts: BridgeDeps = {}): Hono {
   const app = new Hono();
-  const { runRegistry: reg, store, eventBus, userStore, taskStore } = opts;
+  const { runLifecycle: reg, runStore, hitlStore, chatStore, eventBus, userStore, taskStore } = opts;
 
   // 全局 nonce 闸：所有路由需 Authorization: Bearer <有效未吊销 nonce>。缺/坏 → 401。
   app.use("*", async (c, next) => {
@@ -57,7 +61,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     const { workflowId, input } = body as { workflowId?: string; input?: unknown };
     if (!workflowId) return c.json({ error: "workflowId required" }, 400);
     try {
-      return c.json(reg.start({ conversationId, workflowId, input: input ?? {} }));
+      return c.json(await reg.start({ conversationId, workflowId, input: input ?? {} }));
     } catch (e) {
       return c.json({ error: (e as Error).message }, 400);
     }
@@ -65,12 +69,12 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
 
   // /run/read：read_run 工具经此。跨会话 guard（同 /ask_user /run/resume）：nonce 仅授权本会话，不得读他 conv 的 run。
   app.get("/run/read", (c) => {
-    if (!reg || !store) return c.json({ error: "run registry unavailable" }, 503);
+    if (!reg || !runStore) return c.json({ error: "run registry unavailable" }, 503);
     const convId = nonceConversation(bearerToken(c.req.header("authorization"))!);
     if (!convId) return c.json({ error: "no conversation for nonce" }, 400);
     const runId = c.req.query("runId");
     if (!runId) return c.json({ error: "runId required" }, 400);
-    const run = store.getRun(runId);
+    const run = runStore.getRun(runId);
     if (!run) return c.json({ error: "run not found" }, 404);
     if (run.conversationId !== convId) return c.json({ error: "forbidden" }, 403); // 跨会话 guard
     const r = reg.read(runId);
@@ -83,14 +87,14 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
   // run 绑定卡归引擎——挂起同事务直建，bridge 一律拒（旧「runId 补卡 + suspended/already_asked」路径已退役，
   // 产品未发布零兼容）。立即返 {asked}（不阻塞 turn）。
   app.post("/ask_user", async (c) => {
-    if (!store || !eventBus) return c.json({ error: "hitl unavailable" }, 503);
+    if (!hitlStore || !eventBus) return c.json({ error: "hitl unavailable" }, 503);
     const convId = nonceConversation(bearerToken(c.req.header("authorization"))!);
     if (!convId) return c.json({ error: "no conversation for nonce" }, 400);
     const body = await jsonBody(c);
     const { runId, prompt, options, resumeSchema, multiple } = body as { runId?: string; prompt?: string; options?: string[]; resumeSchema?: unknown; multiple?: boolean };
     if (runId) return c.json({ error: "run-bound ask cards are engine-created on suspend; call ask_user without runId for an autonomous card" }, 400);
     if (typeof prompt !== "string" || !Array.isArray(options)) return c.json({ error: "prompt, options required" }, 400);
-    const id = store.createQuestion({ conversationId: convId, runId: null, prompt, options, resumeSchema, multiple, kind: "ask" });
+    const id = hitlStore.createQuestion({ conversationId: convId, runId: null, prompt, options, resumeSchema, multiple, kind: "ask" });
     const frame: Frame = { type: "hitl_request", questionId: id, runId: null, prompt, options, resumeSchema, multiple: multiple ? 1 : 0, kind: "ask" };
     eventBus.publish(convId, frame);
     return c.json({ status: "asked", questionId: id });
@@ -99,19 +103,19 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
   // /ask_answer（ADR-0025 决策 10 修订）：自主卡打字答案的收口通道——pi 归一化后落卡（对应 run 绑定卡的 /run/resume）。
   // 仅自主卡（kind=ask 且 runId null）；run 绑定卡答案走 resume_workflow（resume 语义）。
   app.post("/ask_answer", async (c) => {
-    if (!store || !eventBus) return c.json({ error: "hitl unavailable" }, 503);
+    if (!hitlStore || !eventBus) return c.json({ error: "hitl unavailable" }, 503);
     const convId = nonceConversation(bearerToken(c.req.header("authorization"))!);
     if (!convId) return c.json({ error: "no conversation for nonce" }, 400);
     const body = await jsonBody(c);
     const { questionId, answer } = body as { questionId?: number; answer?: unknown };
     if (typeof questionId !== "number") return c.json({ error: "questionId required" }, 400);
-    const q = store.getQuestion(questionId);
+    const q = hitlStore.getQuestion(questionId);
     if (!q || q.conversationId !== convId) return c.json({ error: "question not found" }, 404); // 含跨会话（nonce 只授权本会话）
     if (q.kind !== "ask" || q.runId) {
       return c.json({ error: "only autonomous ask cards use answer_question; run-bound cards resume via resume_workflow" }, 409);
     }
     if (q.status !== "pending") return c.json({ status: "alreadyAnswered" }); // 幂等
-    store.markQuestionAnswered(questionId, answer);
+    hitlStore.markQuestionAnswered(questionId, answer);
     eventBus.publish(convId, { type: "hitl_answered", questionId, kind: "ask", answer });
     return c.json({ status: "answered" });
   });
@@ -124,7 +128,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     const body = await jsonBody(c);
     const { runId, resumeData } = body as { runId?: string; resumeData?: unknown };
     if (!runId) return c.json({ error: "runId required" }, 400);
-    const run = store?.getRun(runId);
+    const run = runStore?.getRun(runId);
     if (!run) return c.json({ error: "run not found" }, 404);
     if (run.conversationId !== convId) return c.json({ error: "forbidden" }, 403);
     let outcome: ResumeOutcome;
@@ -136,7 +140,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     if ("rejected" in outcome) return c.json({ error: outcome.error }, 409); // schema 校验失败，保持 pending
     if ("idempotent" in outcome) return c.json({ alreadyAnswered: true }); // 已答，no-op
     // clean（ADR-0025 决策 11：即时返 running，续跑 detached）→ 答案已确定性派发：标 pending answered + 推 hitl_answered
-    const row = store?.markPendingAnsweredByRun(runId, resumeData);
+    const row = hitlStore?.markPendingAnsweredByRun(runId, resumeData);
     if (row && eventBus) eventBus.publish(convId, { type: "hitl_answered", questionId: row.id, answer: resumeData });
     return c.json({ status: outcome.status });
   });
@@ -148,7 +152,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
   const taskCtx = (c: { req: { header: (n: string) => string | undefined } }) => {
     const convId = nonceConversation(bearerToken(c.req.header("authorization"))!);
     if (!convId) return { err: 400 as const };
-    const conv = store?.getConversation(convId);
+    const conv = chatStore?.getConversation(convId);
     const user = userStore?.getUserById(conv?.userId ?? "");
     if (!conv || !user) return { err: 403 as const };
     return { convId, userId: user.id, role: user.role };
@@ -161,7 +165,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
   // /task/create：校验（cron 合法+频率下限+CommandPolicy）→ 出 kind=task pending 卡（input=完整参数+next3）。
   // 确认不经此（ADR-0022）：用户点选项=发消息绑卡（inReplyTo）→ hitl-dispatch 确定性直建，参数零漂移。
   app.post("/task/create", async (c) => {
-    if (!store || !taskStore) return c.json({ error: "task tools unavailable" }, 503);
+    if (!hitlStore || !taskStore) return c.json({ error: "task tools unavailable" }, 503);
     const ctx2 = taskCtx(c);
     if ("err" in ctx2) return c.json({ error: "no identity for nonce" }, ctx2.err);
     const body = await jsonBody(c);
@@ -185,7 +189,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
       if (e instanceof InvalidCron) return c.json({ error: "invalid cron expression" }, 400);
       throw e;
     }
-    const id = store.createQuestion({
+    const id = hitlStore.createQuestion({
       conversationId: ctx2.convId, kind: "task",
       prompt: taskCardPrompt({ displayName, cron, prompt }, next3),
       options: ["确认创建", "取消"],
@@ -208,7 +212,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
 
   // /task/update：改 cron/prompt/displayName → 出新任务卡（确认后服务端 updateTask + recomputeNextFire）。
   app.post("/task/update", async (c) => {
-    if (!store || !taskStore) return c.json({ error: "task tools unavailable" }, 503);
+    if (!hitlStore || !taskStore) return c.json({ error: "task tools unavailable" }, 503);
     const ctx2 = taskCtx(c);
     if ("err" in ctx2) return c.json({ error: "no identity for nonce" }, ctx2.err);
     const body = await jsonBody(c);
@@ -228,7 +232,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
       }
     }
     const next = { ...task, ...patch } as typeof task;
-    const id = store.createQuestion({
+    const id = hitlStore.createQuestion({
       conversationId: ctx2.convId, kind: "task",
       prompt: `修改定时任务「${task.displayName}」？新配置：${patch.cron ?? task.cron} / ${patch.displayName ?? task.displayName}。目标：${patch.prompt ?? task.prompt}`,
       options: ["确认修改", "取消"],

@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -27,13 +27,13 @@ const git = (args: string[], cwd: string) =>
 
 function setup() {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const deps: RunDeps = {
-    store,
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback,
     userStore: new UserStore(db),
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
   };
   return { deps, store };
@@ -219,17 +219,17 @@ describe("runDistill（#36 蒸馏全链）", () => {
     ensureKnowledgeRepo();
     const { deps } = setup();
     seedSession("2026-08-10T00-00-00-000Z_chat-c1");
-    const llm = stubLlm({ json: { actions: [{ target: "global", op: "revise", content: "x" }], commitMessage: "m" } });
-    // 破坏 commit：把 git 换成必败（PATH 优先目录放假 git）——用 DistillOptions 不可注入 commit，
-    // 这里用真 git 但改 repo 状态制造冲突：commit.message 含换行会被 -m 拒？不会。最稳：临时改 user.name？
-    // 简化：注入坏 commitMessage 使 shell 层出错不可行（execFileSync 数组参数安全）。
-    // 采用：把 .git/index 锁死（写只读文件）→ add 失败 → 同一 try 分支。
-    writeFileSync(join(knowledgeRoot(), ".git", "index.lock"), "locked", "utf8");
-    const res = await runDistill(deps, llm.factory as any);
+    const global = join(knowledgeRoot(), "experience/global.md");
+    mkdirSync(join(global, ".."), { recursive: true });
+    writeFileSync(global, "旧经验", "utf8"); // 预置既有内容（回滚应恢复到它）
+    const llm = stubLlm({ json: { actions: [{ target: "global", op: "revise", content: "新经验" }], commitMessage: "m" } });
+    // C1/#66：commit seam 注入必败——直测快照回滚路径（不再 hack .git/index.lock）
+    const res = await runDistill(deps, llm.factory as any, {
+      commit: () => { throw new Error("模拟 commit 失败"); },
+    });
     expect(res.ok).toBe(false);
     expect(res.note).toContain("commit failed");
-    rmSync(join(knowledgeRoot(), ".git", "index.lock"), { force: true });
-    expect(git(["status", "--porcelain"], knowledgeRoot())).toBe(""); // 写回已回滚（checkout -- .）
+    expect(readFileSync(global, "utf8")).toBe("旧经验"); // 文件级快照回滚（writeBack 恢复，非 git checkout）
     expect(readState().processedFiles).toEqual([]); // 水位未推进
   });
 
@@ -272,13 +272,13 @@ describe("runDistill（#36 蒸馏全链）", () => {
   test("新 feedback → 已处理关联文件重新入队", async () => {
     ensureKnowledgeRepo();
     const { deps } = setup();
-    const conv = deps.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u1" });
+    const conv = deps.chatStore.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u1" });
     seedSession("2026-08-10T00-00-00-000Z_chat-c1");
     const llm1 = stubLlm({ json: { actions: [], commitMessage: "first" } });
     await runDistill(deps, llm1.factory as any); // c1 已处理
     // 落一条 message 级 feedback（targetId=message id → conversation c1）
-    const msgId = deps.store.appendMessage({ conversationId: "c1", role: "assistant", content: "答" });
-    deps.store.addFeedback({ targetKind: "message", targetId: String(msgId), text: "很好用", rating: 5 });
+    const msgId = deps.chatStore.appendMessage({ conversationId: "c1", role: "assistant", content: "答" });
+    deps.feedbackStore.addFeedback({ targetKind: "message", targetId: String(msgId), text: "很好用", rating: 5 });
     const llm2 = stubLlm({ json: { actions: [], commitMessage: "second" } });
     await runDistill(deps, llm2.factory as any);
     expect(llm2.calls[0].prompt).toContain("chat-c1"); // 重新入队

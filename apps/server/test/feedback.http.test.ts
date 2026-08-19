@@ -3,7 +3,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -15,7 +15,7 @@ const JH = { "content-type": "application/json" };
 
 async function setup() {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const userStore = new UserStore(db);
   await userStore.createUser({ username: "m1", password: "pw-long-enough", role: "member" });
   const m1 = userStore.getUserByUsername("m1")!;
@@ -23,9 +23,9 @@ async function setup() {
   const m2 = userStore.getUserByUsername("m2")!;
   await userStore.createUser({ username: "ad", password: "pw-long-enough", role: "admin" });
   const deps: RunDeps = {
-    store, userStore, streamRegistry: new StreamRegistry(),
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore, streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
   };
   const app = createApp(deps);
@@ -34,10 +34,10 @@ async function setup() {
     return `Bearer ${(await r.json() as any).token}`;
   };
   // m1 的会话+消息（消息级挂它）；m2 的会话+消息（他人 404 用）
-  const c1 = store.createConversation({ id: "c_m1", workspaceId: "ws_company", userId: m1.id });
-  const msgId = store.appendMessage({ conversationId: c1.id, role: "assistant", content: "回答" });
-  const c2 = store.createConversation({ id: "c_m2", workspaceId: "ws_company", userId: m2.id });
-  const msg2Id = store.appendMessage({ conversationId: c2.id, role: "assistant", content: "他人的回答" });
+  const c1 = store.chat.createConversation({ id: "c_m1", workspaceId: "ws_company", userId: m1.id });
+  const msgId = store.chat.appendMessage({ conversationId: c1.id, role: "assistant", content: "回答" });
+  const c2 = store.chat.createConversation({ id: "c_m2", workspaceId: "ws_company", userId: m2.id });
+  const msg2Id = store.chat.appendMessage({ conversationId: c2.id, role: "assistant", content: "他人的回答" });
   return { deps, store, app, m1, m2, login, c1, msgId, c2, msg2Id };
 }
 
@@ -52,7 +52,7 @@ describe("POST /feedback/message（消息级 👍/👎）", () => {
       method: "POST", headers: { ...JH, authorization: tok }, body: JSON.stringify({ rating: 5 }),
     });
     expect(r.status).toBe(201);
-    const rows = ctx.store.getFeedback("message", String(ctx.msgId));
+    const rows = ctx.store.feedback.getFeedback("message", String(ctx.msgId));
     expect(rows).toHaveLength(1);
     expect(rows[0].rating).toBe(5);
     expect(rows[0].text).toBe(""); // 无备注空串（text 列 NOT NULL）
@@ -126,7 +126,7 @@ describe("POST /feedback/message（消息级 👍/👎）", () => {
 describe("GET /feedback（回显数据源）", () => {
   test("本人 → 200 列表；他人 → 404；admin → 200", async () => {
     const ctx = await setup();
-    ctx.store.addFeedback({ targetKind: "message", targetId: String(ctx.msgId), text: "备注", rating: 5 });
+    ctx.store.feedback.addFeedback({ targetKind: "message", targetId: String(ctx.msgId), text: "备注", rating: 5 });
     const tok = await ctx.login("m1");
     const r = await ctx.app.request(`/feedback/message/${ctx.msgId}`, { headers: { authorization: tok } });
     expect(r.status).toBe(200);
@@ -142,13 +142,13 @@ describe("POST /feedback/workflow_run（run 级批注+评分）", () => {
   test("本人会话的 run → 201 落库；他人 → 404；run 不存在 → 404", async () => {
     const ctx = await setup();
     const runId = "r_" + globalThis.crypto.randomUUID();
-    ctx.store.createRun({ runId, workflowId: "brand-research", workspaceId: "ws_company", conversationId: ctx.c1.id, input: {} });
+    ctx.store.runs.createRun({ runId, workflowId: "brand-research", workspaceId: "ws_company", conversationId: ctx.c1.id, input: {} });
     const tok = await ctx.login("m1");
     const r = await ctx.app.request(`/feedback/workflow_run/${runId}`, {
       method: "POST", headers: { ...JH, authorization: tok }, body: JSON.stringify({ text: "这次调研很全", rating: 4 }),
     });
     expect(r.status).toBe(201);
-    const rows = ctx.store.getFeedback("workflow_run", runId);
+    const rows = ctx.store.feedback.getFeedback("workflow_run", runId);
     expect(rows).toHaveLength(1);
     expect(rows[0].rating).toBe(4);
     expect((await ctx.app.request(`/feedback/workflow_run/${runId}`, {

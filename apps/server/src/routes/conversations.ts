@@ -8,7 +8,7 @@ import { streamSSE } from "hono/streaming";
 import type { RunDeps } from "../runs";
 import { ConversationQueues } from "../chat/queue";
 import { EventBus, type Frame } from "../chat/eventbus";
-import { startInlineTurn } from "../chat/inline-turn";
+import { startUserTurn } from "../chat/turn-entry";
 import { canAccessConversation, resolveRequestWorkspace } from "../workspaces/guard";
 import { userIdOf, principalOf, userRoleOf, type AppEnv } from "../auth/middleware";
 import { ROLE } from "../auth/store";
@@ -29,7 +29,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
 
   // 会话存在 + 当前用户可访问（创建者/admin）→ conv；否则 null（路由统一 404，不泄漏存在）。
   const loadIfVisible = (id: string, u: { id: string; role: "admin" | "member" }) => {
-    const conv = deps.store.getConversation(id);
+    const conv = deps.chatStore.getConversation(id);
     if (!conv || !canAccessConversation(conv, u)) return null;
     return conv;
   };
@@ -42,7 +42,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const r = resolveRequestWorkspace(deps.workspaceStore, body.workspaceId, principalOf(c));
     if (!r.ok) return c.json({ error: r.error }, r.status);
     const workspaceId = r.workspaceId;
-    const conv = deps.store.createConversation({
+    const conv = deps.chatStore.createConversation({
       id: makeConversationId(),
       workspaceId,
       userId: userIdOf(c),
@@ -69,7 +69,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const validNum = (n: number) => Number.isInteger(n) && n >= 0;
     const limit = validNum(limitRaw) ? limitRaw : undefined;
     const offset = validNum(offsetRaw) ? offsetRaw : undefined;
-    return c.json(deps.store.listConversations(userIdOf(c), wsParam || undefined, archived, limit, offset));
+    return c.json(deps.chatStore.listConversations(userIdOf(c), wsParam || undefined, archived, limit, offset));
   });
 
   // 历史（#20 双源）：pi session 优先（blocks 结构真相源）；无 session 文件（e2e stub/首轮前）兜底 DB 冗余文本。
@@ -80,9 +80,9 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const history = readConversationHistory(sessionDir, conv.id);
     if (history) {
       // #34 消息级反馈锚：pi 源 entry id ↔ DB messages.id 对齐回填（role+content 双指针贪心）
-      return c.json(alignDbIds(history, deps.store.listMessages(conv.id)));
+      return c.json(alignDbIds(history, deps.chatStore.listMessages(conv.id)));
     }
-    return c.json(dbMessagesToHistory(deps.store.listMessages(conv.id)));
+    return c.json(dbMessagesToHistory(deps.chatStore.listMessages(conv.id)));
   });
 
   // 产出文件列表（#30）：按 run 分组、outputMessageId 锚到产出消息尾（前端文件管理器式列表卡）。
@@ -97,7 +97,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
   app.get("/conversations/:id/hitl", (c) => {
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
-    return c.json(deps.store.listQuestions(conv.id, { includeAnswered: true }));
+    return c.json(deps.hitlStore.listQuestions(conv.id, { includeAnswered: true }));
   });
 
   // run 卡刷新恢复（#53/T4）：域表直读该会话 run 列表（workflow_runs + workflow_run_log）。
@@ -106,7 +106,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
     return c.json({
-      runs: deps.store.listRunsWithSteps(conv.id).map(({ runId, workflowId, status, brief, createdAt, updatedAt, steps }) => ({
+      runs: deps.runStore.listRunsWithSteps(conv.id).map(({ runId, workflowId, status, brief, createdAt, updatedAt, steps }) => ({
         runId, workflowId, status, brief: brief ?? null, createdAt, updatedAt, steps,
       })),
     });
@@ -170,9 +170,9 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
       if (r.error) console.warn(`[hitl-dispatch] question=${questionId}:`, r.error);
       skipTurn = !!r.skipTurn;
     }
-    if (!skipTurn && !queues.wouldAcceptHttpTurn(id)) return c.json({ error: "conversation busy (queue full)" }, 429);
-    // 内联 user→turn（#48/T6，不再绕 EventBus 订阅一跳）；先 429 预检后落库；入队双保险失败 error 帧——见 startInlineTurn
-    startInlineTurn(deps, queues, eventBus, id, content, { skipTurn });
+    // ADR-0029：busy 预检内聚进 startUserTurn（user 写入前；skipTurn 程序化轮绕过永不 429）
+    const res = startUserTurn({ deps, queues, publish: (f) => eventBus.publish(id, f) }, id, content, { skipTurn });
+    if (res.status === "busy") return c.json({ error: "conversation busy (queue full)" }, 429);
     return c.json({ accepted: true }, 202);
   });
 
@@ -180,7 +180,7 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
     const aborted = queues.abort(conv.id); // 杀当前在跑 turn（无论来源）
-    const stopped = deps.runRegistry?.stopConversationRuns(conv.id) ?? 0; // #19：停该会话所有 running run（kill pi + 置 failed）
+    const stopped = deps.runLifecycle?.stopConversationRuns(conv.id) ?? 0; // #19：停该会话所有 running run（kill pi + 置 failed）
     return c.json({ aborted, stopped });
   });
 
@@ -191,15 +191,15 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
     queues.abort(conv.id);
-    deps.runRegistry?.stopConversationRuns(conv.id);
-    const row = deps.store.archiveConversation(conv.id);
+    deps.runLifecycle?.stopConversationRuns(conv.id);
+    const row = deps.chatStore.archiveConversation(conv.id);
     return row ? c.json(row) : c.json({ error: "conversation not found" }, 404);
   });
 
   app.patch("/conversations/:id/restore", (c) => {
     const conv = loadIfVisible(c.req.param("id"), principalOf(c));
     if (!conv) return c.json({ error: "conversation not found" }, 404);
-    const row = deps.store.restoreConversation(conv.id);
+    const row = deps.chatStore.restoreConversation(conv.id);
     return row ? c.json(row) : c.json({ error: "conversation not found" }, 404);
   });
 
@@ -210,10 +210,10 @@ export function registerConversationRoutes(app: Hono<AppEnv>, deps: RunDeps): vo
     if (!conv) return c.json({ error: "conversation not found" }, 404);
     if (userRoleOf(c) !== ROLE.admin) return c.json({ error: "admin only" }, 403);
     queues.abort(conv.id); // 先杀后删：在跑 turn 杀 pi 子进程
-    const stopped = deps.runRegistry?.stopConversationRuns(conv.id) ?? 0; // running runs 停（suspended 无进程，仅解绑）
+    const stopped = deps.runLifecycle?.stopConversationRuns(conv.id) ?? 0; // running runs 停（suspended 无进程，仅解绑）
     const sessionDir = resolveScopePaths(scopeOf(conv.workspaceId), conv.workspaceId).sessionDir;
     const filesErased = eraseConversationSessions(sessionDir, conv.id);
-    const ok = deps.store.deleteConversation(conv.id);
+    const ok = deps.chatStore.deleteConversation(conv.id);
     if (!ok) return c.json({ error: "conversation not found" }, 404);
     return c.json({ deleted: true, stopped, filesErased });
   });

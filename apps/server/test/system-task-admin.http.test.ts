@@ -4,7 +4,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -18,14 +18,14 @@ const H1H_CRON = "0 5 * * 1"; // 周一 05:00（≥1h 间隔）
 
 async function setup() {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const userStore = new UserStore(db);
   await userStore.createUser({ username: "ad", password: "pw-long-enough", role: "admin" });
   await userStore.createUser({ username: "m1", password: "pw-long-enough", role: "member" });
   const deps: RunDeps = {
-    store, userStore, streamRegistry: new StreamRegistry(),
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore, streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
     runPiFactory: ((): any => () => () => new Promise(() => {})) as any, // 不被真实触发（scheduler 走 spy）
   };

@@ -16,7 +16,7 @@ export function registerFeedbackRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
   app.post("/feedback/:targetKind/:targetId", async (c) => {
     const { targetKind, targetId } = c.req.param();
     if (!ALLOWED_KINDS.has(targetKind)) return c.json({ error: "unsupported targetKind" }, 400);
-    const conv = deps.store.conversationOfFeedbackTarget(targetKind, targetId);
+    const conv = deps.feedbackStore.conversationOfFeedbackTarget(targetKind, targetId);
     if (!conv || !canAccessConversation(conv, principalOf(c))) return c.json({ error: "not found" }, 404);
     const body = await jsonBody(c);
     const text: string | undefined = body.text;
@@ -30,15 +30,15 @@ export function registerFeedbackRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
       return c.json({ error: "rating must be 1-5" }, 400);
     }
     const u = principalOf(c);
-    const id = deps.store.addFeedback({ targetKind, targetId, text: text ?? "", rating, authorId: u.id });
+    const id = deps.feedbackStore.addFeedback({ targetKind, targetId, text: text ?? "", rating, authorId: u.id });
     return c.json({ id, targetKind, targetId }, 201);
   });
 
   app.get("/feedback/:targetKind/:targetId", (c) => {
     const { targetKind, targetId } = c.req.param();
     if (!ALLOWED_KINDS.has(targetKind)) return c.json({ error: "unsupported targetKind" }, 400);
-    const conv = deps.store.conversationOfFeedbackTarget(targetKind, targetId);
+    const conv = deps.feedbackStore.conversationOfFeedbackTarget(targetKind, targetId);
     if (!conv || !canAccessConversation(conv, principalOf(c))) return c.json({ error: "not found" }, 404);
-    return c.json(deps.store.getFeedback(targetKind, targetId));
+    return c.json(deps.feedbackStore.getFeedback(targetKind, targetId));
   });
 }

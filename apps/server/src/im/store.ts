@@ -18,7 +18,7 @@ export interface ImBindingRow {
 }
 
 export class ImStore {
-  // <any> 与 WorkflowStore 同口径（bun-sqlite 泛型不协变）；表引用自 schema，drizzle 类型在查时受检。
+  // <any> 与各域 store 同口径（bun-sqlite 泛型不协变）；表引用自 schema，drizzle 类型在查时受检。
   constructor(private db: BunSQLiteDatabase<any>) {}
 
   /** 绑定（幂等 upsert）：(imUserId, platform) 已存在 → 覆盖 userId；否则插入。userId 必须存在（外键由应用层守）。

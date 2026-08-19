@@ -4,7 +4,7 @@ import { describe, test, expect } from "bun:test";
 import { resolve } from "node:path";
 import { resolveScopePaths, scopeOf } from "../src/scope";
 import { DATA_DIR } from "../src/config";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { openDbMigrated } from "../src/db/client";
 import { createApp } from "../src/app";
 import { makeRunPiStream, type ConfiguredRunPiStream } from "../src/pi/runPi-factory";
@@ -61,23 +61,23 @@ describe("scope.runPi-factory 按 scope 解析", () => {
 // DB：conversations.workspaceId 恒非空（缺省公司 ws）。
 describe("scope.DB workspaceId", () => {
   test("createConversation(公司 ws) → 回读一致", () => {
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u", title: "g" });
-    const conv = store.getConversation("c1");
+    const store = createStores(openDbMigrated(":memory:"));
+    store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u", title: "g" });
+    const conv = store.chat.getConversation("c1");
     expect(conv).toBeTruthy();
     expect(conv!.workspaceId).toBe("ws_company");
   });
 
   test("createConversation(自定义 ws) → 回读一致", () => {
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c2", workspaceId: "ws_acme", userId: "u" });
-    expect(store.getConversation("c2")!.workspaceId).toBe("ws_acme");
+    const store = createStores(openDbMigrated(":memory:"));
+    store.chat.createConversation({ id: "c2", workspaceId: "ws_acme", userId: "u" });
+    expect(store.chat.getConversation("c2")!.workspaceId).toBe("ws_acme");
   });
 });
 
 // 路由：建会话缺省公司 ws；projectId 字段废止；非法 workspaceId 400。
 function newApp() {
-  const store = new WorkflowStore(openDbMigrated(":memory:"));
+  const store = createStores(openDbMigrated(":memory:"));
   const deps = fullDeps(store);
   return { app: createApp(deps), store };
 }
@@ -118,7 +118,7 @@ describe("scope.公司 ws 会话跑通 turn（事件驱动 / ticket #13）", () 
       call.onBlock?.({ op: "end", blockId: "b1" });
       return { text: call.prompt, messages: [], toolResults: [] };
     };
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
+    const store = createStores(openDbMigrated(":memory:"));
     const deps = fullDeps(store, { runPiStreamFactory: echo });
     const app = createApp(deps);
 

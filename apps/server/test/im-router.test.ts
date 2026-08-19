@@ -3,23 +3,24 @@
 // seam：真 store + 真 EventBus + ImOutboundRouter + stub 平台（fake-feishu）；断言目标/形态/uuid。
 import { describe, test, expect, beforeEach } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { EventBus } from "../src/chat/eventbus";
 import { ImStore } from "../src/im/store";
 import { ImOutboundRouter } from "../src/im/outbound-router";
 import { FeishuTransport } from "../src/im/feishu/transport";
+import { FeishuPlatformAdapter } from "../src/im/feishu/adapter";
 import { fakeFeishu, fakeFeishuFetch } from "./fake-feishu";
 
 function setup() {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const userStore = new UserStore(db);
   const bus = new EventBus();
   const imStore = new ImStore(db);
   const fake = fakeFeishu();
-  const platform = new FeishuTransport({ appId: "cli_x", appSecret: "s_y", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app) });
-  const router = new ImOutboundRouter({ store, imStore, bus, platform });
+  const platform = new FeishuPlatformAdapter({ transport: new FeishuTransport({ appId: "cli_x", appSecret: "s_y", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app) }) });
+  const router = new ImOutboundRouter({ chatStore: store.chat, hitlStore: store.hitl, imStore, bus, platform });
   return { store, userStore, imStore, bus, fake, router };
 }
 
@@ -30,12 +31,12 @@ const makeUser = async (u: string) => { await ctx.userStore.createUser({ usernam
 
 /** 建一张 ask 卡 row 并返回 qid（路由器用 question 行打素材——按钮 value/开放度）。 */
 const makeAsk = (convId: string, prompt: string, options: string[], extra: { values?: { label: string; value: unknown }[]; resumeSchema?: unknown } = {}) =>
-  ctx.store.createQuestion({ conversationId: convId, runId: null, prompt, options, values: extra.values, resumeSchema: extra.resumeSchema });
+  ctx.store.hitl.createQuestion({ conversationId: convId, runId: null, prompt, options, values: extra.values, resumeSchema: extra.resumeSchema });
 
 describe("ImOutboundRouter（出站路由胶水）", () => {
   test("hitl_request → owner 收交互卡（interactive），按钮 callback value={questionId,label}，uuid=questionId:type", async () => {
     const m1 = await makeUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     ctx.imStore.bind("ou_m1", "feishu", m1.id);
     const qid = makeAsk("c1", "选哪个方案？", ["A", "B"], { values: [{ label: "A", value: { plan: "A" } }, { label: "B", value: { plan: "B" } }] });
     ctx.router.subscribeAll();
@@ -56,7 +57,7 @@ describe("ImOutboundRouter（出站路由胶水）", () => {
 
   test("开放 schema → 卡带 footer；hitl_answered → 确认回执文本（同路由）；非 hitl 帧不产出", async () => {
     const m1 = await makeUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     ctx.imStore.bind("ou_m1", "feishu", m1.id);
     const qid = makeAsk("c1", "预算？", ["<10w"], { resumeSchema: { _t: "object", shape: { budget: { _t: "string" } } } });
     ctx.router.subscribeAll();
@@ -79,8 +80,8 @@ describe("ImOutboundRouter（出站路由胶水）", () => {
 
   test("owner 未绑 feishu（或只绑其它平台）→ 不发送", async () => {
     const m2 = await makeUser("m2");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m2.id }); // 未绑定
-    ctx.store.createConversation({ id: "c2", workspaceId: "ws_company", userId: m2.id });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m2.id }); // 未绑定
+    ctx.store.chat.createConversation({ id: "c2", workspaceId: "ws_company", userId: m2.id });
     ctx.imStore.bind("dt_m2", "dingtalk", m2.id); // 只绑钉钉
     ctx.router.subscribeAll();
     txt(ctx, "c1", 1, "p", []); txt(ctx, "c2", 2, "q", []);
@@ -90,10 +91,10 @@ describe("ImOutboundRouter（出站路由胶水）", () => {
 
   test("归档会话不入订阅；subscribeAll 幂等（重复调用不重复投递）", async () => {
     const m1 = await makeUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
-    ctx.store.createConversation({ id: "c2", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.chat.createConversation({ id: "c2", workspaceId: "ws_company", userId: m1.id });
     ctx.imStore.bind("ou_m1", "feishu", m1.id);
-    ctx.store.archiveConversation("c2"); // 归档 → 不订阅
+    ctx.store.chat.archiveConversation("c2"); // 归档 → 不订阅
     ctx.router.subscribeAll();
     ctx.router.subscribeAll(); // 幂等
     const qid = makeAsk("c1", "p", ["A"]); makeAsk("c2", "q", ["B"]);
@@ -106,7 +107,7 @@ describe("ImOutboundRouter（出站路由胶水）", () => {
 
   test("question 行不可用（帧的 questionId 无行）→ 不追发（静默）；close() 后退订", async () => {
     const m1 = await makeUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     ctx.imStore.bind("ou_m1", "feishu", m1.id);
     ctx.router.subscribeAll();
     ctx.bus.publish("c1", { type: "hitl_request", questionId: 999, runId: null, prompt: "p", options: [], kind: "ask" }); // 无害行

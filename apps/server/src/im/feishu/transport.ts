@@ -1,7 +1,14 @@
 // 飞书出站 transport（spec #55/T1）：只有 REST 短连（发消息），前置 tenant_access_token 获取 + 过期缓存。
 // 入站长连接（raw protobuf）是 T2——本文件不碰 WS。baseUrl/fetchFn 可注入：测试指向假飞书（test/fake-feishu.ts），
 // 生产缺省 open.feishu.cn + 全局 fetch。凭证 env（FEISHU_APP_ID/FEISHU_APP_SECRET），index 装配时缺一不接线。
-import type { IMPlatform, ImOutboundMessage, IMSendOptions } from "../transport";
+// ADR-0032：FeishuPlatformAdapter 的发送内部件（REST 半边）；失败重试/包装由 adapter.sendText/sendCard 承担。
+import type { ImSendOptions } from "../types";
+
+/** FeishuTransport 的发送载荷（text/cardJson 互斥；卡片优先）。 */
+export interface FeishuOutboundMessage {
+  text?: string;
+  cardJson?: unknown;
+}
 
 const TOKEN_BUFFER_MS = 60_000; // 过期前 60s 预刷新（飞书 expire 单位秒；网络抖动缓冲）
 
@@ -16,7 +23,7 @@ export interface FeishuTransportOptions {
   log?: (m: string) => void;
 }
 
-export class FeishuTransport implements IMPlatform {
+export class FeishuTransport {
   readonly platform = "feishu";
   private token: { value: string; expiresAt: number } | null = null;
 
@@ -46,7 +53,7 @@ export class FeishuTransport implements IMPlatform {
     return this.token.value;
   }
 
-  async send(target: string, msg: ImOutboundMessage, opts?: IMSendOptions): Promise<void> {
+  async send(target: string, msg: FeishuOutboundMessage, opts?: ImSendOptions): Promise<void> {
     const token = await this.accessToken();
     // 卡片优先；否则纯文本。content 是 JSON 字符串（飞书契约：消息体统一序列化）。
     const msgType = msg.cardJson ? "interactive" : "text";
@@ -69,7 +76,7 @@ export class FeishuTransport implements IMPlatform {
   }
 
   private retried = false;
-  private async doRetry(target: string, msg: ImOutboundMessage, opts?: IMSendOptions): Promise<void> {
+  private async doRetry(target: string, msg: FeishuOutboundMessage, opts?: ImSendOptions): Promise<void> {
     try { await this.send(target, msg, opts); }
     finally { this.retried = false; }
   }

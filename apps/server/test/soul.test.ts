@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTurn } from "../src/chat/turn";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { openDbMigrated } from "../src/db/client";
 import { loadSoul } from "../src/chat/soul";
 import { fullDeps } from "./deps";
@@ -48,8 +48,8 @@ describe("soul · loadSoul（ADR-0024）", () => {
 
 describe("soul · chat turn 注入（单一注入点 turn.ts）", () => {
   test("用户 turn（runTurn 直驱）：appendSystemPrompt[1] = Soul.md 全文，紧随 CHAT_SYSTEM_PROMPT", async () => {
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u", title: "t" });
+    const store = createStores(openDbMigrated(":memory:"));
+    store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u", title: "t" });
     const cap = captureFactory();
     const deps = fullDeps(store, { runPiStreamFactory: cap.factory });
     await runTurn(deps, "c1", "hi", () => {}, new AbortController().signal);
@@ -60,8 +60,8 @@ describe("soul · chat turn 注入（单一注入点 turn.ts）", () => {
   });
 
   test("任务 turn（显式 opts.appendSystemPrompt）：不掺 Soul（headless 范围外）", async () => {
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u", title: "t" });
+    const store = createStores(openDbMigrated(":memory:"));
+    store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u", title: "t" });
     const cap = captureFactory();
     const deps = fullDeps(store, { runPiStreamFactory: cap.factory });
     await runTurn(deps, "c1", "任务目标", () => {}, new AbortController().signal, {

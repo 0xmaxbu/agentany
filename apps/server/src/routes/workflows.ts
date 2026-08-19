@@ -4,7 +4,7 @@ import type { Hono } from "hono";
 import type { AppEnv } from "../auth/middleware";
 import { principalOf } from "../auth/middleware";
 import { listWorkflows } from "../registry";
-import { startRun, resumeRun, WorkflowNotFound, RunNotFound, InvalidInput, type RunDeps } from "../runs";
+import { WorkflowNotFound, RunNotFound, InvalidInput, type RunDeps } from "../runs";
 import { InvalidWorkspaceId } from "../config";
 import { canAccessWorkspace, resolveRequestWorkspace } from "../workspaces/guard";
 import { PiBusy } from "../pi/runPi";
@@ -21,8 +21,11 @@ export function registerWorkflowRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
     const r = resolveRequestWorkspace(deps.workspaceStore, body.workspaceId, principalOf(c));
     if (!r.ok) return c.json({ error: r.error }, r.status);
     const input: unknown = body.input ?? {};
+    // ADR-0031 决策 2：HTTP 直调走同一 RunLifecycle 组合根（validate → decide 审批门 → createRun → sync）
+    const lifecycle = deps.runLifecycle;
+    if (!lifecycle) return c.json({ error: "run lifecycle unavailable" }, 503);
     try {
-      return c.json(await startRun(deps, id, r.workspaceId, input));
+      return c.json(await lifecycle.start({ workflowId: id, input, workspaceId: r.workspaceId, sync: true }));
     } catch (e) {
       if (e instanceof WorkflowNotFound) return c.json({ error: e.message }, 404);
       if (e instanceof InvalidWorkspaceId || e instanceof InvalidInput) return c.json({ error: e.message }, 400);
@@ -34,13 +37,13 @@ export function registerWorkflowRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
   app.post("/runs/:id/resume", async (c) => {
     const id = c.req.param("id");
     const body = await jsonBody(c);
-    const run = deps.store.getRun(id);
+    const run = deps.runStore.getRun(id);
     if (!run) return c.json({ error: "run not found" }, 404);
     if (!canAccessWorkspace(deps.workspaceStore, run.workspaceId, principalOf(c))) {
       return c.json({ error: "run not found" }, 404);
     }
     try {
-      return c.json(await resumeRun(deps, id, body.resumeData));
+      return c.json(await deps.runLifecycle!.resume(id, body.resumeData));
     } catch (e) {
       if (e instanceof RunNotFound) return c.json({ error: e.message }, 404);
       return c.json({ error: (e as Error).message }, 500);
@@ -49,11 +52,11 @@ export function registerWorkflowRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
 
   app.get("/runs/:id", (c) => {
     const id = c.req.param("id");
-    const run = deps.store.getRun(id);
+    const run = deps.runStore.getRun(id);
     if (!run) return c.json({ error: "run not found" }, 404);
     if (!canAccessWorkspace(deps.workspaceStore, run.workspaceId, principalOf(c))) {
       return c.json({ error: "run not found" }, 404);
     }
-    return c.json({ run, log: deps.store.getLog(id) });
+    return c.json({ run, log: deps.runStore.getLog(id) });
   });
 }

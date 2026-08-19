@@ -1,9 +1,9 @@
 // #39/M6-1 执行层（seam ②）：system 任务权限三维度 → runPi 调用参数可观察结果。
-// 不 spawn 真 pi——mock runPi 模块（bun:mock）断言 prompt/session/extensions/sandboxAllow；
+// 不 spawn 真 pi——deps.runPiFn 直调注入（C1/#66，替代 spyOn 模块 mock）断言 prompt/session/extensions/sandboxAllow；
 // fullDomainWorkspaceDirs 纯函数直测（全域解析+三域排除的白名单构成）。
 import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -12,7 +12,6 @@ import { ConversationQueues } from "../src/chat/queue";
 import { ScheduledTaskStore, type ScheduledTaskRow } from "../src/scheduled-tasks/store";
 import { makeExecuteTask, fullDomainWorkspaceDirs, TASK_EXTENSIONS } from "../src/scheduled-tasks/execute";
 import { generalWorkspacePath, workspaceWorkspacePath, taskSessionDir, dataDir } from "../src/config";
-import * as runPiMod from "../src/pi/runPi";
 import type { RunDeps } from "../src/runs";
 
 // 隔离 DATA_DIR（防读写真实 data/）——dataDir() 动态读 env（#37 坑）
@@ -21,10 +20,10 @@ afterEach(() => { delete process.env.DATA_DIR; });
 
 function mkDeps(): RunDeps {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   return {
-    store, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
-    workspaceStore: new WorkspaceStore(db), taskStore: new ScheduledTaskStore(db, store),
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
+    workspaceStore: new WorkspaceStore(db), taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
   };
 }
@@ -36,6 +35,14 @@ function mkSystemTask(deps: RunDeps, over: Partial<{ allowWrite: boolean; allowS
     nextFireAt: new Date().toISOString(),
     allowWrite: over.allowWrite, allowSearch: over.allowSearch,
   });
+}
+
+/** C1/#66：deps.runPiFn 直调注入（替代 spyOn 模块 mock）——记录 RunPiOptions 并回放 ok。 */
+function stubRunPi(deps: RunDeps, calls: any[]): void {
+  deps.runPiFn = async (opts: any) => {
+    calls.push(opts);
+    return { text: "ok", messages: [], toolResults: [] };
+  };
 }
 
 describe("fullDomainWorkspaceDirs（ADR-0023 决策 1：全域白名单构成）", () => {
@@ -66,13 +73,8 @@ describe("executeTask 通用 system 分支（权限三维度 → runPi 参数）
     const ws2 = deps.workspaceStore!.createWorkspace({ slug: "alpha", name: "A" });
     const task = mkSystemTask(deps, { allowWrite: true, allowSearch: true });
     const calls: any[] = [];
-    const spy = spyOn(runPiMod, "runPi").mockImplementation(async (opts: any) => {
-      calls.push(opts);
-      return { text: "ok", messages: [], toolResults: [] };
-    });
-    try {
-      await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
-    } finally { spy.mockRestore(); }
+    stubRunPi(deps, calls);
+    await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
     expect(calls).toHaveLength(1);
     const o = calls[0];
     expect(o.prompt).toContain("汇总");
@@ -92,13 +94,8 @@ describe("executeTask 通用 system 分支（权限三维度 → runPi 参数）
     const ws2 = deps.workspaceStore!.createWorkspace({ slug: "alpha", name: "A" });
     const task = mkSystemTask(deps, { allowWrite: false, allowSearch: false });
     const calls: any[] = [];
-    const spy = spyOn(runPiMod, "runPi").mockImplementation(async (opts: any) => {
-      calls.push(opts);
-      return { text: "ok", messages: [], toolResults: [] };
-    });
-    try {
-      await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
-    } finally { spy.mockRestore(); }
+    stubRunPi(deps, calls);
+    await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
     const o = calls[0];
     expect(o.sandboxAllow.rw).toEqual([taskSessionDir(task.id)]); // 唯一可写
     expect(o.sandboxAllow.ro).toContain(generalWorkspacePath()); // 全域只读
@@ -113,13 +110,8 @@ describe("executeTask 通用 system 分支（权限三维度 → runPi 参数）
     const deps = mkDeps();
     const task = mkSystemTask(deps, { allowWrite: false });
     const calls: any[] = [];
-    const spy = spyOn(runPiMod, "runPi").mockImplementation(async (opts: any) => {
-      calls.push(opts);
-      return { text: "ok", messages: [], toolResults: [] };
-    });
-    try {
-      await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
-    } finally { spy.mockRestore(); }
+    stubRunPi(deps, calls);
+    await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
     const ro: string[] = calls[0].sandboxAllow.ro;
     const kd = dataDir() + "/knowledge";
     // 无任何 ro 项是 knowledge 根本身或其 learnings/experience 子目录
@@ -131,12 +123,13 @@ describe("executeTask 通用 system 分支（权限三维度 → runPi 参数）
     // 蒸馏走 runDistill——stub 它防真跑（runDistill 是模块函数，spy 换身）
     const distillMod = await import("../src/knowledge/distill");
     const spyDistill = spyOn(distillMod, "runDistill").mockImplementation(async () => ({ ok: true, note: "stub" }));
-    const spyRunPi = spyOn(runPiMod, "runPi").mockImplementation(async () => ({ text: "ok", messages: [], toolResults: [] }));
     try {
+      const calls: any[] = [];
+      stubRunPi(deps, calls);
       const task = deps.taskStore!.getTask("t_seed_distill")!; // 迁移 seed 已在
       await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
-      expect(spyRunPi).not.toHaveBeenCalled(); // 蒸馏不经通用 pi 通道
+      expect(calls).toHaveLength(0); // 蒸馏不经通用 pi 通道
       expect(spyDistill).toHaveBeenCalled();
-    } finally { spyDistill.mockRestore(); spyRunPi.mockRestore(); }
+    } finally { spyDistill.mockRestore(); }
   });
 });

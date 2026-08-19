@@ -2,7 +2,7 @@
 import { describe, test, expect } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { WorkspaceStore } from "../src/workspaces/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
@@ -17,7 +17,8 @@ async function makeAuthApp() {
   const userStore = new UserStore(db);
   await userStore.createUser({ username: "root", password: ADMIN_PW, role: "admin" });
   await userStore.createUser({ username: "meme", password: MEMBER_PW, role: "member" });
-  const deps: RunDeps = { store: new WorkflowStore(db), userStore, workspaceStore: new WorkspaceStore(db), streamRegistry: new StreamRegistry() };
+  const st = createStores(db);
+  const deps: RunDeps = { runStore: st.runs, chatStore: st.chat, hitlStore: st.hitl, feedbackStore: st.feedback, userStore, workspaceStore: new WorkspaceStore(db), streamRegistry: new StreamRegistry() };
   const app = createApp(deps);
   const tokenOf = async (username: string) => {
     const r = await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username, password: username === "root" ? ADMIN_PW : MEMBER_PW }) });

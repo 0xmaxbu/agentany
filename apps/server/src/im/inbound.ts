@@ -4,9 +4,9 @@
 //   >1 张 → 文本归属不明：choice_needed（缓存文本 + 发选择卡由调用方渲染），点选后回 judgeAskCard（T6）。
 // - 响应只处理一次 = 域表 CAS（余者幂等）＋队列 FIFO 串行（同一会话同时只一条 turn），非投递层保证。
 import type { RunDeps } from "../runs";
-import type { QuestionRow } from "../workflow-engine/store";
+import type { QuestionRow } from "../hitl/store"; // ADR-0030：卡类型随 hitl 域文件带
 import { ConversationQueues } from "../chat/queue";
-import { startInlineTurn } from "../chat/inline-turn";
+import { startUserTurn } from "../chat/turn-entry";
 import type { PendingTextCache } from "./pending-text";
 
 export interface ImInboundInput {
@@ -33,7 +33,7 @@ export async function handleImInbound(deps: RunDeps, input: ImInboundInput, pend
   if (!user) return { status: "discarded" };
 
   // 2. 扫该用户全部活跃会话的 pending 卡（T6 口径：不限最新——文本可应答对象是 ask 卡，kind 拦截在决策层）
-  const all = deps.store.listPendingCardsForUser(user.userId);
+  const all = deps.hitlStore.listPendingCardsForUser(user.userId);
 
   // 3. 三分支：0 / 1 / >1 张 ask 卡
   const askCards = all.filter((q) => q.kind === "ask");
@@ -57,16 +57,26 @@ export async function handleImInbound(deps: RunDeps, input: ImInboundInput, pend
   return { status: "discarded" }; // 防御：ask 但不在 askCards（不该发生）
 }
 
-/** 单张 ask 卡判答（handleImInbound 1 张分支 与 选择卡点选 共用）：定位会话 → 内联 turn（文本归一化 + CAS 收口）→ 回执。 */
+/** 单张 ask 卡判答（handleImInbound 1 张分支 与 选择卡点选 共用）：定位会话 → startUserTurn（文本归一化 + CAS 收口）→ 回执。
+ *  ADR-0029：whenDone 一等结果——按 messageId 定向读本轮回执（不再清最后一条 assistant，旧轮撒谎窗口归零）；
+ *  error 短回执贴「回执不假装成功」契约；busy/双保险失败沿用原口径。 */
 export async function judgeAskCard(deps: RunDeps, q: QuestionRow, text: string): Promise<ImInboundResult> {
   const convId = q.conversationId;
   const queues = deps.conversationQueues ?? new ConversationQueues();
-  if (!queues.wouldAcceptHttpTurn(convId)) return { status: "busy", conversationId: convId }; // 429 语义（不入队前不落库，同 POST 路由）
-  // T6 消歧聚焦：判答只注入这一张 ask 卡（1 张分支本就唯一；选择卡点选后不撞其它卡）
-  const { messageId, accepted } = startInlineTurn(deps, queues, deps.eventBus, convId, text, { focusQuestionId: q.id });
-  if (!accepted) return { status: "busy", conversationId: convId, messageId }; // 双保险失败：消息已落 → error 帧已发
-  await queues.drained(convId);
-  const msgs = deps.store.listMessages(convId);
-  const last = [...msgs].reverse().find((m) => m.role === "assistant");
-  return { status: "processed", conversationId: convId, questionId: q.id, messageId, reply: last?.content ?? "已处理" };
+  const res = startUserTurn(
+    { deps, queues, publish: (f) => deps.eventBus!.publish(convId, f) }, // publish 强制注入（ADR-0029 决策 4）：eventBus 由 boot 恒注入，缺装配即抛错——消灭 eventBus? 静默丢弃路径
+    convId, text, { focusQuestionId: q.id }, // T6 消歧聚焦：判答只注入这一张 ask 卡
+  );
+  if (res.status === "busy") return { status: "busy", conversationId: convId }; // 预检拒未落库（429 语义，同 POST 路由）
+  if (res.status === "appended_only") return { status: "busy", conversationId: convId, messageId: res.messageId }; // 双保险失败：消息已落 → error 帧已发
+  const outcome = await res.whenDone!;
+  if (outcome.status === "error") {
+    console.warn(`[im-inbound] 判答 q${q.id} 处理失败：${outcome.error}`); // 决策 6：error 短回执 + server log（回执不假装成功）
+    return { status: "processed", conversationId: convId, questionId: q.id, messageId: res.messageId, reply: "处理失败，请重试或点选卡片" };
+  }
+  if (outcome.status === "aborted") {
+    return { status: "processed", conversationId: convId, questionId: q.id, messageId: res.messageId, reply: "已处理" }; // 无 assistant 产出（终止）
+  }
+  const msg = deps.chatStore.listMessages(convId).find((m) => m.id === outcome.messageId); // 按 messageId 定向读（非「最后一条」扫描）
+  return { status: "processed", conversationId: convId, questionId: q.id, messageId: res.messageId, reply: msg?.content ?? "已处理" };
 }

@@ -1,10 +1,10 @@
 // #32/M4-5 system 任务 headless 执行链：无产出会话，pi 一次性跑，产出=task_runs 日志。
-// #39 起：通用 system 分支直调 runPi（全域白名单/权限开关），stub 从 runPiFactory
-// 换为 spy runPi 模块；蒸馏 seed 特判仍走 runDistill（runPiFactory 注入）。
-// seam：直构 executeTask + spy runPi；DATA_DIR 隔离（防触真实 data/）。
-import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
+// #39 起：通用 system 分支直调 runPi（全域白名单/权限开关），stub 走 deps.runPiFn 注入（C1/#66，
+// 替代 spyOn 模块 mock——DI 面与 workspace 分支 runPiStreamFactory 同型）；蒸馏 seed 特判仍走 runDistill。
+// seam：直构 executeTask + deps.runPiFn 注入；DATA_DIR 隔离（防触真实 data/）。
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -12,7 +12,6 @@ import { EventBus } from "../src/chat/eventbus";
 import { ConversationQueues } from "../src/chat/queue";
 import { ScheduledTaskStore } from "../src/scheduled-tasks/store";
 import { makeExecuteTask } from "../src/scheduled-tasks/execute";
-import * as runPiMod from "../src/pi/runPi";
 import type { RunDeps } from "../src/runs";
 
 beforeEach(() => { process.env.DATA_DIR = "/tmp/agentany-test-headless-" + process.pid; });
@@ -20,24 +19,24 @@ afterEach(() => { delete process.env.DATA_DIR; });
 
 function mkDeps(): RunDeps {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   return {
-    store, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
-    workspaceStore: new WorkspaceStore(db), taskStore: new ScheduledTaskStore(db, store),
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore: new UserStore(db), streamRegistry: new StreamRegistry(),
+    workspaceStore: new WorkspaceStore(db), taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
   };
 }
 
-/** spy runPi：记录调用（prompt/session/extensions），回放结果。 */
-function stubRunPi(results: Array<{ text?: string; error?: Error }>) {
+/** C1/#66：deps.runPiFn 直调注入（替代 spyOn 模块 mock）——记录调用（prompt/session/extensions），回放结果。 */
+function stubRunPi(deps: RunDeps, results: Array<{ text?: string; error?: Error }>) {
   const calls: Array<{ prompt: string; sessionId: string; extensions?: string[] }> = [];
-  const spy = spyOn(runPiMod, "runPi").mockImplementation(async (opts: any) => {
+  deps.runPiFn = async (opts: any) => {
     calls.push({ prompt: opts.prompt, sessionId: opts.sessionId, extensions: opts.extensions });
     const r = results[Math.min(calls.length - 1, results.length - 1)];
     if (r?.error) throw r.error;
     return { text: r?.text ?? "任务产出", messages: [], toolResults: [] };
-  });
-  return { spy, calls };
+  };
+  return { calls };
 }
 
 /** system 任务行（通用 headless 形态：workspaceId=null、无产出会话）。 */
@@ -52,11 +51,9 @@ function mkSystemTask(deps: RunDeps, opts: { enabled?: boolean; nextFireAt?: str
 describe("headless 执行（#32 system 任务）", () => {
   test("到点执行：pi 一次性跑（同 taskId 固定 session、无 bridge extension）→ task_runs ok + 无 outputMessageId + 不写任何会话消息", async () => {
     const deps = mkDeps();
-    const stub = stubRunPi([{ text: "巡检完成" }]);
+    const stub = stubRunPi(deps, [{ text: "巡检完成" }]);
     const task = mkSystemTask(deps);
-    try {
-      await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
-    } finally { stub.spy.mockRestore(); }
+    await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
     await new Promise((r) => setTimeout(r, 20));
 
     // pi 被调：prompt=任务目标、session 跨执行固定、extensions 无 chat-bridge（同 TASK_EXTENSIONS）
@@ -71,16 +68,14 @@ describe("headless 执行（#32 system 任务）", () => {
     expect(runs[0].finishedAt).not.toBeNull();
     expect(runs[0].outputMessageId).toBeNull();
     // 无会话消息产生（headless 不落 messages 表）
-    expect(deps.store.listConversations("u", undefined, false).length).toBeGreaterThanOrEqual(0); // 不炸即证（无会话可写）
+    expect(deps.chatStore.listConversations("u", undefined, false).length).toBeGreaterThanOrEqual(0); // 不炸即证（无会话可写）
   });
 
   test("pi 抛错 → failed + note 记错误详情（管理页历史可读）", async () => {
     const deps = mkDeps();
-    const stub = stubRunPi([{ error: new Error("provider 超时") }]);
+    const stub = stubRunPi(deps, [{ error: new Error("provider 超时") }]);
     const task = mkSystemTask(deps);
-    try {
-      await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
-    } finally { stub.spy.mockRestore(); }
+    await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
     const runs = deps.taskStore!.listRuns(task.id);
     expect(runs[0].status).toBe("failed");
     expect(runs[0].finishedAt).not.toBeNull();
@@ -89,7 +84,7 @@ describe("headless 执行（#32 system 任务）", () => {
 
   test("scheduler 集成：admin 启用 seed（enabled 0→1）→ 假钟 tick → 真执行 → task_runs 收 ok", async () => {
     const deps = mkDeps();
-    const stub = stubRunPi([{ text: "headless ok" }]);
+    const stub = stubRunPi(deps, [{ text: "headless ok" }]);
     // seed 形态：enabled=false 起步（迁移 seed 即此态）→ admin 启用
     const task = deps.taskStore!.createTask({
       scope: "system", workspaceId: null, displayName: "seed", cron: "0 4 * * 0", prompt: "p",
@@ -99,10 +94,8 @@ describe("headless 执行（#32 system 任务）", () => {
     deps.taskStore!.setTaskEnabled(task.id, true, true); // admin allowSystem
     const { TaskScheduler } = await import("../src/scheduled-tasks/scheduler");
     const sched = new TaskScheduler({ store: deps.taskStore!, executeTask: makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! }) });
-    try {
-      await sched.tick();
-      await new Promise((r) => setTimeout(r, 30));
-    } finally { stub.spy.mockRestore(); }
+    await sched.tick();
+    await new Promise((r) => setTimeout(r, 30));
     const runs = deps.taskStore!.listRuns(task.id);
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe("ok");
@@ -113,26 +106,22 @@ describe("headless 执行（#32 system 任务）", () => {
 
   test("disabled seed 不执行（tick 扫不到）", async () => {
     const deps = mkDeps();
-    const stub = stubRunPi([]);
+    const stub = stubRunPi(deps, []);
     const task = mkSystemTask(deps); // enabled=true 默认 → 先停
     deps.taskStore!.setTaskEnabled(task.id, false, true);
     const { TaskScheduler } = await import("../src/scheduled-tasks/scheduler");
     const sched = new TaskScheduler({ store: deps.taskStore!, executeTask: makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! }) });
-    try {
-      await sched.tick();
-      await new Promise((r) => setTimeout(r, 20));
-    } finally { stub.spy.mockRestore(); }
+    await sched.tick();
+    await new Promise((r) => setTimeout(r, 20));
     expect(deps.taskStore!.listRuns(task.id)).toHaveLength(0);
     expect(stub.calls).toHaveLength(0);
   });
 
   test("未读计数对 headless run 生效（管理页 badge 锚 = viewedAt null）", async () => {
     const deps = mkDeps();
-    const stub = stubRunPi([{ text: "x" }]);
+    const stub = stubRunPi(deps, [{ text: "x" }]);
     const task = mkSystemTask(deps);
-    try {
-      await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
-    } finally { stub.spy.mockRestore(); }
+    await makeExecuteTask({ deps, queues: new ConversationQueues(), eventBus: deps.eventBus! })(task, "cron");
     expect(deps.taskStore!.unreadCounts().get(task.id)).toBe(1);
     deps.taskStore!.markTaskRunsViewed(task.id);
     expect(deps.taskStore!.unreadCounts().get(task.id)).toBeUndefined();

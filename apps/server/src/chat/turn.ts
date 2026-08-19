@@ -49,7 +49,7 @@ export async function runTurn(
   signal: AbortSignal,
   opts?: TurnOptions,
 ): Promise<void> {
-  const conv = deps.store.getConversation(conversationId);
+  const conv = deps.chatStore.getConversation(conversationId);
   if (!conv) { send({ type: "error", message: "conversation not found" }); return; }
   if (process.env.AGENTANY_DEBUG_BLOCKS) console.error(`[dbg-turn] runTurn ${conversationId}: "${userContent.slice(0, 40)}"`);
 
@@ -62,9 +62,9 @@ export async function runTurn(
   const cwd = resolveScopePaths(scopeOf(conv.workspaceId), conv.workspaceId).cwd;
   const appendDynamic = composeSystemPrompt({
     projectDoc: loadProjectDoc(cwd),
-    workflows: listWorkflows(),
-    suspendedRuns: deps.store.listSuspendedRuns(conversationId),
-    pendingAsks: deps.store.listQuestions(conversationId, { includeAnswered: false, kind: "ask" }).map((q) => ({
+    workflows: (deps.listWorkflows ?? listWorkflows)(), // ADR-0029：注入可覆盖（测试免触全局 registry 态）
+    suspendedRuns: deps.runStore.listSuspendedRuns(conversationId),
+    pendingAsks: deps.hitlStore.listQuestions(conversationId, { includeAnswered: false, kind: "ask" }).map((q) => ({
       // 自主卡（runId null）照注（pi 需知道用户在答什么 + answer_question 的 questionId）
       runId: q.runId, questionId: q.id, prompt: q.prompt, options: (q.options as string[]) ?? [], resumeSchema: q.resumeSchema,
     })),
@@ -102,7 +102,7 @@ export async function runTurn(
 
   if (signal.aborted) { send({ type: "done", aborted: true }); return; } // stub resolve 但已 abort
   // 冗余落库（#20：messages 表保留供差异比对；pi session 才是历史真相源）
-  const msgId = deps.store.appendMessage({ conversationId: conv.id, role: "assistant", content: result.text });
+  const msgId = deps.chatStore.appendMessage({ conversationId: conv.id, role: "assistant", content: result.text });
   send({ type: "done", messageId: msgId });
   maybeAutoTitle(deps, conversationId, makeStream, send); // #命名：fire-and-forget（不阻塞 done 后续）
 }
@@ -126,10 +126,10 @@ async function maybeAutoTitle(
   makeStream: typeof makeRunPiStream,
   send: TurnSend,
 ): Promise<void> {
-  const conv = deps.store.getConversation(conversationId);
+  const conv = deps.chatStore.getConversation(conversationId);
   if (!conv || conv.title != null) return;
   // 素材 = 累计全部 user 消息（DB messages 表每轮落库，可靠累计源）——首轮太短时第二轮补足即触发。
-  const material = deps.store
+  const material = deps.chatStore
     .listMessages(conversationId)
     .filter((m) => m.role === "user")
     .map((m) => m.content)
@@ -146,7 +146,7 @@ async function maybeAutoTitle(
   } catch {
     return; // LLM 失败 → 跳过（不命名），下轮重试
   }
-  if (deps.store.getConversation(conversationId)?.title != null) return; // 并发竞态：他者已命名则弃
-  deps.store.renameConversation(conversationId, title);
+  if (deps.chatStore.getConversation(conversationId)?.title != null) return; // 并发竞态：他者已命名则弃
+  deps.chatStore.renameConversation(conversationId, title);
   send({ type: "title", title }); // 走 turn 的 send——与 done 同一 EventBus（deps.eventBus 可能未注入）
 }

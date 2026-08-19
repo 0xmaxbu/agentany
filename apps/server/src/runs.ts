@@ -1,14 +1,13 @@
-// 组合根·装配：start/resume 时 makeRunPi→注入 ctx→调 runner（F4）。runner 保持纯。
-import { getWorkflow } from "./registry";
-import { run, resume, type RunCtx } from "./workflow-engine/runner";
+// ADR-0031 决策 8：runs.ts 收敛为 RunDeps + 错误类 + makeRunId（组合/verdict/投递全部移到 runs/lifecycle.ts）。
+import type { RunPiOptions } from "./pi/runPi";
 import { makeRunPi, makeRunPiStream } from "./pi/runPi-factory";
-import { assertValidWorkspaceId } from "./config";
-import { resolveScopePaths, scopeOf } from "./scope";
-import { validate } from "./workflow-engine/schema";
-import type { Workflow } from "./workflow-engine/defineWorkflow";
-import type { WorkflowStore } from "./workflow-engine/store";
+import type { RunPiResult } from "./workflow-engine/defineWorkflow";
+import type { RunsStore } from "./runs/store"; // ADR-0030 决策 6：RunDeps 只见 runs 面，跨域经 deps.*Store
+import type { ChatStore } from "./chat/store";
+import type { HitlStore } from "./hitl/store";
+import type { FeedbackStore } from "./feedback/store";
 import type { EventBus } from "./chat/eventbus";
-import type { RunRegistry } from "./runs/registry";
+import type { RunLifecycle } from "./runs/lifecycle";
 import type { UserStore } from "./auth/store";
 import type { StreamRegistry } from "./chat/stream-registry";
 import type { WorkspaceStore } from "./workspaces/store";
@@ -18,7 +17,10 @@ import type { ConversationQueues } from "./chat/queue";
 import type { ImStore } from "./im/store";
 
 export interface RunDeps {
-  store: WorkflowStore;
+  runStore: RunsStore; // run/log 域（ADR-0030：跨域生命周期事务按 subject=run 归此）
+  chatStore: ChatStore; // conversations + messages
+  hitlStore: HitlStore; // hitl 提问卡（ask/approval/task）
+  feedbackStore: FeedbackStore; // 反馈（多态挂载 + 蒸馏增量水位）
   userStore: UserStore; // 真 auth（ADR-0014）：身份解析 + 用户/token CRUD
   streamRegistry: StreamRegistry; // 活跃 SSE 登记：token 吊销时强断（不杀 run）
   workspaceStore: WorkspaceStore; // 工作空间 + 名单（ADR-0018）：鉴权边界唯一口径
@@ -28,8 +30,10 @@ export interface RunDeps {
   conversationQueues?: ConversationQueues; // 共享 per-conv FIFO（#29）：chat 路由与任务执行同一实例——同会话严格串行（防 pi session 并发写坏）；缺省路由自建（测试兼容）
   runPiFactory?: typeof makeRunPi; // 测试可换 stub（di）
   runPiStreamFactory?: typeof makeRunPiStream; // chat 切片①：测试注确定性 delta stub（di）
+  runPiFn?: (opts: RunPiOptions) => Promise<RunPiResult>; // C1/#66：system-headless 的 runPi 直调 seam（含 sandboxAllow，比 runPiFactory 更全）；缺省真 runPi
   eventBus?: EventBus; // 共享事件中心（持久流 + bridge run 事件；prod 由 index 注入）
-  runRegistry?: RunRegistry; // 异步 run 句柄（bridge /run/* 用）
+  listWorkflows?: () => { id: string; name?: string; description?: string; inputSchema?: unknown }[]; // ADR-0029：runTurn 每轮注入的工作流目录——缺省全局 registry（默认同 listWorkflows）；测试可注 stub 免触全局态
+  runLifecycle?: RunLifecycle; // ADR-0031：run 生命周期单组合根（start/resume/read/abort/sweep/reconcile/stop）
   signal?: AbortSignal;
   log?: (...a: unknown[]) => void;
 }
@@ -52,41 +56,5 @@ export class QueueFull extends Error {
   constructor(id: string) { super(`conversation queue full: ${id}`); this.name = "QueueFull"; }
 }
 
-const sessionIdFor = (runId: string) => `run-${runId}`;
-// h8：强随机 runId（runId 是资源主键 + 当前事实上的能力令牌，不得弱）。runId 唯一定义点（RunRegistry 复用）。
+// h8：强随机 runId（runId 是资源主键 + 当前事实上的能力令牌，不得弱）。runId 唯一定义点（RunLifecycle 复用）。
 export const makeRunId = (): string => "r_" + globalThis.crypto.randomUUID();
-
-function buildCtx(wf: Workflow, workspaceId: string, runId: string, deps: RunDeps): RunCtx {
-  const factory = deps.runPiFactory ?? makeRunPi;
-  const scope = scopeOf(workspaceId);
-  const { cwd } = resolveScopePaths(scope, workspaceId);
-  const runPi = factory({
-    extensions: wf.extensions, scope, workspaceId: workspaceId, sessionId: sessionIdFor(runId),
-  });
-  return {
-    runPi,
-    workspaceId,
-    cwd,
-    signal: deps.signal ?? new AbortController().signal,
-    log: deps.log ?? (() => {}),
-  };
-}
-
-export async function startRun(deps: RunDeps, workflowId: string, workspaceId: string, input: unknown) {
-  const wf = getWorkflow(workflowId);
-  if (!wf) throw new WorkflowNotFound(workflowId);
-  if (scopeOf(workspaceId) === "workspace") assertValidWorkspaceId(workspaceId); // h1：路径关键输入，先校验（general 分支不进目录拼接）
-  const v = validate(wf.inputSchema as any, input); // h2：按 inputSchema 校验
-  if (!v.ok) throw new InvalidInput(v.error);
-  const runId = makeRunId();
-  deps.store.createRun({ runId, workflowId, workspaceId, input });
-  return run(wf, deps.store, runId, buildCtx(wf, workspaceId, runId, deps));
-}
-
-export async function resumeRun(deps: RunDeps, runId: string, resumeData: unknown) {
-  const row = deps.store.getRun(runId);
-  if (!row) throw new RunNotFound(runId);
-  const wf = getWorkflow(row.workflowId);
-  if (!wf) throw new WorkflowNotFound(row.workflowId);
-  return resume(wf, deps.store, runId, resumeData, buildCtx(wf, row.workspaceId, runId, deps));
-}

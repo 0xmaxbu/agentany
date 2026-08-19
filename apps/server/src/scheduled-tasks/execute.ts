@@ -6,9 +6,9 @@
 // 不能 start_workflow/ask_user，loopback 无端口）；错误转为产出会话内的可读说明。
 // system 任务（#32/M4-5）走 headless：无产出会话，pi 一次性跑（makeRunPi 路径，
 // 同 taskId 固定 session 跨执行连续），产出=task_runs 日志（note 记失败详情，管理页可读）。
-import { repoExtensionPath, generalWorkspacePath, workspaceWorkspacePath, taskSessionDir, repoSkillPaths } from "../config";
+import { repoExtensionPath, generalWorkspacePath, workspaceWorkspacePath, taskSessionDir, repoSkillPaths, forAllWorkspaces } from "../config";
 import { runPi } from "../pi/runPi";
-import { runTurn, type TurnSend } from "../chat/turn";
+import { startSystemTurn } from "../chat/turn-entry";
 import type { ConversationQueues } from "../chat/queue";
 import type { EventBus, Frame } from "../chat/eventbus";
 import { resolveScopePaths, scopeOf } from "../scope";
@@ -17,7 +17,7 @@ import { runDistill } from "../knowledge/distill";
 import type { RunDeps } from "../runs";
 import type { ScheduledTaskRow, TaskRunTrigger } from "./store";
 import { WRITE_TOOLS, wsRelativePath } from "./files";
-import { COMPANY_WORKSPACE_ID, type WorkspaceStore } from "../workspaces/store";
+import type { WorkspaceStore } from "../workspaces/store";
 
 // 蒸馏 seed 任务 id（迁移 0013 种的 system 任务——executeTask 以此特判走蒸馏链）。
 export const DISTILL_TASK_ID = "t_seed_distill";
@@ -31,14 +31,10 @@ export const TASK_EXTENSIONS: string[] = [
  * #39/ADR-0023 决策 1：全域=全部 ws 的 workspace 目录（公司 ws→general 路径 + 其余→
  * data/workspaces/<id>/workspace），执行时动态解析（新建 ws 自动纳入）。
  * DB/knowledge/pi-sessions 三域不在列（deny 侧默认拒——不进白名单即不可见）。
+ * C1/#66：ws 目录枚举起用 config.forAllWorkspaces 单点（与蒸馏语料同循环同源，防漂移）。
  */
 export function fullDomainWorkspaceDirs(workspaceStore?: WorkspaceStore): string[] {
-  const dirs = [generalWorkspacePath()]; // 公司 ws（ws_company 锚 general 路径）
-  for (const w of workspaceStore?.listAllWorkspaces() ?? []) {
-    if (w.id === COMPANY_WORKSPACE_ID) continue; // 已含（general 路径）
-    dirs.push(workspaceWorkspacePath(w.id));
-  }
-  return Array.from(new Set(dirs));
+  return forAllWorkspaces(workspaceStore?.listAllWorkspaces() ?? [], generalWorkspacePath(), workspaceWorkspacePath);
 }
 
 // 任务 turn 的 system 追加：无人值守语境（无桥接工具、无交互语义）。
@@ -82,7 +78,8 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
           const wsDirs = fullDomainWorkspaceDirs(deps.workspaceStore);
           const sessionDir = taskSessionDir(task.id);
           const extensions = task.allowSearch ? TASK_EXTENSIONS : [];
-          await runPi({
+          // C1/#66：system headless 的 runPi 直调经 deps.runPiFn 可注入（缺省真 runPi；测试喂假免 spyOn 模块 mock）
+          await (deps.runPiFn ?? runPi)({
             prompt: task.prompt,
             sessionId: `task-${task.id}`,
             sessionDir,
@@ -110,16 +107,16 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
     }
     const convId = task.outputConversationId;
     // 悬空引用（会话已被 admin 硬删）：直接 failed，不写孤儿消息
-    if (!deps.store.getConversation(convId)) {
+    if (!deps.chatStore.getConversation(convId)) {
       const rid = own ? deps.taskStore!.recordRun({ taskId: task.id, trigger, status: "failed" }) : runIdProvided!;
       if (!own) deps.taskStore!.finishRun(rid, { status: "failed" });
       return;
     }
-    const send: TurnSend = (frame: Frame) => eventBus.publish(convId, frame);
+    const send: (f: Frame) => void = (frame: Frame) => eventBus.publish(convId, frame);
     const runId = own ? deps.taskStore!.recordRun({ taskId: task.id, trigger, status: "ok", startedAt: new Date().toISOString() }) : runIdProvided!;
 
     // #30 产出文件收集：钩 block_start(tool_use) 的 write/edit 路径 → run 收口时登记 task_files。
-    const convRow = deps.store.getConversation(convId)!;
+    const convRow = deps.chatStore.getConversation(convId)!;
     const wsCwd = resolveScopePaths(scopeOf(convRow.workspaceId), convRow.workspaceId).cwd;
     const written = new Set<string>();
     const collectFile = (f: Frame): void => {
@@ -132,30 +129,27 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
       if (rel !== undefined) written.add(rel); // 归一后去重（write+edit 同文件只一行）
     };
 
-    // 任务 prompt 先落 user 消息（历史可读：产出会话里每次执行的目标原文）+ 推流。
-    // 帧 带 taskId 标志：纯展示（#48/T6 后 route 不经此发布——本函数经 enqueueEventTurn 自起 turn，防同 prompt 双跑）。
-    const userMsgId = deps.store.appendMessage({ conversationId: convId, role: "user", content: task.prompt });
-    deps.store.touchConversation(convId);
-    eventBus.publish(convId, { type: "user_message", id: userMsgId, content: task.prompt, taskId: task.id });
-
-    let outputMessageId: string | null = null;
-    let failure: string | null = null;
-    const ok = queues.enqueueEventTurn(convId, async (signal) => {
-      // runTurn 自己写 assistant 消息并发 done（messageId）——钩帧取 outputMessageId。
-      await runTurn(deps, convId, task.prompt, (f) => {
-        collectFile(f);
-        if (f.type === "done" && f.messageId !== undefined) outputMessageId = String(f.messageId);
-        if (f.type === "error") failure = f.message;
-        send(f);
-      }, signal, {
+    // ADR-0029：startSystemTurn 内聚落库/发布/入队；产出经 whenDone 一等结果（删 send 闭包收集 + drained）。
+    // 帧 带 taskId 标志（入口携带）：纯展示。文件收集挂 publish 钩子（与 SSE publish 同流）。
+    // runTurn 引擎零改动——entry 对 send 钩子加 interceptor 收 done/error → whenDone。
+    const res = startSystemTurn(
+      { deps, queues, publish: (f) => { collectFile(f); send(f); } },
+      convId, task.prompt,
+      {
+        taskId: task.id,
         extensions: TASK_EXTENSIONS,
         // #35/D1：任务 turn 吃 global 经验（产出质量受益）、不吃 member 级（任务语境=公司/共享 ws，非个人对话）
         appendSystemPrompt: [TASK_SYSTEM_PROMPT, ...collectExperience()],
-        noBridge: true,
-      });
-    });
-    if (!ok) failure = "conversation busy (event queue full)";
-    if (ok) await queues.drained(convId); // 等本 turn 真跑完（FIFO 快照）再收口——finishRun 太早会丢 outputMessageId/错误
+      },
+    );
+    let outputMessageId: string | null = null;
+    let failure: string | null = null;
+    if (res.status === "appended_only") failure = "conversation busy (event queue full)"; // 双保险失败（消息已落 + error 帧已发）
+    else if (res.status === "accepted") {
+      const outcome = await res.whenDone!; // 等本 turn 真跑完再收口——finishRun 太早会丢 outputMessageId/错误
+      if (outcome.status === "error") failure = outcome.error;
+      else if (outcome.status === "done") outputMessageId = String(outcome.messageId);
+    }
 
     // #30：登记产出文件（run 已收口前；taskRunId 是 text 列）。失败不阻塞 run 收口（文件列表少行可接受）。
     for (const rel of written) {
@@ -169,7 +163,7 @@ export function makeExecuteTask(ctx: ExecuteTaskDeps): (task: ScheduledTaskRow, 
     if (failure) {
       // 可读错误说明落会话（runTurn 出错只发 error 帧不写消息——历史里会凭空消失，补一条系统说明）
       const errMsg = `定时任务「${task.displayName}」执行失败：${failure}`;
-      const errId = deps.store.appendMessage({ conversationId: convId, role: "assistant", content: errMsg });
+      const errId = deps.chatStore.appendMessage({ conversationId: convId, role: "assistant", content: errMsg });
       outputMessageId = String(errId);
     }
     deps.taskStore!.finishRun(runId, { status: failure ? "failed" : "ok", outputMessageId });

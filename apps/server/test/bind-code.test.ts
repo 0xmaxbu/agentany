@@ -5,17 +5,18 @@
 //   - e2e：makeFeishuInbound 直调（Web 发码 → #bind → 补发卡+回执；#unbind；未绑定普通文本静默）——不需 WS 层
 import { describe, test, expect, beforeEach } from "bun:test";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
 import { ScheduledTaskStore } from "../src/scheduled-tasks/store";
 import { EventBus } from "../src/chat/eventbus";
 import { ConversationQueues } from "../src/chat/queue";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import { ImStore, BIND_CODE_TTL_MS } from "../src/im/store";
 import { FeishuTransport } from "../src/im/feishu/transport";
-import { makeFeishuInbound } from "../src/im/feishu/inbound";
+import { FeishuPlatformAdapter } from "../src/im/feishu/adapter";
+import { handleImEvent } from "../src/im/dispatch";
 import { parseImCommand } from "../src/im/commands";
 import { fakeFeishu, fakeFeishuFetch, receiveTextEvent } from "./fake-feishu";
 import type { RunDeps } from "../src/runs";
@@ -27,23 +28,28 @@ const stubRunPiFactory = (): ConfiguredRunPi => async () => ({ text: "", message
 
 function setup() {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const userStore = new UserStore(db);
   const eventBus = new EventBus();
   const queues = new ConversationQueues();
   const deps: RunDeps = {
-    store, userStore,
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore,
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus, conversationQueues: queues, imStore: new ImStore(db),
-    runRegistry: new RunRegistry({ store, eventBus, runPiFactory: stubRunPiFactory }),
+    runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubRunPiFactory }),
     runPiStreamFactory: (): ConfiguredRunPiStream => async (call) => ({ text: "", messages: [], toolResults: [] }),
   };
   const fake = fakeFeishu();
-  const transport = new FeishuTransport({ appId: "cli_x", appSecret: "s", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app) });
-  const inbound = makeFeishuInbound(deps, transport);
-  return { db, store, userStore, deps, fake, transport, inbound };
+  const adapter = new FeishuPlatformAdapter({ transport: new FeishuTransport({ appId: "cli_x", appSecret: "s", baseUrl: "https://fake.feishu", fetchFn: fakeFeishuFetch(fake.app) }) });
+  /** 模拟长连接 onEvent：信封 → adapter.parseInbound → handleImEvent（领域单入口）。 */
+  const inbound = async (payload: unknown) => {
+    const evs = adapter.parseInbound(payload);
+    if (!evs) return;
+    for (const e of evs) await handleImEvent(deps, e, adapter);
+  };
+  return { db, store, userStore, deps, fake, adapter, inbound };
 }
 
 let ctx: ReturnType<typeof setup>;
@@ -79,14 +85,14 @@ describe("绑定码存储（issue/consume 生命周期）", () => {
 
   test("listPendingCardsForUser：跨会话全量 pending（含 approval/task，按 id 序）", async () => {
     const u = await mkUser("u");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: u.id });
-    ctx.store.createConversation({ id: "c2", workspaceId: "ws_company", userId: u.id });
-    const q1 = ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "澄清", options: ["A"] });
-    const q2 = ctx.store.createQuestion({ conversationId: "c2", kind: "approval", workflowId: "w", input: {}, prompt: "审批", options: ["批准", "拒绝"] });
-    ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "已答", options: ["A"] });
-    ctx.store.markQuestionAnswered(ctx.store.listQuestions("c1").find((q) => q.prompt === "已答")!.id, "A");
-    ctx.store.archiveConversation("c2"); // 归档会话的 pending 不计
-    const rows = ctx.store.listPendingCardsForUser(u.id);
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: u.id });
+    ctx.store.chat.createConversation({ id: "c2", workspaceId: "ws_company", userId: u.id });
+    const q1 = ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "澄清", options: ["A"] });
+    const q2 = ctx.store.hitl.createQuestion({ conversationId: "c2", kind: "approval", workflowId: "w", input: {}, prompt: "审批", options: ["批准", "拒绝"] });
+    ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "已答", options: ["A"] });
+    ctx.store.hitl.markQuestionAnswered(ctx.store.hitl.listQuestions("c1").find((q) => q.prompt === "已答")!.id, "A");
+    ctx.store.chat.archiveConversation("c2"); // 归档会话的 pending 不计
+    const rows = ctx.store.hitl.listPendingCardsForUser(u.id);
     expect(rows.map((r) => r.id)).toEqual([q1]); // c2 归档排除 + 已答排除
     expect(rows.some((r) => r.id === q2)).toBe(false);
   });
@@ -117,10 +123,10 @@ describe("e2e：#bind → 补发 + 回执；#unbind；未绑定普通文本静�
 
   test("Web 发码 → #bind 成功 → 回执含待办数 + 补发卡各一次（interactive + 按钮 value）", async () => {
     const m1 = await newUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
-    ctx.store.createConversation({ id: "c2", workspaceId: "ws_company", userId: m1.id });
-    const qid1 = ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "预算？", options: ["<10w"] });
-    ctx.store.createQuestion({ conversationId: "c2", kind: "approval", workflowId: "w", input: {}, prompt: "审批", options: ["批准", "拒绝"] });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.chat.createConversation({ id: "c2", workspaceId: "ws_company", userId: m1.id });
+    const qid1 = ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "预算？", options: ["<10w"] });
+    ctx.store.hitl.createQuestion({ conversationId: "c2", kind: "approval", workflowId: "w", input: {}, prompt: "审批", options: ["批准", "拒绝"] });
     const { code } = ctx.deps.imStore!.issueBindCode(m1.id);
 
     await pub(`#bind ${code}`);
@@ -141,8 +147,8 @@ describe("e2e：#bind → 补发 + 回执；#unbind；未绑定普通文本静�
 
   test("绑定码单次性：用过-解绑-重放 → 拒；乱码/过期 → 拒，均不绑定不补发", async () => {
     const m1 = await newUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
-    ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "p", options: ["A"] });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "p", options: ["A"] });
     const { code } = ctx.deps.imStore!.issueBindCode(m1.id);
     await pub(`#bind ${code}`); // 首次成功
     expect(ctx.deps.imStore!.resolve("ou_1", "feishu")!.userId).toBe(m1.id);
@@ -170,9 +176,9 @@ describe("e2e：#bind → 补发 + 回执；#unbind；未绑定普通文本静�
 
   test("已绑定重复 #bind → 提示；#unbind → 解绑 + 回执；解绑后再补发不再发", async () => {
     const m1 = await newUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
     ctx.deps.imStore!.bind("ou_1", "feishu", m1.id);
-    const qid1 = ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "p", options: ["A"] });
+    const qid1 = ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "p", options: ["A"] });
 
     const code1 = ctx.deps.imStore!.issueBindCode(m1.id).code;
     await pub(`#bind ${code1}`); // 已绑定 → 提示不补发
@@ -196,18 +202,18 @@ describe("e2e：#bind → 补发 + 回执；#unbind；未绑定普通文本静�
 
   test("未绑定普通文本 → 静默丢弃（不回执不补发，永不影响会话）", async () => {
     const m1 = await newUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
-    ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "p", options: ["A"] });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "p", options: ["A"] });
     await pub("你好可以吗", "ou_unknown"); // 未绑定的 open_id 发普通文本
     await delay(10);
     expect(ctx.fake.state.sent).toHaveLength(0); // 静默
-    expect(ctx.store.listMessages("c1")).toHaveLength(0); // 未落库
+    expect(ctx.store.chat.listMessages("c1")).toHaveLength(0); // 未落库
   });
 
   test("#bind 码消费后，绑定关系即刻用于回流（补发后打字 → 判答）", async () => {
     const m1 = await newUser("m1");
-    ctx.store.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
-    const qid1 = ctx.store.createQuestion({ conversationId: "c1", runId: null, prompt: "澄清", options: ["A"] });
+    ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: m1.id });
+    const qid1 = ctx.store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "澄清", options: ["A"] });
     const { code } = ctx.deps.imStore!.issueBindCode(m1.id);
     await pub(`#bind ${code}`);
     await delay(10);
@@ -215,7 +221,7 @@ describe("e2e：#bind → 补发 + 回执；#unbind；未绑定普通文本静�
     // 只验证「不再静默丢弃」：至少会落库一条 user 消息（queue 起轮）
     await pub("A");
     await delay(10);
-    expect(ctx.store.listMessages("c1").some((m) => m.role === "user" && m.content === "A")).toBe(true);
+    expect(ctx.store.chat.listMessages("c1").some((m) => m.role === "user" && m.content === "A")).toBe(true);
     void qid1;
   });
 });

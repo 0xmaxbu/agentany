@@ -3,7 +3,7 @@
 import { describe, test, expect } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { WorkspaceStore } from "../src/workspaces/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
@@ -16,12 +16,12 @@ const MEMBER_PW = "pw-member-1";
 // 真 auth 装配：admin + member 两账号共享一个 db（member 用于 403 与「归档自己的会话」正路径）。
 async function makeAuthApp() {
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const userStore = new UserStore(db);
   const workspaceStore = new WorkspaceStore(db);
   await userStore.createUser({ username: "root", password: ADMIN_PW, role: "admin" });
   await userStore.createUser({ username: "meme", password: MEMBER_PW, role: "member" });
-  const deps: RunDeps = { store, userStore, workspaceStore, streamRegistry: new StreamRegistry() };
+  const deps: RunDeps = { runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore, workspaceStore, streamRegistry: new StreamRegistry() };
   const app = createApp(deps);
   const tokenOf = async (username: string) => {
     const r = await app.request("/auth/login", {
@@ -105,19 +105,18 @@ describe("#21 删除（admin-only 全链）", () => {
 
     // 带挂靠数据的会话：message + hitl question + run（绑 conversationId）→ 全链清理
     const c = await createConv(app, adminTok);
-    store.appendMessage({ conversationId: c.id, role: "user", content: "m1" });
-    store.createQuestion({ conversationId: c.id, prompt: "q?", options: ["a", "b"] });
-    store.createRun({ runId: "run_1", workflowId: "wf", workspaceId: "ws_company", conversationId: c.id, input: {} });
+    store.chat.appendMessage({ conversationId: c.id, role: "user", content: "m1" });
+    store.hitl.createQuestion({ conversationId: c.id, prompt: "q?", options: ["a", "b"] });
+    store.runs.createRun({ runId: "run_1", workflowId: "wf", workspaceId: "ws_company", conversationId: c.id, input: {} });
     expect((await app.request(`/conversations/${c.id}`, { method: "DELETE", headers: auth(adminTok) })).status).toBe(200);
 
-    expect(store.getConversation(c.id)).toBeUndefined();
-    expect(store.listMessages(c.id)).toEqual([]);
-    expect(store.listQuestions(c.id, { includeAnswered: true })).toEqual([]);
-    expect(store.listRunningRunIds(c.id)).toEqual([]); // 解绑后按会话查 run = 空
-    const runRow = (store as any).db.select().from((await import("../src/db/schema")).workflowRuns).all() as any[];
-    const r1 = runRow.find((r) => r.runId === "run_1");
+    expect(store.chat.getConversation(c.id)).toBeUndefined();
+    expect(store.chat.listMessages(c.id)).toEqual([]);
+    expect(store.hitl.listQuestions(c.id, { includeAnswered: true })).toEqual([]);
+    expect(store.runs.listRunningRunIds(c.id)).toEqual([]); // 解绑后按会话查 run = 空
+    const r1 = store.runs.getRun("run_1"); // 域面直读（不再 poke 私有 db）
     expect(r1).toBeTruthy(); // run 本体保留（workspace 资产，ADR-0018）
-    expect(r1.conversationId).toBeNull(); // 仅解绑
+    expect(r1!.conversationId).toBeNull(); // 仅解绑
   });
 
   test("DELETE 不存在/已删 → 404", async () => {

@@ -1,13 +1,13 @@
 // #46/T3（ADR-0025 决策 5/6）：ask 步契约 + 挂起强制卡。
-// seam：ask 工厂单元（直接 execute）+ store.suspendWithAskCard（同事务）+ registry 集成（synthetic → 卡 + hitl_request）。
+// seam：ask 工厂单元（直接 execute）+ store.suspendedStep（同事务）+ lifecycle 集成（synthetic → 卡 + hitl_request）。
 import { describe, test, expect } from "bun:test";
 import { ask } from "../src/workflow-engine/ask";
 import { schema } from "../src/workflow-engine/schema";
 import type { StepContext } from "../src/workflow-engine/defineWorkflow";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { EventBus } from "../src/chat/eventbus";
-import { RunRegistry } from "../src/runs/registry";
+import { RunLifecycle } from "../src/runs/lifecycle";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
 
 const stubFactory = (): ConfiguredRunPi => async () => ({ text: "", messages: [], toolResults: [] });
@@ -109,24 +109,26 @@ describe("ask 工厂 · 定义与映射", () => {
   });
 });
 
-describe("store · suspendWithAskCard（同事务强制卡）", () => {
-  test("suspended 重确认 + createQuestion(values=快照) 一个事务；回读 values 不失效", async () => {
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
-    store.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    store.updateRunStatus("r1", "running");
-    const qid = store.suspendWithAskCard({
-      runId: "r1", conversationId: "c1",
-      prompt: "怎么选？", options: ["A", "B"],
-      values: [{ label: "A", value: { selected: "all" } }, { label: "B", value: { selected: "1,3,5" } }],
+describe("store · suspendedStep 原子挂起（G1/ADR-0025 决策 6 字面：log+status+卡同一事务）", () => {
+  test("suspendedStep → run suspended + log suspended + ask 卡(values=快照) 同一事务；回读 values 不失效", async () => {
+    const store = createStores(openDbMigrated(":memory:"));
+    store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u" });
+    store.runs.createRun({ runId: "r1", workflowId: "w", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    const qid = store.runs.suspendedStep({
+      runId: "r1", stepId: "review", input: {},
+      suspendPayload: { question: "怎么选？", options: [{ label: "A", value: { selected: "all" } }, { label: "B", value: { selected: "1,3,5" } }] },
       resumeSchema: schema.object({ selected: schema.string() }),
+      conversationId: "c1",
+      values: [{ label: "A", value: { selected: "all" } }, { label: "B", value: { selected: "1,3,5" } }],
     });
     expect(qid).toBeGreaterThan(0);
-    expect(store.getRun("r1")!.status).toBe("suspended"); // 同事务切挂起
-    const q = store.getQuestion(qid)!;
+    expect(store.runs.getRun("r1")!.status).toBe("suspended"); // 同事务切挂起
+    expect(store.runs.getLog("r1").at(-1)!.status).toBe("suspended"); // log 同事务
+    const q = store.hitl.getQuestion(qid)!;
     expect(q.kind).toBe("ask");
     expect(q.runId).toBe("r1");
-    expect(q.options).toEqual(["A", "B"]);
+    expect(q.prompt).toBe("怎么选？"); // prompt 由 suspendPayload.question 派生
+    expect(q.options).toEqual(["A", "B"]); // options labels 由 values 派生
     expect(q.values).toEqual([{ label: "A", value: { selected: "all" } }, { label: "B", value: { selected: "1,3,5" } }]); // 快照回读
     expect(q.status).toBe("pending");
   });
@@ -134,14 +136,14 @@ describe("store · suspendWithAskCard（同事务强制卡）", () => {
 
 describe("registry · 挂起强制卡（ADR-0025 决策 6）", () => {
   test("synthetic review 挂起 → 同事务直建 ask 卡 + hitl_request 帧；无伴生消息", async () => {
-    const store = new WorkflowStore(openDbMigrated(":memory:"));
-    store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "dev-user" });
+    const store = createStores(openDbMigrated(":memory:"));
+    store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "dev-user" });
     const eventBus = new EventBus();
-    const registry = new RunRegistry({ store, eventBus, runPiFactory: stubFactory });
+    const registry = new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus, runPiFactory: stubFactory });
     const frames: any[] = [];
     eventBus.subscribe("c1", (f) => frames.push(f));
 
-    const started = registry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: { offset: 0 } });
+    const started = await registry.start({ conversationId: "c1", workflowId: "synthetic-3step", input: { offset: 0 } });
     if (started.status !== "running") throw new Error(`expected running, got ${started.status}`);
     await delayUntil(() => frames.some((f) => f.type === "hitl_request"));
 
@@ -151,7 +153,7 @@ describe("registry · 挂起强制卡（ADR-0025 决策 6）", () => {
     expect(req.options).toEqual(["接受", "偏移 +1 重跑"]);
     expect(req.context).toContain("s1-out@off0"); // F4：决策辅助 markdown 随帧透出（前端渲染归后续）
     const qid = req.questionId;
-    const q = store.getQuestion(qid)!;
+    const q = store.hitl.getQuestion(qid)!;
     expect(q.kind).toBe("ask");
     expect(q.prompt).toBe("第一步结果已产出，如何决策？");
     expect(q.options).toEqual(["接受", "偏移 +1 重跑"]);
@@ -160,7 +162,7 @@ describe("registry · 挂起强制卡（ADR-0025 决策 6）", () => {
       { label: "接受", value: { decision: "accept" } },
       { label: "偏移 +1 重跑", value: { decision: "redirect" } },
     ]); // 显式 value 快照（前端只收 label，value 只在服务端）
-    expect(store.listQuestions("c1")).toHaveLength(1); // GET /hitl 恢复口径
-    expect(store.listMessages("c1")).toHaveLength(0); // 无伴生消息（卡即恢复载体）
+    expect(store.hitl.listQuestions("c1")).toHaveLength(1); // GET /hitl 恢复口径
+    expect(store.chat.listMessages("c1")).toHaveLength(0); // 无伴生消息（卡即恢复载体）
   });
 });

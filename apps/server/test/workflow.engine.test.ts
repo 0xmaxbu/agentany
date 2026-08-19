@@ -2,15 +2,16 @@
 import { describe, test, expect } from "bun:test";
 import { rmSync } from "node:fs";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { RunsStore } from "../src/runs/store";
+import { createStores, type Stores } from "../src/stores";
 import { synthetic } from "../src/workflows/synthetic";
 import { run, resume, type RunCtx } from "../src/workflow-engine/runner";
 import { defineWorkflow } from "../src/workflow-engine/defineWorkflow";
 
 const KILL_DB = "/tmp/agentany-engine-test.sqlite";
 
-function newStore(): WorkflowStore {
-  return new WorkflowStore(openDbMigrated(":memory:"));
+function newStore(): Stores {
+  return createStores(openDbMigrated(":memory:"));
 }
 function ctx(): RunCtx {
   return {
@@ -24,10 +25,10 @@ function ctx(): RunCtx {
 function newRunId(): string {
   return "r_" + Math.random().toString(36).slice(2, 10);
 }
-async function start(store: WorkflowStore, input: unknown) {
+async function start(store: Stores, input: unknown) {
   const runId = newRunId();
-  store.createRun({ runId, workflowId: synthetic.id, workspaceId: "ws_test", input });
-  const res = await run(synthetic, store, runId, ctx());
+  store.runs.createRun({ runId, workflowId: synthetic.id, workspaceId: "ws_test", input });
+  const res = await run(synthetic, store.runs, runId, ctx());
   return { runId, res };
 }
 
@@ -38,10 +39,10 @@ describe("engine · 接受路径", () => {
     expect(res.status).toBe("suspended");
     expect((res as any).stepId).toBe("review");
 
-    const r = await resume(synthetic, store, runId, { decision: "accept" }, ctx());
+    const r = await resume(synthetic, store.runs, runId, { decision: "accept" }, ctx());
     expect(r.status).toBe("completed");
 
-    const log = store.getLog(runId);
+    const log = store.runs.getLog(runId);
     const completed = log.filter((e) => e.status === "completed").map((e) => e.stepId);
     expect(completed.join(",")).toBe("s1,review,s2");
     const review = log.filter((e) => e.stepId === "review").map((e) => e.status);
@@ -55,13 +56,13 @@ describe("engine · 循环路径", () => {
     const { runId, res } = await start(store, { offset: 0 });
     expect(res.status).toBe("suspended");
 
-    const r1 = await resume(synthetic, store, runId, { decision: "redirect", focus: "brand" }, ctx());
+    const r1 = await resume(synthetic, store.runs, runId, { decision: "redirect", focus: "brand" }, ctx());
     expect(r1.status).toBe("suspended"); // 循环回 s1 后又挂起在 review
 
-    const r2 = await resume(synthetic, store, runId, { decision: "accept" }, ctx());
+    const r2 = await resume(synthetic, store.runs, runId, { decision: "accept" }, ctx());
     expect(r2.status).toBe("completed");
 
-    const s1s = store.getLog(runId).filter((e) => e.stepId === "s1");
+    const s1s = store.runs.getLog(runId).filter((e) => e.stepId === "s1");
     expect(s1s.length).toBe(2);
     const offs = s1s.map((e) => (e.output as any)?.offset);
     expect(offs[0]).toBe(0);
@@ -72,14 +73,14 @@ describe("engine · 循环路径", () => {
 describe("engine · 杀进程跨实例 resume", () => {
   test("Store A 挂起 → 新 Store B（同 db 文件）resume → completed", async () => {
     rmSync(KILL_DB, { force: true });
-    const storeA = new WorkflowStore(openDbMigrated(KILL_DB));
+    const storeA = new RunsStore(openDbMigrated(KILL_DB)); // 杀进程实例只学 runs 面（RunsStore）
     const runId = newRunId();
     storeA.createRun({ runId, workflowId: synthetic.id, workspaceId: "ws_test", input: { offset: 5 } });
     const a = await run(synthetic, storeA, runId, ctx());
     expect(a.status).toBe("suspended");
 
     // 模拟进程重启：新 Store 实例打开同一个 db 文件，状态纯由日志派生。
-    const storeB = new WorkflowStore(openDbMigrated(KILL_DB));
+    const storeB = new RunsStore(openDbMigrated(KILL_DB));
     const b = await resume(synthetic, storeB, runId, { decision: "accept" }, ctx());
     expect(b.status).toBe("completed");
     rmSync(KILL_DB, { force: true });
@@ -91,12 +92,12 @@ describe("engine · resumeData 校验", () => {
     const store = newStore();
     const { runId } = await start(store, { offset: 0 });
 
-    const bad = await resume(synthetic, store, runId, { decision: "bogus" }, ctx());
+    const bad = await resume(synthetic, store.runs, runId, { decision: "bogus" }, ctx());
     expect((bad as any).rejected).toBe(true);
     expect(bad.status).toBe("suspended");
-    expect(store.getRun(runId)?.status).toBe("suspended");
+    expect(store.runs.getRun(runId)?.status).toBe("suspended");
 
-    const good = await resume(synthetic, store, runId, { decision: "accept" }, ctx());
+    const good = await resume(synthetic, store.runs, runId, { decision: "accept" }, ctx());
     expect(good.status).toBe("completed");
   });
 });
@@ -106,13 +107,13 @@ describe("engine · 幂等 resume", () => {
     const store = newStore();
     const { runId } = await start(store, { offset: 0 });
 
-    const r1 = await resume(synthetic, store, runId, { decision: "accept" }, ctx());
+    const r1 = await resume(synthetic, store.runs, runId, { decision: "accept" }, ctx());
     expect(r1.status).toBe("completed");
-    const len1 = store.getLog(runId).length;
+    const len1 = store.runs.getLog(runId).length;
 
-    const r2 = await resume(synthetic, store, runId, { decision: "accept" }, ctx());
+    const r2 = await resume(synthetic, store.runs, runId, { decision: "accept" }, ctx());
     expect((r2 as any).idempotent).toBe(true);
-    expect(store.getLog(runId).length).toBe(len1);
+    expect(store.runs.getLog(runId).length).toBe(len1);
   });
 });
 
@@ -125,12 +126,12 @@ describe("engine · step 抛错 → failed（不卡 running）", () => {
   test("step.execute 抛错 → run 返 failed、status=failed、有 failed 日志", async () => {
     const store = newStore();
     const runId = newRunId();
-    store.createRun({ runId, workflowId: throwing.id, workspaceId: "ws_test", input: {} });
-    const res = await run(throwing, store, runId, ctx());
+    store.runs.createRun({ runId, workflowId: throwing.id, workspaceId: "ws_test", input: {} });
+    const res = await run(throwing, store.runs, runId, ctx());
     expect(res.status).toBe("failed");
     expect((res as any).note).toContain("pi exploded");
-    expect(store.getRun(runId)?.status).toBe("failed"); // 关键：不卡 running
-    const failed = store.getLog(runId).filter((e) => e.status === "failed");
+    expect(store.runs.getRun(runId)?.status).toBe("failed"); // 关键：不卡 running
+    const failed = store.runs.getLog(runId).filter((e) => e.status === "failed");
     expect(failed.length).toBe(1);
     expect(failed[0].stepId).toBe("boom");
     expect((failed[0].output as any)?.error).toContain("pi exploded");
@@ -139,11 +140,11 @@ describe("engine · step 抛错 → failed（不卡 running）", () => {
   test("resume 一个 failed run → 报 failed、不再推进（可审计，不卡死）", async () => {
     const store = newStore();
     const runId = newRunId();
-    store.createRun({ runId, workflowId: throwing.id, workspaceId: "ws_test", input: {} });
-    await run(throwing, store, runId, ctx());
-    const before = store.getLog(runId).length;
-    const r = await resume(throwing, store, runId, {} as any, ctx());
+    store.runs.createRun({ runId, workflowId: throwing.id, workspaceId: "ws_test", input: {} });
+    await run(throwing, store.runs, runId, ctx());
+    const before = store.runs.getLog(runId).length;
+    const r = await resume(throwing, store.runs, runId, {} as any, ctx());
     expect(r.status).toBe("failed"); // 报 failed（不再卡 running）
-    expect(store.getLog(runId).length).toBe(before); // 不再推进
+    expect(store.runs.getLog(runId).length).toBe(before); // 不再推进
   });
 });

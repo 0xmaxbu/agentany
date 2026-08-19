@@ -4,7 +4,7 @@
 import { describe, test, expect } from "bun:test";
 import { createApp } from "../src/app";
 import { openDbMigrated } from "../src/db/client";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -16,6 +16,11 @@ import type { RunDeps } from "../src/runs";
 import type { ConfiguredRunPiStream } from "../src/pi/runPi-factory";
 
 const JH = { "content-type": "application/json" };
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const until = async (pred: () => boolean, t = 3000): Promise<void> => {
+  const s = Date.now();
+  while (Date.now() - s < t) { if (pred()) return; await delay(10); }
+};
 
 /** 计数 stub：记录每次调用的 bridge 参数（c1 断言 prompt 不重复跑、c4 断言无 bridge）。 */
 function countingStub() {
@@ -32,15 +37,15 @@ function countingStub() {
 async function setup() {
   const stub = countingStub();
   const db = openDbMigrated(":memory:");
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const userStore = new UserStore(db);
   await userStore.createUser({ username: "m1", password: "pw-long-enough", role: "member" });
   const m1 = userStore.getUserByUsername("m1")!;
   const queues = new ConversationQueues();
   const deps: RunDeps = {
-    store, userStore, streamRegistry: new StreamRegistry(),
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback, userStore, streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
     runPiStreamFactory: stub.factory,
     conversationQueues: queues,
@@ -66,12 +71,12 @@ describe("review-c1：产出会话不双跑（user_message 帧带 taskId，TurnT
       method: "POST", headers: { ...JH, authorization: tok }, body: JSON.stringify({ content: "用户插一句" }),
     });
     expect(posted.status).toBe(202);
-    await ctx.queues.drained(task.outputConversationId!); // 等 attach 后的首个 turn 跑完
+    await until(() => ctx.stub.calls.length >= 1); // route 202 不等待——poll stub 已记录 attach turn 调用
+    await delay(40); // 使其跑完 + 可能的 title 副调用（确定性 stub 快）；makeExecuteTask 内部 await whenDone 完备后续
     ctx.stub.calls.length = 0; // 清零——只数任务执行的 turn
 
     // 到点执行（executeTask publish user_message 帧——修复前会经 TurnTrigger 双起一条 HTTP turn）
     await makeExecuteTask({ deps: ctx.deps, queues: ctx.queues, eventBus: ctx.deps.eventBus! })(task, "cron");
-    await ctx.queues.drained(task.outputConversationId!);
     await new Promise((r) => setTimeout(r, 30));
 
     // 同一任务 prompt 只跑一次（双跑 = calls 里两条同 prompt 或 CHAT_SYSTEM_PROMPT 混入）
@@ -90,7 +95,6 @@ describe("review-c4：任务 turn 无 bridge（nonce 不发、loopback 不放行
       workspaceId: "ws_company", creatorId: ctx.m1.id, firstFireAt: new Date(Date.now() + 3600_000).toISOString(),
     });
     await makeExecuteTask({ deps: ctx.deps, queues: ctx.queues, eventBus: ctx.deps.eventBus! })(task, "cron");
-    await ctx.queues.drained(task.outputConversationId!);
     await new Promise((r) => setTimeout(r, 20));
 
     const taskTurns = ctx.stub.calls.filter((c) => c.prompt === "无桥任务");

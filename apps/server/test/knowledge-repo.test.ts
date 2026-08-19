@@ -7,7 +7,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { UserStore } from "../src/auth/store";
 import { StreamRegistry } from "../src/chat/stream-registry";
 import { WorkspaceStore } from "../src/workspaces/store";
@@ -39,13 +39,13 @@ function stubStreamFactory(results: Array<{ text?: string; blocks?: StreamBlock[
 }
 
 function mkDeps(factory: any, db = openDbMigratedMem()): { deps: RunDeps; db: any } {
-  const store = new WorkflowStore(db);
+  const store = createStores(db);
   const deps: RunDeps = {
-    store,
+    runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, feedbackStore: store.feedback,
     userStore: new UserStore(db),
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(db),
-    taskStore: new ScheduledTaskStore(db, store),
+    taskStore: new ScheduledTaskStore(db, store.chat),
     eventBus: new EventBus(),
     runPiStreamFactory: factory,
   };
@@ -165,7 +165,7 @@ describe("runTurn chat turn 经验注入（#35）", () => {
 
     const stub = stubStreamFactory([{ text: "好" }]);
     const { deps } = mkDeps(stub.factory);
-    const conv = deps.store.createConversation({ id: "c_m1", workspaceId: "ws_company", userId: "u_m1" });
+    const conv = deps.chatStore.createConversation({ id: "c_m1", workspaceId: "ws_company", userId: "u_m1" });
     await runChatTurn(deps, conv.id);
     const joined = (stub.calls[0].appendSystemPrompt ?? []).join("\n");
     expect(joined).toContain("先给结论"); // global
@@ -177,7 +177,7 @@ describe("runTurn chat turn 经验注入（#35）", () => {
     ensureKnowledgeRepo(); // 空态（未手写）
     const stub = stubStreamFactory([{ text: "好" }]);
     const { deps } = mkDeps(stub.factory);
-    const conv = deps.store.createConversation({ id: "c_ux", workspaceId: "ws_company", userId: "u_x" });
+    const conv = deps.chatStore.createConversation({ id: "c_ux", workspaceId: "ws_company", userId: "u_x" });
     await runChatTurn(deps, conv.id);
     const joined = (stub.calls[0].appendSystemPrompt ?? []).join("\n");
     expect(joined).not.toContain("[通用经验]");

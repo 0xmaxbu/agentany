@@ -4,7 +4,7 @@
 import { describe, test, expect } from "bun:test";
 import { ConversationQueues } from "../src/chat/queue";
 import { EventBus } from "../src/chat/eventbus";
-import { WorkflowStore } from "../src/workflow-engine/store";
+import { createStores, type Stores } from "../src/stores";
 import { openDbMigrated } from "../src/db/client";
 import { runTurn } from "../src/chat/turn";
 import type { ConfiguredRunPiStream } from "../src/pi/runPi-factory";
@@ -29,8 +29,8 @@ const stubStream = (): ConfiguredRunPiStream => async (call) => {
   return { text: "PONG", messages: [], toolResults: [] };
 };
 const newStore = () => {
-  const store = new WorkflowStore(openDbMigrated(":memory:"));
-  store.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u", title: "t" }); // #命名：已有 title → 不触发自动命名
+  const store = createStores(openDbMigrated(":memory:"));
+  store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: "u", title: "t" }); // #命名：已有 title → 不触发自动命名
   return store;
 };
 
@@ -80,7 +80,7 @@ describe("run_* 不再驱动事件 turn（ADR-0025 决策 2/6/9；零 LLM 直投
 describe("#16/#17 每轮注入（经内联 turn 通路，runTurn/compose 承担）", () => {
   test("store 有 pending question → turn appendSystemPrompt 含 [待处理提问] + runId + prompt", async () => {
     const store = newStore();
-    store.createQuestion({ conversationId: "c1", runId: "r-pending", prompt: "选角度？", options: ["A", "B"], resumeSchema: { _t: "enum", vals: ["A", "B"] } });
+    store.hitl.createQuestion({ conversationId: "c1", runId: "r-pending", prompt: "选角度？", options: ["A", "B"], resumeSchema: { _t: "enum", vals: ["A", "B"] } });
     let capturedAppend: string[] | undefined;
     const deps = fullDeps(store, { runPiStreamFactory: (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt; await stubStream()(call); return { text: "x", messages: [], toolResults: [] };
@@ -100,7 +100,7 @@ describe("#16/#17 每轮注入（经内联 turn 通路，runTurn/compose 承担�
 
   test("自主卡（runId null）注入引导续答而非 resume——无 run 可续，不教 resume_workflow", async () => {
     const store = newStore();
-    store.createQuestion({ conversationId: "c1", runId: null, prompt: "澄清：目标预算区间？", options: ["<10w", ">50w"] });
+    store.hitl.createQuestion({ conversationId: "c1", runId: null, prompt: "澄清：目标预算区间？", options: ["<10w", ">50w"] });
     let capturedAppend: string[] | undefined;
     const deps = fullDeps(store, { runPiStreamFactory: (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt; await stubStream()(call); return { text: "x", messages: [], toolResults: [] };
@@ -138,8 +138,8 @@ describe("#16/#17 每轮注入（经内联 turn 通路，runTurn/compose 承担�
 
   test("#18：approval 卡（kind=approval）不注入 pi——只 kind=ask 注入", async () => {
     const store = newStore();
-    store.createQuestion({ conversationId: "c1", runId: "r-ask", prompt: "选角度？", options: ["A", "B"] }); // ask 卡（应注入）
-    store.createQuestion({ conversationId: "c1", runId: null, kind: "approval", workflowId: "brand-research", input: {}, prompt: "需审批", options: ["批准", "拒绝"] }); // approval 卡（不应注入）
+    store.hitl.createQuestion({ conversationId: "c1", runId: "r-ask", prompt: "选角度？", options: ["A", "B"] }); // ask 卡（应注入）
+    store.hitl.createQuestion({ conversationId: "c1", runId: null, kind: "approval", workflowId: "brand-research", input: {}, prompt: "需审批", options: ["批准", "拒绝"] }); // approval 卡（不应注入）
     let capturedAppend: string[] | undefined;
     const deps = fullDeps(store, { runPiStreamFactory: (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt; await stubStream()(call); return { text: "x", messages: [], toolResults: [] };
@@ -157,9 +157,9 @@ describe("#16/#17 每轮注入（经内联 turn 通路，runTurn/compose 承担�
 
   test("挂起 run → 下一轮 appendSystemPrompt 含 [挂起工作流] + runId/stepId", async () => {
     const store = newStore();
-    store.createRun({ runId: "r-susp", workflowId: "wf-x", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    store.updateRunStatus("r-susp", "suspended");
-    store.appendLog("r-susp", { stepId: "review", status: "suspended", suspendPayload: { options: ["A"] }, resumeSchema: { _t: "enum" } });
+    store.runs.createRun({ runId: "r-susp", workflowId: "wf-x", workspaceId: "ws_company", conversationId: "c1", input: {} });
+    store.runs.updateRunStatus("r-susp", "suspended");
+    store.runs.appendLog("r-susp", { stepId: "review", status: "suspended", suspendPayload: { options: ["A"] }, resumeSchema: { _t: "enum" } });
     let capturedAppend: string[] | undefined;
     const deps = fullDeps(store, { runPiStreamFactory: (): ConfiguredRunPiStream => async (call) => {
       capturedAppend = (call as any).appendSystemPrompt; await stubStream()(call); return { text: "x", messages: [], toolResults: [] };
