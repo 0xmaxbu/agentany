@@ -7,6 +7,7 @@ import { CHAT_EXTENSIONS } from "./extensions";
 import { scopeOf, resolveScopePaths } from "../scope";
 import { listWorkflows } from "../registry";
 import { loadProjectDoc } from "./project-doc";
+import { loadSoul } from "./soul";
 import { composeSystemPrompt } from "./compose-prompt";
 import { collectExperience } from "../knowledge/repo";
 import type { RunDeps } from "../runs";
@@ -17,7 +18,8 @@ export type TurnSend = (frame: Frame) => void;
 
 // chat turn 的基础 system 追加（--append-system-prompt）：角色 + 工具清单 + 判答指引。
 // 动态段（项目背景/工作流目录/挂起 run/pending ask）由 composeSystemPrompt（#16/#17）产，在下prepend 本常量。
-const CHAT_SYSTEM_PROMPT = `你是 agentany 的对话助手，用户是非技术内部成员，请用自然、清晰的语言回应。
+// export 供 A/B 探针（scripts/soul-ab-probe.mjs）复用——对照组=生产减 Soul，不复制防漂移。
+export const CHAT_SYSTEM_PROMPT = `你是 agentany 的对话助手，用户是非技术内部成员，请用自然、清晰的语言回应。
 你可用以下工具（经桥接通道）：
 - ping：探活服务端
 - start_workflow：后台异步启动一个工作流（run 不阻塞对话），进度会自动推给用户
@@ -70,6 +72,8 @@ export async function runTurn(
     experience: collectExperience(conv.userId),
     ...(opts?.focusQuestionId !== undefined ? { focusQuestionId: opts.focusQuestionId } : {}),
   });
+  // ADR-0024：全局沟通契约紧随基础 system（用户/事件 turn 共用本注入点；任务 turn 走 opts 覆盖、不带）。
+  const soul = loadSoul();
   let result;
   try {
     result = await runPiStream({
@@ -84,7 +88,7 @@ export async function runTurn(
       bridge: opts?.noBridge === true
         ? undefined // review-c4：任务 turn 无交互通道——nonce 不注入 env、loopback 不放行（bash curl 亦不可达）
         : { port: BRIDGE_PORT, nonce, url: `http://localhost:${BRIDGE_PORT}` },
-      appendSystemPrompt: opts?.appendSystemPrompt ?? [CHAT_SYSTEM_PROMPT, ...appendDynamic],
+      appendSystemPrompt: opts?.appendSystemPrompt ?? [CHAT_SYSTEM_PROMPT, ...(soul ? [soul] : []), ...appendDynamic],
     });
   } catch (e) {
     // 真 pi：abort → 子进程被杀 → reject。stub：可能 resolve（下面 signal.aborted 兜底）。
