@@ -67,6 +67,7 @@
 | IM 通道 (IM channel) | Web/App 之外的即时通讯通道，接入 chat 的 pending 卡决策（v1 飞书，钉钉同接缝第二批；ADR-0028）。**一应用一条长连接服务全租户**（飞书集群模式，非 per-user）；出站是 REST 短连——多用户无连接数性能障碍，瓶颈在平台 API 限频。 |
 | IM 决策入口 (IM decision entry) | IM 上回答 pending 卡的通道并集：**按钮作答**与**文本作答**两条，都收敛到同一张卡的 CAS（响应只处理一次）。 |
 | 按钮作答 (Button answer) | IM 的**确定性通道**：卡片选项渲染成按钮，`card.action.trigger` 回调携带 questionId+值 → 直接 dispatch/CAS，零 LLM。approval/task 由此在 IM 上决策（重开 #49 决策 5，ADR-0028）；文本仍不放行这两种卡。 |
+| Soul（Soul.md） | chat 助手的**全局沟通契约**（ADR-0024）：仓库根 `Soul.md`，服务端逐轮注入所有经 `runTurn` 的 LLM turn（用户消息/IM 回流/待处理提问判答同口吻；headless 任务 turn 不注）。内容=一句话身份锚 + 输出规则（结论先行、无 emoji、不铺垫不客套、只报结果）。**底线优先级**：项目记忆/经验只能补充不能推翻，用户当场明确要求是唯一例外。管「怎么说话」；项目记忆（PROJECT.md）管「说什么」。_Avoid_：persona、人设 |
 | 文本作答 (Text answer) | IM 的**归一化通道**：用户打字 → LLM 按 resumeSchema 归一化判答。仅对 kind=ask 卡生效；多张候选并存时走**选择卡**收口。 |
 | 选择卡 (Selection card) | **多卡歧义收口**：用户文本无法判断答哪张 pending 卡时，bot 发一张系统卡列出各候选（仅 prompt）追问目标，点击后用缓存的待确认文本判答。不归任一工作流会话——只回答「答哪张」。 |
 | 绑定码 (Bind code) | 用户自助绑定 IM 的凭证：Web 已登录用户点「绑定 IM」生成 **4 位数字、10 分钟有效、单次使用**的码，到 IM 发 `#bind <码>` → 把该 IM 身份（如飞书 open_id）绑到自己的 agentany 账号。安全靠 TTL+单次消费双兜底（ADR-0028 决策 2；推翻 #49 决策 6 的 admin 静态绑定）。 |
