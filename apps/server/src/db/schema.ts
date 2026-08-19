@@ -78,7 +78,7 @@ export const hitlQuestions = sqliteTable("hitl_questions", {
   kind: text("kind").notNull().default("ask"), // ask（#16 HITL）| approval（#18 审批门）；旧行默认 ask
   workflowId: text("workflowId"), // #18 approval：待审批的工作流（ask 卡为空）
   input: text("input"), // #18 approval：待审批的 input（JSON）—— approve 后用它 createRun
-  context: text("context"), // ADR-0030：ask 卡决策辅助 markdown 一等列（退役 input-as-{context} 走私，0019 迁移）
+  context: text("context"), // ADR-0030：ask 卡决策辅助 markdown 一等列（退役 input-as-{context} 走私，0022 迁移）
   prompt: text("prompt").notNull(),
   options: text("options").notNull(), // JSON string[]（labels）
   values: text("values"), // ADR-0025（#46）：JSON AskOption[] = 显式 {label,value} 快照——卡自包含，点选查表确定性 resume；重启/改 workflow 定义不失效

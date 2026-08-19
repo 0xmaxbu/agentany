@@ -64,10 +64,10 @@ describe("GET /conversations/:id/runs（#53/T4）", () => {
   test("步骤从 log 收敛：同一步多次状态取最新（running→completed），不同步保出现序", async () => {
     ctx.store.chat.createConversation({ id: "c1", workspaceId: "ws_company", userId: ctx.m1.id });
     ctx.store.runs.createRun({ runId: "r_log", workflowId: "wf-x", workspaceId: "ws_company", conversationId: "c1", input: {} });
-    ctx.store.runs.appendLog("r_log", { stepId: "review", status: "running", ts: "t1" });
-    ctx.store.runs.appendLog("r_log", { stepId: "s1", status: "running", ts: "t2" });
-    ctx.store.runs.appendLog("r_log", { stepId: "review", status: "completed", ts: "t3" }); // review 终态覆盖
-    ctx.store.runs.appendLog("r_log", { stepId: "s1", status: "completed", ts: "t4" });
+    ctx.store.runs.appendLog("r_log", { stepId: "review", status: "running" });
+    ctx.store.runs.appendLog("r_log", { stepId: "s1", status: "running" });
+    ctx.store.runs.appendLog("r_log", { stepId: "review", status: "completed" }); // review 终态覆盖
+    ctx.store.runs.appendLog("r_log", { stepId: "s1", status: "completed" });
     const token = await ctx.login("m1");
     const r = await ctx.app.request("/conversations/c1/runs", { headers: { authorization: token } });
     const { runs } = await r.json() as { runs: any[] };

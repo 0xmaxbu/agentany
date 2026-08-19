@@ -5,15 +5,13 @@
 import type { Frame } from "../chat/eventbus";
 import type { ImCardModel } from "./types";
 import type { ImPlatformAdapter } from "./types";
-import { KIND_TITLES, FOOTER_OPEN_HINT } from "./card-model";
-
-const KIND_LABELS = KIND_TITLES;
+import { KIND_TITLES } from "./card-model";
 
 /** hitl_request → 纯文本通知；hitl_answered → 已处理确认；其余帧 → null（不产出 IM 文本）。 */
 export function renderHitlFrame(f: Frame): string | null {
   switch (f.type) {
     case "hitl_request": {
-      const label = KIND_LABELS[f.kind ?? "ask"] ?? "提问";
+      const label = KIND_TITLES[f.kind ?? "ask"] ?? "提问";
       const options = f.options ?? [];
       const optsList = options.length ? `\n选项：\n${options.map((o) => `- ${o}`).join("\n")}` : "";
       return `${label}：${f.prompt}${optsList}`;
@@ -33,7 +31,7 @@ export function renderHitlFrame(f: Frame): string | null {
 
 /** 领域卡模型 → 纯文本（optionless 兜底/超限回落/补发 textFallback 共用同源）。 */
 export function cardModelToText(card: ImCardModel): string {
-  const label = KIND_LABELS[card.kind] ?? "提问";
+  const label = KIND_TITLES[card.kind] ?? "提问";
   const optsList = card.options.length ? `\n选项：\n${card.options.map((o) => `- ${o.label}`).join("\n")}` : "";
   return `${label}：${card.prompt}${optsList}`;
 }

@@ -236,7 +236,8 @@ export class RunLifecycle {
     const publish = (frame: Frame) => (publishTo ? this.deps.eventBus.publish(publishTo, frame) : undefined);
     const run = this.deps.runStore.getRun(runId);
     if (outcome.status === "completed") {
-      this.deliverBrief(publish, runId, run, "completed", { log: this.deps.runStore.getLog(runId), note: undefined });
+      // ADR-0031 决策 4：completed 权威 raw 源 = 引擎 lastOutput（不再从 raw log 末条重派生）；log 仅 stepListFallback 兜底用。
+      this.deliverBrief(publish, runId, run, "completed", { lastOutput: outcome.lastOutput, log: this.deps.runStore.getLog(runId), note: undefined });
     } else if (outcome.status === "failed") {
       this.deliverBrief(publish, runId, run, "failed", { log: [], note: outcome.note });
     } else if (outcome.status === "suspended") {
@@ -268,7 +269,7 @@ export class RunLifecycle {
     runId: string,
     run: RunRow | undefined,
     terminal: "completed" | "failed",
-    src: { log: ReturnType<RunsStore["getLog"]>; note: string | undefined; briefOverride?: string },
+    src: { log: ReturnType<RunsStore["getLog"]>; lastOutput?: unknown; note: string | undefined; briefOverride?: string },
   ): void {
     if (!run) {
       // 行被删/不存在：仍发边界帧（展示流不受影响），不写库。
@@ -276,11 +277,11 @@ export class RunLifecycle {
       else publish({ type: "run_failed", runId, note: src.note });
       return;
     }
-    const last = src.log[src.log.length - 1];
+    const lastOut = src.lastOutput ?? src.log[src.log.length - 1]?.output; // 决策 4：completed 优先引擎 lastOutput
     const brief = src.briefOverride ?? (terminal === "completed"
-      ? extractBrief(last?.output) ?? stepListFallback(src.log)
+      ? extractBrief(lastOut) ?? stepListFallback(src.log)
       : extractNoteBrief(src.note));
-    const artifacts = terminal === "completed" ? extractArtifacts(last?.output) : [];
+    const artifacts = terminal === "completed" ? extractArtifacts(lastOut) : [];
     const msg = buildBriefMessage({
       workflowId: run.workflowId, terminal, brief, artifacts, workspaceId: run.workspaceId,
     });

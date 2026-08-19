@@ -64,14 +64,15 @@ export async function judgeAskCard(deps: RunDeps, q: QuestionRow, text: string):
   const convId = q.conversationId;
   const queues = deps.conversationQueues ?? new ConversationQueues();
   const res = startUserTurn(
-    { deps, queues, publish: (f) => deps.eventBus?.publish(convId, f) }, // publish 强制注入：prod eventBus；测试经 deps 覆盖/收集器
+    { deps, queues, publish: (f) => deps.eventBus!.publish(convId, f) }, // publish 强制注入（ADR-0029 决策 4）：eventBus 由 boot 恒注入，缺装配即抛错——消灭 eventBus? 静默丢弃路径
     convId, text, { focusQuestionId: q.id }, // T6 消歧聚焦：判答只注入这一张 ask 卡
   );
   if (res.status === "busy") return { status: "busy", conversationId: convId }; // 预检拒未落库（429 语义，同 POST 路由）
   if (res.status === "appended_only") return { status: "busy", conversationId: convId, messageId: res.messageId }; // 双保险失败：消息已落 → error 帧已发
   const outcome = await res.whenDone!;
   if (outcome.status === "error") {
-    return { status: "processed", conversationId: convId, questionId: q.id, messageId: res.messageId, reply: "处理失败，请重试或点选卡片" }; // 回执不假装成功（ADR-0029 决策 6）
+    console.warn(`[im-inbound] 判答 q${q.id} 处理失败：${outcome.error}`); // 决策 6：error 短回执 + server log（回执不假装成功）
+    return { status: "processed", conversationId: convId, questionId: q.id, messageId: res.messageId, reply: "处理失败，请重试或点选卡片" };
   }
   if (outcome.status === "aborted") {
     return { status: "processed", conversationId: convId, questionId: q.id, messageId: res.messageId, reply: "已处理" }; // 无 assistant 产出（终止）

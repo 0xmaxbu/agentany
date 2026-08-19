@@ -21,11 +21,12 @@ export function isClosedChoice(resumeSchema: unknown): boolean {
 }
 
 /** footer 开面：仅 ask 卡且 schema 开放时显文本作答邀请——approval/task 文本不放行（恒按钮面，不误导）。 */
-export function isTextOk(input: Pick<ImCardInputLike, "kind" | "resumeSchema">): boolean {
+export function isTextOk(input: OpennessCheckInput): boolean {
   return input.kind === "ask" && !isClosedChoice(input.resumeSchema);
 }
 
-interface ImCardInputLike {
+/** footer 开面判定的最小入参（kind + resumeSchema 就够，不要求完整卡模型/行）。 */
+interface OpennessCheckInput {
   kind: string;
   resumeSchema?: unknown;
 }

@@ -19,7 +19,7 @@
 ## 决策
 
 1. **`runs/lifecycle.ts` 导出 `RunLifecycle`**（替换 `RunRegistry`，5 处 import 改向）：组合、verdict、投递、收尾一体；runner 保持纯引擎（store 可注入、runPi 在 ctx）。
-2. **单组合根**：`start({workflowId, input, conversationId?, approved?, sync?})` ——唯一 gate：validate → `decide()` 审批门 → createRun → 注册句柄 → sync=true ? await : detached。ctx 装配一份（删 buildCtx/ctxFor）。`routes/workflows.ts` 改调 lifecycle（**审批门统一堵口**）。
+2. **单组合根**：`start({workflowId, input, conversationId?, approved?, sync?})` ——唯一 gate：validate → `decide()` 审批门 → createRun → 注册句柄 → sync=true ? await : detached。ctx 装配一份（删 buildCtx/ctxFor）。`routes/workflows.ts` 改调 lifecycle（**审批门统一堵口**）。HTTP 直调路径**无会话锚**（approval 卡需要回复锚点），require_approval 工作流经 `start` 无 `conversationId` 时 `requireApproval` 抛 `InvalidInput` → **400 堵口**（非 needs_approval）；回归见 `test/approvals.test.ts`「HTTP 旁路锁定」。审批自动化仍从会话内（IM/web 消息路由）发起。
 3. **verdict 单源**：引擎公开纯函数 `verdictOf(runId, resumeData)`（clean/rejected/idempotent）；`resumeInner` 权威使用 + lifecycle 同步预检同源。
 4. **引擎诚实化**：`resumeInner` 二次挂起补发 `resumeSchema`（修 runner.ts:196）；`RunOutcome.completed` 带 `lastOutput`；引擎顶层 catch-all → `failed`（永不越过状态机抛出——调用方 catch 路径与 status 双写消失）。
 5. **G1 原子挂起（ADR-0025 决策 6 落实）**：RunsStore `suspendedStep(runId, {stepId, input, payload, resumeSchema}) → {questionId}`，**一个事务**写【log 行(status=suspended) + run status + ask 卡(values 快照)】。引擎挂起点直接调用 → `RunOutcome.suspended` 变纯类型 `{runId, stepId, questionId}`；**`deliverAskCard` 删除**（重拆/回读兜底全消失）；畸形产出（payload 无 question）→ 引擎走 `appendStep(suspended, 无卡)` 兜底 + `[挂起工作流]` 注入（延续 ADR-0025 决策 6 注脚）。

@@ -13,6 +13,21 @@ import { cardInputOf } from "./card-model";
 
 const UNBOUND_TOAST = { type: "error" as const, content: "请先在 Web 绑定后再操作" };
 
+/** 卡回调前置守卫（card_action/select_choice 共用）：身份 → 卡存在 → pending 判定。ok 时带解析 identity 与卡；否则给 ack。 */
+function guardCardEvent(
+  deps: RunDeps,
+  e: { imUserId: string; platform: string; questionId: number },
+): { ok: true; user: NonNullable<ReturnType<NonNullable<RunDeps["imStore"]>["resolve"]>>; q: NonNullable<ReturnType<RunDeps["hitlStore"]["getQuestion"]>> } | { ok: false; ack: ImEventResult } {
+  const user = deps.imStore?.resolve(e.imUserId, e.platform);
+  if (!user) return { ok: false, ack: { status: "card_ack", ack: { toast: UNBOUND_TOAST, answered: false } } };
+  const q = deps.hitlStore.getQuestion(e.questionId);
+  if (!q) return { ok: false, ack: { status: "card_ack", ack: { toast: { type: "error", content: "卡已失效" }, answered: false } } };
+  if (q.status !== "pending") {
+    return { ok: false, ack: { status: "card_ack", ack: { toast: { type: "info", content: "该卡已被处理" }, answered: true, question: q } } };
+  }
+  return { ok: true, user, q };
+}
+
 /** #bind 命中后一次性补发全部存量 pending 卡（素材与出站路由同源 cardInputOf；uuid 同路由幂等键；走 sendCardGuarded 守卫）。 */
 async function backfillPendingCards(deps: RunDeps, out: ImPlatformAdapter, imUserId: string, platform: string, userId: string): Promise<number> {
   const pendings = deps.hitlStore.listPendingCardsForUser(userId);
@@ -50,13 +65,9 @@ export async function handleCardActionEvent(
   deps: RunDeps,
   e: Extract<ImInboundEvent, { type: "card_action" }>,
 ): Promise<ImEventResult> {
-  const user = deps.imStore?.resolve(e.imUserId, e.platform);
-  if (!user) return { status: "card_ack", ack: { toast: UNBOUND_TOAST, answered: false } };
-  const q = deps.hitlStore.getQuestion(e.questionId);
-  if (!q) return { status: "card_ack", ack: { toast: { type: "error", content: "卡已失效" }, answered: false } };
-  if (q.status !== "pending") {
-    return { status: "card_ack", ack: { toast: { type: "info", content: "该卡已被处理" }, answered: true, question: q } };
-  }
+  const g = guardCardEvent(deps, e);
+  if (!g.ok) return g.ack;
+  const { user, q } = g;
   const res = await dispatchCardAnswer(deps, q.conversationId, e.questionId, e.value, user.userId);
   if (!res.handled) {
     if (res.skipTurn) return { status: "card_ack", ack: { toast: { type: "info", content: "该卡已被处理" }, answered: true, question: q } };
@@ -74,13 +85,9 @@ export async function handleSelectChoice(
   out: ImPlatformAdapter,
   textPending: PendingTextCache | undefined,
 ): Promise<ImEventResult> {
-  const user = deps.imStore?.resolve(e.imUserId, e.platform);
-  if (!user) return { status: "card_ack", ack: { toast: UNBOUND_TOAST, answered: false } };
-  const q = deps.hitlStore.getQuestion(e.questionId);
-  if (!q) return { status: "card_ack", ack: { toast: { type: "error", content: "卡已失效" }, answered: false } };
-  if (q.status !== "pending") {
-    return { status: "card_ack", ack: { toast: { type: "info", content: "该卡已被处理" }, answered: true, question: q } };
-  }
+  const g = guardCardEvent(deps, e);
+  if (!g.ok) return g.ack;
+  const { user, q } = g;
   if (!textPending) return { status: "card_ack", ack: { toast: { type: "error", content: "选择卡未就绪，请重新输入回答" }, answered: false } };
   const text = textPending.get(e.imUserId);
   if (!text) return { status: "card_ack", ack: { toast: { type: "error", content: "待回答的文本已过期，请重新输入回答" }, answered: false } };

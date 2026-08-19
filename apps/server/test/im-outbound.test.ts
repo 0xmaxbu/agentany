@@ -5,6 +5,8 @@ import { describe, test, expect } from "bun:test";
 import type { Frame } from "../src/chat/eventbus";
 import { renderHitlFrame, sendCardGuarded } from "../src/im/deliver";
 import { cardInputOf } from "../src/im/card-model";
+import { FeishuPlatformAdapter } from "../src/im/feishu/adapter";
+import type { FeishuTransport } from "../src/im/feishu/transport";
 
 const ask = (over: Partial<Extract<Frame, { type: "hitl_request" }>> = {}): Extract<Frame, { type: "hitl_request" }> => ({
   type: "hitl_request", questionId: 1, runId: null, prompt: "选哪个方案？", options: ["方案A", "方案B"], ...over,
@@ -114,5 +116,21 @@ describe("sendCardGuarded（ADR-0032 决策 4/5：领域投递守卫）", () => 
     await sendCardGuarded(a2, "ou_2", cardInputOf({ id: 6, kind: "ask", prompt: "t", options: [] }));
     expect(c2[0]).toMatchObject({ kind: "text", to: "ou_2" });
     expect(c2[0].text).toContain("t"); // 缺省 textFallback = 领域卡文本（prompt 在）
+  });
+});
+
+describe("oversize 降级（ADR-0032 决策 4：FeishuPlatformAdapter 内部自判自降）", () => {
+  test("超 30KB 卡 → sendCard 回落 sendText（textFallback；无裸 cardJson 出口）", async () => {
+    // 真实 adapter + stub transport（记录 send 载荷）：oversize 判别在 adapter.sendCard 内部
+    type Sent = { to: string; text?: string; cardJson?: unknown };
+    const sent: Sent[] = [];
+    const adapter = new FeishuPlatformAdapter({
+      transport: { send: async (to: string, msg: { text?: string; cardJson?: unknown }) => { sent.push({ to, text: msg.text, cardJson: msg.cardJson }); } } as unknown as FeishuTransport,
+    });
+    const big = cardInputOf({ id: 5, kind: "ask", prompt: "长".repeat(40 * 1024), options: ["A"] }); // prompt ≈40KB → 整卡必超 30KB
+    await adapter.sendCard("ou_9", big, { textFallback: "卡太长发不了，请看 Web" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toBe("卡太长发不了，请看 Web");
+    expect(sent[0].cardJson).toBeUndefined(); // 无裸 cardJson 出口
   });
 });

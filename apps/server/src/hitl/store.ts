@@ -115,15 +115,22 @@ export class HitlStore {
     return this.getQuestion(pending.id);
   }
 
-  /** 自主 ask 卡收口（ADR-0025 决策 10 修订）：回答即 solved。CAS pending→answered。 */
-  markQuestionAnswered(id: number, answer: unknown): QuestionRow | undefined {
-    const q = this.getQuestion(id);
-    if (!q || q.status !== "pending") return undefined;
-    this.db.update(hitlQuestions)
-      .set({ status: "answered", answer: J(answer), answeredAt: now() })
+  /** CAS 落答公共体（决策 10/#18/#28 收敛）：pre 预检 pending → UPDATE WHERE id+pending → changes===0（并发双击中被答）→ undefined。
+   *  extra 注入额外 set 列（如 approval 的 decidedBy/runId）。 */
+  private casAnswer(id: number, answer: unknown, extra?: (cur: QuestionRow) => Record<string, unknown>): QuestionRow | undefined {
+    const cur = this.getQuestion(id);
+    if (!cur || cur.status !== "pending") return undefined;
+    const res = this.db.update(hitlQuestions)
+      .set({ status: "answered", answer: J(answer), answeredAt: now(), ...(extra?.(cur) ?? {}) })
       .where(and(eq(hitlQuestions.id, id), eq(hitlQuestions.status, "pending")))
       .run();
+    if ((res as any).changes === 0) return undefined; // CAS 失败（并发双击之间被答）
     return this.getQuestion(id);
+  }
+
+  /** 自主 ask 卡收口（ADR-0025 决策 10 修订）：回答即 solved。CAS pending→answered。 */
+  markQuestionAnswered(id: number, answer: unknown): QuestionRow | undefined {
+    return this.casAnswer(id, answer);
   }
 
   /** #18：某 conv+workflow 的 pending 审批卡（幂等防护）。 */
@@ -141,14 +148,7 @@ export class HitlStore {
 
   /** #18：标审批卡 answered + 回填 runId(approve)/decidedBy。CAS 防并发双击；非 pending → undefined。 */
   markApprovalDecided(id: number, answer: unknown, decidedBy: string, runId?: string): QuestionRow | undefined {
-    const cur = this.getQuestion(id);
-    if (!cur || cur.status !== "pending") return undefined;
-    const res = this.db.update(hitlQuestions)
-      .set({ status: "answered", answer: J(answer), decidedBy, runId: runId ?? cur.runId, answeredAt: now() })
-      .where(and(eq(hitlQuestions.id, id), eq(hitlQuestions.status, "pending")))
-      .run();
-    if ((res as any).changes === 0) return undefined; // CAS 失败（并发双击之间被答）
-    return this.getQuestion(id);
+    return this.casAnswer(id, answer, (cur) => ({ decidedBy, runId: runId ?? cur.runId }));
   }
 
   /** #18 approve 二阶段：claim 成功后才 createRun，再回填 runId。防并发双击各起一个 run。 */
@@ -167,13 +167,6 @@ export class HitlStore {
 
   /** #28：任务卡落决（confirm/cancel）。CAS 防并发双击。 */
   markTaskCardDecided(id: number, answer: unknown): QuestionRow | undefined {
-    const cur = this.getQuestion(id);
-    if (!cur || cur.status !== "pending") return undefined;
-    const res = this.db.update(hitlQuestions)
-      .set({ status: "answered", answer: J(answer), answeredAt: now() })
-      .where(and(eq(hitlQuestions.id, id), eq(hitlQuestions.status, "pending")))
-      .run();
-    if ((res as any).changes === 0) return undefined;
-    return this.getQuestion(id);
+    return this.casAnswer(id, answer);
   }
 }

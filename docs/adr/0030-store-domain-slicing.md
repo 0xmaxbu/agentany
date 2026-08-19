@@ -18,7 +18,7 @@
    - `chat/store.ts` `ChatStore`：conversations（create/get/touch/rename/list/archive/restore/delete）+ messages（append/list）
    - `feedback/store.ts` `FeedbackStore`：`addFeedback/getFeedback/listFeedbackSince/maxFeedbackId/conversationOfFeedbackTarget/conversationIdOfMessage/conversationIdOfRun`
 2. **跨域事务按 subject 归属**：`setTerminalBrief`/`suspendWithAskCard` → **RunsStore**（run 为 subject；message/question 是同一 run 生命周期事务的副作用）；`deleteConversation` → **ChatStore**（会话级联）。不抽第五个「组合事务 store」（单组合源不建模块）。
-3. **`hitl_questions.context` 列**（drizzle 迁移 0019）：ask 卡 decision 素材一等列；写处收 typed `{prompt, options, values, context?}`，读处直读——**退役 `input-as-{context}` 走私约定**。v1 未发布零兼容负担。
+3. **`hitl_questions.context` 列**（drizzle 迁移 0022；计划号 0019 因 values 迁移 0019 先落位而顺延）：ask 卡 decision 素材一等列；写处收 typed `{prompt, options, values, context?}`，读处直读——**退役 `input-as-{context}` 走私约定**。v1 未发布零兼容负担。
 4. **`db-utils.ts`**：`now()/J/P` + 单调时钟（四类共享）。
 5. **`createStores(db)` 工厂**：返 `{runs, chat, hitl, feedback}`；boot（index.ts）与 `test/deps.ts` 共用——装配知识单点。
 6. **`RunDeps.store` 拆四域字段** `runStore/chatStore/hitlStore/feedbackStore`；runner 参数 `WorkflowStore` → `RunsStore`（引擎只学 runs 面）。
