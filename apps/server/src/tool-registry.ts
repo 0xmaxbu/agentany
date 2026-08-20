@@ -75,3 +75,50 @@ registerTool({
   }),
   remote: true,
 });
+
+// ADR-0036 / R-6 P2（agentany-client issue #3）：五执行器各独立注册（remote:true + argsSchema）。
+// 设备侧同名 handler 在 agentany-client/apps/client-core（defaultExecutors）；argsSchema 随 tool_call 下发。
+// bash 语义与 device_shell 重叠——保留占位（r3 预检测试载体），五件套从 bash 开始。
+registerTool({
+  name: "bash",
+  argsSchema: schema.object({
+    command: schema.string(),
+    cwd: schema.optional(schema.string()),
+    timeoutMs: schema.optional(schema.number()),
+  }),
+  remote: true,
+});
+registerTool({
+  name: "write",
+  argsSchema: schema.object({
+    path: schema.string(),
+    content: schema.string(),
+  }),
+  remote: true,
+});
+registerTool({
+  name: "read",
+  argsSchema: schema.object({
+    path: schema.string(),
+    offset: schema.optional(schema.number()),
+    limit: schema.optional(schema.number()),
+  }),
+  remote: true,
+});
+registerTool({
+  name: "grep",
+  argsSchema: schema.object({
+    pattern: schema.string(),
+    path: schema.optional(schema.string()),
+  }),
+  remote: true,
+});
+registerTool({
+  name: "edit",
+  argsSchema: schema.object({
+    path: schema.string(),
+    old: schema.string(),
+    new: schema.string(),
+  }),
+  remote: true,
+});
