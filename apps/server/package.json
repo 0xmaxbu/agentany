@@ -10,7 +10,7 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
-    "@agentany/ws-protocol": "file:../../../../../../agentany-client/packages/ws-protocol",
+    "@agentany/ws-protocol": "file:../../../../../../../agentany-client/packages/ws-protocol",
     "@earendil-works/pi-coding-agent": "^0.83.0",
     "cron-parser": "^5.10.0",
     "drizzle-orm": "^0.36.4",
