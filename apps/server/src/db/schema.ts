@@ -282,4 +282,8 @@ export const pendingStarts = sqliteTable("pending_starts", {
   reason: text("reason"), // 失败/取消原因
   createdAt: text("createdAt").notNull(),
   ttlAt: text("ttlAt").notNull(), // 过期判定键（sweep/惰性检查）
+  // R-4：ready 自动续重入 RunLifecycle.start 的入参（重建 run 的输入/会话/工作区）
+  input: text("input"), // 原始启动 input（JSON）
+  workspaceId: text("workspaceId"),
+  conversationId: text("conversationId"),
 });

@@ -25,6 +25,9 @@ export interface PendingRow {
   reason: string | null;
   createdAt: string;
   ttlAt: string;
+  input: string | null; // R-4：ready 自动续重入 start 的入参（JSON）
+  workspaceId: string | null;
+  conversationId: string | null;
 }
 
 export class RemoteStore {
@@ -125,8 +128,20 @@ export class RemoteStore {
   }
 
   // —— pending_starts：建/改/查已过期（R-4 状态机 + TTL）——
-  createPendingStart(p: { id: string; workflowId: string; userId: string; deviceId: string; ttlAt: string }): void {
-    this.db.insert(pendingStarts).values({ ...p, envStatus: "waiting_remediation", createdAt: now() }).run();
+  createPendingStart(p: {
+    id: string;
+    workflowId: string;
+    userId: string;
+    deviceId: string;
+    ttlAt: string;
+    input?: string | null; // R-4：重入入参 JSON（ready 自动续）
+    workspaceId?: string | null;
+    conversationId?: string | null;
+  }): void {
+    this.db
+      .insert(pendingStarts)
+      .values({ ...p, envStatus: "waiting_remediation", createdAt: now() })
+      .run();
   }
 
   /** 终态幂等：已离开 waiting_remediation 的 pending 拒绝被并发/过期上报改写；返回是否实际更新。 */
@@ -169,5 +184,8 @@ export class RemoteStore {
     reason: r.reason ?? null,
     createdAt: r.createdAt,
     ttlAt: r.ttlAt,
+    input: r.input ?? null,
+    workspaceId: r.workspaceId ?? null,
+    conversationId: r.conversationId ?? null,
   });
 }

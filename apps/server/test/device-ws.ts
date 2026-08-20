@@ -11,7 +11,8 @@ export interface DeviceCloseInfo {
 
 export class FakeDevice {
   ws: WebSocket | ServerWebSocket<unknown>;
-  private incoming: unknown[] = [];
+  private incoming: unknown[] = []; // 全量收件（断言/检查用）
+  private queue: unknown[] = []; // 未消费消息（waitForMessage 按 type 消费一支队）
   private waiters: Array<{ type: string; resolve: (m: unknown) => void }> = [];
   private closeP: Promise<DeviceCloseInfo>;
   private resolveClose!: (i: DeviceCloseInfo) => void;
@@ -43,10 +44,13 @@ export class FakeDevice {
     return this.incoming;
   }
 
-  /** 等一条 type 匹配的消息（服务端主动推送时用；R-4/5 的 env/tool 响应）。 */
+  /** 等一条 type 匹配的消息（服务端主动推送；consume-once——匹配即从队首消费，历史帧不回放）。 */
   waitForMessage(type: string, timeoutMs = 2000): Promise<unknown> {
-    const hit = this.incoming.find((m) => (m as any)?.type === type);
-    if (hit) return Promise.resolve(hit);
+    const hit = this.queue.find((m) => (m as any)?.type === type);
+    if (hit) {
+      this.queue.splice(this.queue.indexOf(hit), 1);
+      return Promise.resolve(hit);
+    }
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error(`timeout waiting device message type=${type}`)), timeoutMs);
       this.waiters.push({
@@ -57,6 +61,12 @@ export class FakeDevice {
         },
       });
     });
+  }
+
+  /** 清空收件/待消费队列（断言「不应再有帧」前用）。 */
+  clear(): void {
+    this.incoming.length = 0;
+    this.queue.length = 0;
   }
 
   send(obj: unknown): void {
@@ -87,7 +97,11 @@ export class FakeDevice {
     }
     this.incoming.push(msg);
     const i = this.waiters.findIndex((w) => w.type === (msg as any)?.type);
-    if (i >= 0) this.waiters.splice(i, 1)[0].resolve(msg);
+    if (i >= 0) {
+      this.waiters.splice(i, 1)[0].resolve(msg);
+    } else {
+      this.queue.push(msg); // 无 waitFor 等它 → 入队供后续 consume
+    }
   }
 
   private settle(code: number, reason: string): void {

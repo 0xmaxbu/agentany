@@ -36,5 +36,8 @@ CREATE TABLE `pending_starts` (
 	`reason` text,
 	`createdAt` text NOT NULL,
 	`ttlAt` text NOT NULL,
+	`input` text,
+	`workspaceId` text,
+	`conversationId` text,
 	FOREIGN KEY (`userId`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
 );

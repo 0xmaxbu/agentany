@@ -24,6 +24,7 @@ import { ImOutboundRouter } from "./im/outbound-router";
 import type { RunDeps } from "./runs";
 import { serve } from "./device/server"; // ADR-0033/R-2：HTTP + 设备 WS 同一 serve（升级前验 token）
 import { DeviceRegistry } from "./device/registry";
+import { DeviceEnvRpc } from "./device/env"; // ADR-0033/R-4：环境检测 RPC
 
 const db = openDbMigrated(); // 启动跑迁移（data/db.sqlite）
 ensureKnowledgeRepo(); // #35：knowledge repo 就位（空则 init+布局+skills 种子；已有则 no-op）
@@ -37,12 +38,35 @@ const sweptRuns = taskStore.sweepUnfinishedRuns(); // 重启：执行中崩溃�
 if (sweptRuns > 0) console.log(`[scheduler] swept ${sweptRuns} unfinished run(s) to failed (crash recovery)`);
 const eventBus = new EventBus(); // 共享事件中心：持久流订阅 + bridge run 事件，同一实例
 const conversationQueues = new ConversationQueues(); // 共享 per-conv FIFO：chat 路由与任务执行同实例（#29）——产出会话被用户浏览聊天时任务 turn 仍严格串行
-const runLifecycle = new RunLifecycle({ runStore, chatStore, hitlStore, eventBus }); // ADR-0031：run 生命周期单组合根（只学三域面）
+const lifecycleDeps = { runStore, chatStore, hitlStore, eventBus, remote: remoteStore }; // ADR-0033/R-3：preflight 需 remote（授权/启停/设备在线）；deviceRpc 晚绑定（envRpc 依赖 runLifecycle 建）
+const runLifecycle = new RunLifecycle(lifecycleDeps); // ADR-0031：run 生命周期单组合根（只学三域面）
 runLifecycle.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed + 「异常终止」brief（进程没在跑了）
 runLifecycle.reconcileBriefMessages(); // ADR-0025 决策 3：sweep 之后——终态但简报未发的 run 幂等补发（崩溃区间归零）
 const deps: RunDeps = { runStore, chatStore, hitlStore, feedbackStore, userStore, streamRegistry, workspaceStore, taskStore, imStore: new ImStore(db), eventBus, conversationQueues, runLifecycle, remote: remoteStore };
 const deviceRegistry = new DeviceRegistry(); // ADR-0033/R-2：在线设备 registry（单机登录 + preflight/转发寻址）
 deps.deviceRegistry = deviceRegistry; // device-logout 关闭在线连接者与 serve() 共享同一实例
+
+// ADR-0033/R-4：设备环境检测 RPC——route 收 env_report/env_remediated；onReady 复检通过 → 重入 start 自动续
+const envRpc = new DeviceEnvRpc({
+  registry: deviceRegistry,
+  remote: remoteStore,
+  onReady: (p) => {
+    let input: unknown = {};
+    try { input = p.input ? JSON.parse(p.input) : {}; } catch { /* 缺/坏入参按空（罕见） */ }
+    const role = userStore.getUserById(p.userId)?.role ?? "member";
+    void runLifecycle
+      .start({
+        workflowId: p.workflowId,
+        input,
+        workspaceId: p.workspaceId ?? undefined,
+        conversationId: p.conversationId ?? undefined,
+        caller: { id: p.userId, role },
+        skipEnvCheck: true, // 刚复检通过：授权/启停/设备在线照常，仅跳过环境 RPC
+      })
+      .catch((e) => console.log("[env] auto-resume failed", p.id, e instanceof Error ? e.message : e));
+  },
+});
+lifecycleDeps.deviceRpc = envRpc; // 晚绑定（preflight ④ 调用时读取）
 const scheduler = new TaskScheduler({
   store: taskStore,
   executeTask: makeExecuteTask({ deps, queues: conversationQueues, eventBus }), // #29 真链：runTurn 同构、任务 pi 无 bridge
@@ -79,6 +103,9 @@ const server = serve(app, {
   userStore,
   remote: remoteStore,
   registry: deviceRegistry,
+  onDeviceMessage: (entry, msg) => {
+    envRpc.route(entry, msg as Record<string, unknown>); // R-4：env_report / env_remediated
+  },
 });
 startBridge(BRIDGE_PORT, { runLifecycle, runStore, chatStore, hitlStore, eventBus, userStore }); // bridge RPC（loopback:3199，pi↔server；nonce 闸；#11/#14/#16；R-3 身份推导）
 console.log(`agentany server on http://localhost:${server.port}`);

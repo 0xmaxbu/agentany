@@ -76,6 +76,7 @@ describe("R-3 preflight 授权/启停 + admin 工作流管理（#75）", () => {
       runLifecycle,
     };
     process.env.AGENTANY_DEV_TOKEN = "dev-test-token"; // 「auth 强制」态（同 auth.test 惯例）
+    process.env.SECURITY_POSTURE = "dangerous"; // fixture 工作流（remote-device-wf）未列 auto 规则——全放，device-online 断言才指到真建 run
     server = serve(createApp(deps), { port: 0, userStore, remote: store.remote, registry });
     admin = await userStore.createUser({ username: "root", password: "password1", role: "admin" });
     member = await userStore.createUser({ username: "m1", password: "password1", role: "member" });
@@ -83,6 +84,7 @@ describe("R-3 preflight 授权/启停 + admin 工作流管理（#75）", () => {
 
   afterEach(() => {
     delete process.env.AGENTANY_DEV_TOKEN;
+    delete process.env.SECURITY_POSTURE;
     server.close();
   });
 
@@ -144,10 +146,12 @@ describe("R-3 preflight 授权/启停 + admin 工作流管理（#75）", () => {
     const off = await startRemote(tok);
     expect(off.status).toBe(409);
     expect(((await off.json()) as any).code).toBe("device_offline");
-    // 设备连上 → 放行
+    // 设备连上 → 放行且真建 run（sync 返回 RunOutcome 带 runId）
     const dev = await FakeDevice.connect(server.wsUrl("/ws/device"), { token: tok, deviceId: "dev1" });
     await delay(20);
-    expect((await startRemote(tok)).status).toBe(200);
+    const onlineRes = await startRemote(tok);
+    expect(onlineRes.status).toBe(200);
+    expect(((await onlineRes.json()) as any).runId).toBeTruthy();
     dev.close();
     await dev.waitClose();
     await delay(20);
