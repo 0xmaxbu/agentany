@@ -15,6 +15,8 @@ import type { ScheduledTaskStore } from "./scheduled-tasks/store";
 import type { TaskScheduler } from "./scheduled-tasks/scheduler";
 import type { ConversationQueues } from "./chat/queue";
 import type { ImStore } from "./im/store";
+import type { RemoteStore } from "./remote/store"; // ADR-0033/R-1：远端执行四表
+import type { DeviceRegistry } from "./device/registry"; // ADR-0033/R-2：在线设备内存 registry（单机登录/转发寻址）
 
 export interface RunDeps {
   runStore: RunsStore; // run/log 域（ADR-0030：跨域生命周期事务按 subject=run 归此）
@@ -23,6 +25,8 @@ export interface RunDeps {
   feedbackStore: FeedbackStore; // 反馈（多态挂载 + 蒸馏增量水位）
   userStore: UserStore; // 真 auth（ADR-0014）：身份解析 + 用户/token CRUD
   streamRegistry: StreamRegistry; // 活跃 SSE 登记：token 吊销时强断（不杀 run）
+  remote?: RemoteStore; // ADR-0033：remote_clients/grants/cfg/pending 四表（R-3 preflight、R-4 env、R-5 文件）
+  deviceRegistry?: DeviceRegistry; // ADR-0033/R-2：在线设备 registry（device-logout 关连者与 serve() 共享）
   workspaceStore: WorkspaceStore; // 工作空间 + 名单（ADR-0018）：鉴权边界唯一口径
   taskStore?: ScheduledTaskStore; // 定时任务三表（#25/ADR-0021）：与 store 共享 db；可选——既有测试装配不破坏
   imStore?: ImStore; // IM 身份绑定（spec #49 决策 6）：共享 db；可选——IM 未立项/未装配时零侵入

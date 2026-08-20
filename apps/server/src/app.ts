@@ -9,6 +9,7 @@ import { registerConversationRoutes } from "./routes/conversations";
 import { registerScheduledTaskRoutes } from "./routes/scheduled-tasks";
 import { registerFileRoutes } from "./routes/files";
 import { registerImRoutes } from "./routes/im";
+import { registerDeviceAuthRoutes } from "./device/routes"; // ADR-0033/R-2：设备登录/登出
 import type { RunDeps } from "./runs";
 
 export function createApp(deps: RunDeps): Hono<AppEnv> {
@@ -23,6 +24,7 @@ export function createApp(deps: RunDeps): Hono<AppEnv> {
   app.use("*", createAuthMiddleware(deps.userStore));
   app.get("/health", (c) => c.json({ ok: true }));
   registerAuthRoutes(app, deps);
+  registerDeviceAuthRoutes(app, deps); // ADR-0033/R-2：/auth/device-login（公开）+ /auth/device-logout
   registerUserRoutes(app, deps);
   registerWorkspaceRoutes(app, deps);
   registerWorkflowRoutes(app, deps);

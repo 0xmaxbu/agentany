@@ -28,6 +28,7 @@ export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {
     workspaceStore: new WorkspaceStore(db), // 与 store/userStore 共享同一 db（名单 join users；公司 ws 由迁移 seed）
     taskStore: new ScheduledTaskStore(db, store.chat), // #25：三表与蒸馏 seed 同 db；产出会话派生复用 store.createConversation
     imStore: new ImStore(db), // #51/T2：IM 身份绑定（IM 已接线）；IM 专项测试可覆盖
+    remote: store.remote, // ADR-0033/R-1：remote_clients/grants/cfg/pending（R-2 起 device routes 消费）
   };
   return withDefaultLifecycle(base, store, overrides);
 }
@@ -39,6 +40,7 @@ export function fullDeps(store: Stores, overrides: Partial<RunDeps> = {}): RunDe
     userStore: new UserStore(openDbMigrated(":memory:")),
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(openDbMigrated(":memory:")),
+    remote: store.remote,
   };
   return withDefaultLifecycle(base, store, overrides);
 }

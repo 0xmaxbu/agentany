@@ -22,10 +22,12 @@ import { handleImEvent } from "./im/dispatch";
 import { makePendingTextCache } from "./im/pending-text";
 import { ImOutboundRouter } from "./im/outbound-router";
 import type { RunDeps } from "./runs";
+import { serve } from "./device/server"; // ADR-0033/R-2：HTTP + 设备 WS 同一 serve（升级前验 token）
+import { DeviceRegistry } from "./device/registry";
 
 const db = openDbMigrated(); // 启动跑迁移（data/db.sqlite）
 ensureKnowledgeRepo(); // #35：knowledge repo 就位（空则 init+布局+skills 种子；已有则 no-op）
-const { runs: runStore, chat: chatStore, hitl: hitlStore, feedback: feedbackStore } = createStores(db); // ADR-0030 决策 5：{runs,chat,hitl,feedback} 清洗为 RunDeps 字段名
+const { runs: runStore, chat: chatStore, hitl: hitlStore, feedback: feedbackStore, remote: remoteStore } = createStores(db); // ADR-0030 决策 5：{runs,chat,hitl,feedback,remote} 清洗为 RunDeps 字段名
 const userStore = new UserStore(db); // 真 auth（ADR-0014）：与 store 共享同一 db
 const streamRegistry = new StreamRegistry(); // 活跃 SSE 登记：token 吊销时强断
 const workspaceStore = new WorkspaceStore(db); // 工作空间 + 名单（ADR-0018）：与 store/userStore 共享同一 db；公司 ws 由迁移 seed
@@ -38,7 +40,9 @@ const conversationQueues = new ConversationQueues(); // 共享 per-conv FIFO：c
 const runLifecycle = new RunLifecycle({ runStore, chatStore, hitlStore, eventBus }); // ADR-0031：run 生命周期单组合根（只学三域面）
 runLifecycle.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed + 「异常终止」brief（进程没在跑了）
 runLifecycle.reconcileBriefMessages(); // ADR-0025 决策 3：sweep 之后——终态但简报未发的 run 幂等补发（崩溃区间归零）
-const deps: RunDeps = { runStore, chatStore, hitlStore, feedbackStore, userStore, streamRegistry, workspaceStore, taskStore, imStore: new ImStore(db), eventBus, conversationQueues, runLifecycle };
+const deps: RunDeps = { runStore, chatStore, hitlStore, feedbackStore, userStore, streamRegistry, workspaceStore, taskStore, imStore: new ImStore(db), eventBus, conversationQueues, runLifecycle, remote: remoteStore };
+const deviceRegistry = new DeviceRegistry(); // ADR-0033/R-2：在线设备 registry（单机登录 + preflight/转发寻址）
+deps.deviceRegistry = deviceRegistry; // device-logout 关闭在线连接者与 serve() 共享同一实例
 const scheduler = new TaskScheduler({
   store: taskStore,
   executeTask: makeExecuteTask({ deps, queues: conversationQueues, eventBus }), // #29 真链：runTurn 同构、任务 pi 无 bridge
@@ -67,11 +71,14 @@ const app = createApp(deps);
 warnIfNoSandbox(); // 逃生阀开启时显眼告警（ADR-0011 A1）
 
 // h5：默认绑 loopback（防公网裸暴露）；prod 经反代时用 HOST 覆盖 + 真 auth。
-const server = Bun.serve({
+// ADR-0033/R-2：同一 Bun.serve 兼 HTTP + 设备 WS（/ws/device 升级前验 token；SSE 长连 idleTimeout=255 沿用）。
+const server = serve(app, {
   port: PORT,
   hostname: process.env.HOST ?? "127.0.0.1",
-  idleTimeout: 255, // SSE 持久流长连：默认 10s 会在事件间隙（pi 首 token 延迟常 >10s）掐断 GET /stream
-  fetch: (req) => app.fetch(req),
+  idleTimeout: 255,
+  userStore,
+  remote: remoteStore,
+  registry: deviceRegistry,
 });
 startBridge(BRIDGE_PORT, { runLifecycle, runStore, chatStore, hitlStore, eventBus }); // bridge RPC（loopback:3199，pi↔server；nonce 闸；#11/#14/#16）
 console.log(`agentany server on http://localhost:${server.port}`);
