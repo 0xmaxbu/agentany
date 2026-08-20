@@ -11,6 +11,7 @@ import { registerFileRoutes } from "./routes/files";
 import { registerImRoutes } from "./routes/im";
 import { registerDeviceAuthRoutes } from "./device/routes"; // ADR-0033/R-2：设备登录/登出
 import { registerAdminWorkflowRoutes } from "./routes/admin-workflows"; // ADR-0033/R-3：工作流管理（启停/授权）
+import { registerDeviceFileRoutes } from "./routes/device-files"; // ADR-0033/R-5：设备文件回传
 import type { RunDeps } from "./runs";
 
 export function createApp(deps: RunDeps): Hono<AppEnv> {
@@ -35,5 +36,6 @@ export function createApp(deps: RunDeps): Hono<AppEnv> {
   registerFileRoutes(app, deps); // #30：文件预览/下载（workspaceStore 必装——鉴权口径）
   registerImRoutes(app, deps); // #51/T2：IM 身份绑定管理（imStore 未装配时自 503——IM 立项后 prod 装配）
   registerAdminWorkflowRoutes(app, deps); // ADR-0033/R-3：工作流管理（remote 未装配自 503）
+  registerDeviceFileRoutes(app, deps); // ADR-0033/R-5：设备文件回传（/files/device-upload）
   return app;
 }

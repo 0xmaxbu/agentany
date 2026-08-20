@@ -92,7 +92,8 @@ export class RemoteStore {
 
   /** 撤销；返回是否确有撤销（幂等删无提示）。 */
   removeGrant(workflowId: string, userId: string): boolean {
-    return this.db.delete(workflowGrants).where(and(eq(workflowGrants.workflowId, workflowId), eq(workflowGrants.userId, userId))).run().changes > 0;
+    const res = this.db.delete(workflowGrants).where(and(eq(workflowGrants.workflowId, workflowId), eq(workflowGrants.userId, userId))).run() as unknown as { changes: number };
+    return res.changes > 0;
   }
 
   isGranted(workflowId: string, userId: string): boolean {

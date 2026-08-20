@@ -20,7 +20,10 @@ import type { EventBus, Frame } from "../chat/eventbus";
 import type { UserRole } from "../auth/store";
 import type { RemoteStore } from "../remote/store";
 import type { DeviceEnvRpc } from "../device/env"; // ADR-0033/R-4：环境检测 RPC
-import { getTool } from "../tool-registry"; // ADR-0033：workflow.tools → registry 的 remote 判定
+import { getTool, listTools } from "../tool-registry"; // ADR-0033：workflow.tools → registry 的 remote 判定
+import { writeStubExtension } from "../device/stub"; // ADR-0033/R-5：remote stub 扩展产物
+import { issueRunNonce } from "../bridge/nonce"; // ADR-0033/R-5：run 级桥 nonce
+import { BRIDGE_PORT } from "../bridge/server";
 import { WorkflowNotFound, InvalidInput, WorkflowStartError, makeRunId } from "../runs";
 
 const ENV_PENDING_TTL_MS = 30 * 60_000; // R-4：挂起-自动续 TTL（设备长时间不响应/不补装即 failed）
@@ -105,7 +108,7 @@ export class RunLifecycle {
 
     const abortCtrl = new AbortController();
     this.handles.set(runId, { conversationId: conversationId ?? "", scope: scopeOf(workspaceId), sessionId: `run-${runId}`, abortCtrl });
-    const ctx = this.ctxFor(wf, workspaceId, runId, abortCtrl);
+    const ctx = this.ctxFor(wf, workspaceId, runId, abortCtrl, conversationId ?? "");
 
     if (p.sync) {
       const outcome = await run(wf, this.deps.runStore, runId, ctx); // 引擎诚实化：顶层 catch-all → failed
@@ -221,7 +224,7 @@ export class RunLifecycle {
     const onProgress = (p: RunProgress) => publish({ ...p, runId });
     void (async () => {
       const abortCtrl = this.handles.get(runId)?.abortCtrl ?? new AbortController();
-      const ctx = this.ctxFor(wf, row.workspaceId, runId, abortCtrl);
+      const ctx = this.ctxFor(wf, row.workspaceId, runId, abortCtrl, row.conversationId ?? "");
       const outcome = await resume(wf, this.deps.runStore, runId, resumeData, ctx, onProgress); // 引擎诚实化：不越状态机
       if (!("rejected" in outcome) && !("idempotent" in outcome)) {
         publish({ type: "run_resumed", runId }); // 真续跑成立才补发（顺序仅影响展示，终值正确）
@@ -296,11 +299,25 @@ export class RunLifecycle {
   }
 
   // —— 内部 ——
-  private ctxFor(wf: Workflow, workspaceId: string, runId: string, abortCtrl: AbortController): RunCtx {
+  private ctxFor(wf: Workflow, workspaceId: string, runId: string, abortCtrl: AbortController, conversationId: string): RunCtx {
     const factory = this.deps.runPiFactory ?? makeRunPi;
     const scope = scopeOf(workspaceId);
     const { cwd } = resolveScopePaths(scope, workspaceId);
-    const runPi = factory({ extensions: wf.extensions, scope, workspaceId: workspaceId, sessionId: `run-${runId}` });
+    // ADR-0033/R-5：remote 工具的 pi stub 扩展（生成物）叠加在 wf.extensions 之上——仅含 remote 工具时注入桥环境
+    const stubPaths =
+      listTools()
+        .filter((t) => t.remote && wf.tools?.includes(t.name))
+        .map((t) => writeStubExtension(t.name, t.argsSchema, runId)) ?? [];
+    const extensions = [...(wf.extensions ?? []), ...stubPaths];
+    const runBridge = stubPaths.length > 0
+      ? {
+          url: `http://127.0.0.1:${BRIDGE_PORT}`,
+          nonce: issueRunNonce(runId, conversationId), // run 级长寿 nonce（远端 stub 调 /run/remote-tool）
+          port: BRIDGE_PORT,
+          runId,
+        }
+      : undefined;
+    const runPi = factory({ extensions, scope, workspaceId: workspaceId, sessionId: `run-${runId}`, runBridge });
     return { runPi, workspaceId, cwd, signal: abortCtrl.signal, log: () => {} };
   }
 

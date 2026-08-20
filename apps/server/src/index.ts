@@ -2,7 +2,7 @@ import { createApp } from "./app";
 import { openDbMigrated } from "./db/client";
 import { createStores } from "./stores"; // ADR-0030 决策 5：四域 store 单点装配（boot 与 test/deps 共用）
 import { EventBus } from "./chat/eventbus";
-import { RunLifecycle } from "./runs/lifecycle";
+import { RunLifecycle, type RunLifecycleDeps } from "./runs/lifecycle"; // deviceRpc 晚绑定需显式类型
 import { UserStore } from "./auth/store";
 import { StreamRegistry } from "./chat/stream-registry";
 import { WorkspaceStore } from "./workspaces/store";
@@ -25,6 +25,7 @@ import type { RunDeps } from "./runs";
 import { serve } from "./device/server"; // ADR-0033/R-2：HTTP + 设备 WS 同一 serve（升级前验 token）
 import { DeviceRegistry } from "./device/registry";
 import { DeviceEnvRpc } from "./device/env"; // ADR-0033/R-4：环境检测 RPC
+import { DeviceToolRpc } from "./device/tool"; // ADR-0033/R-5：远端工具转发
 
 const db = openDbMigrated(); // 启动跑迁移（data/db.sqlite）
 ensureKnowledgeRepo(); // #35：knowledge repo 就位（空则 init+布局+skills 种子；已有则 no-op）
@@ -38,7 +39,7 @@ const sweptRuns = taskStore.sweepUnfinishedRuns(); // 重启：执行中崩溃�
 if (sweptRuns > 0) console.log(`[scheduler] swept ${sweptRuns} unfinished run(s) to failed (crash recovery)`);
 const eventBus = new EventBus(); // 共享事件中心：持久流订阅 + bridge run 事件，同一实例
 const conversationQueues = new ConversationQueues(); // 共享 per-conv FIFO：chat 路由与任务执行同实例（#29）——产出会话被用户浏览聊天时任务 turn 仍严格串行
-const lifecycleDeps = { runStore, chatStore, hitlStore, eventBus, remote: remoteStore }; // ADR-0033/R-3：preflight 需 remote（授权/启停/设备在线）；deviceRpc 晚绑定（envRpc 依赖 runLifecycle 建）
+const lifecycleDeps: RunLifecycleDeps = { runStore, chatStore, hitlStore, eventBus, remote: remoteStore }; // ADR-0033/R-3：preflight 需 remote（授权/启停/设备在线）；deviceRpc 晚绑定（envRpc 依赖 runLifecycle 建）
 const runLifecycle = new RunLifecycle(lifecycleDeps); // ADR-0031：run 生命周期单组合根（只学三域面）
 runLifecycle.sweepCrashed(); // 重启：DB 里仍 running 的 run → failed + 「异常终止」brief（进程没在跑了）
 runLifecycle.reconcileBriefMessages(); // ADR-0025 决策 3：sweep 之后——终态但简报未发的 run 幂等补发（崩溃区间归零）
@@ -67,6 +68,9 @@ const envRpc = new DeviceEnvRpc({
   },
 });
 lifecycleDeps.deviceRpc = envRpc; // 晚绑定（preflight ④ 调用时读取）
+
+// ADR-0033/R-5：远端工具转发 RPC——tool_call/tool_result async-map；设备断连 → 在飞全失败
+const toolRpc = new DeviceToolRpc({ registry: deviceRegistry });
 const scheduler = new TaskScheduler({
   store: taskStore,
   executeTask: makeExecuteTask({ deps, queues: conversationQueues, eventBus }), // #29 真链：runTurn 同构、任务 pi 无 bridge
@@ -104,9 +108,13 @@ const server = serve(app, {
   remote: remoteStore,
   registry: deviceRegistry,
   onDeviceMessage: (entry, msg) => {
-    envRpc.route(entry, msg as Record<string, unknown>); // R-4：env_report / env_remediated
+    const m = msg as Record<string, unknown>;
+    if (!envRpc.route(entry, m)) toolRpc.route(entry, m); // R-4 env 三件套 / R-5 tool_result
+  },
+  onDeviceClose: (entry) => {
+    toolRpc.failAllForUser(entry.userId, `device disconnected (${entry.deviceId})`); // R-5：在飞工具调用失败（run 收尾载体失联）
   },
 });
-startBridge(BRIDGE_PORT, { runLifecycle, runStore, chatStore, hitlStore, eventBus, userStore }); // bridge RPC（loopback:3199，pi↔server；nonce 闸；#11/#14/#16；R-3 身份推导）
+startBridge(BRIDGE_PORT, { runLifecycle, runStore, chatStore, hitlStore, eventBus, userStore, toolRpc }); // bridge RPC（loopback:3199，pi↔server；nonce 闸；#11/#14/#16；R-3 身份推导；R-5 remote-tool）
 console.log(`agentany server on http://localhost:${server.port}`);
 console.log(`agentany bridge on http://localhost:${BRIDGE_PORT} (pi↔server RPC, nonce-gated)`);

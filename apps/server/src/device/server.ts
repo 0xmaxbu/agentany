@@ -19,6 +19,8 @@ export interface ServeOpts {
   registry?: DeviceRegistry; // 缺省自建；共享告警：routes 的 deps.deviceRegistry 应与之一致（logout 关连）
   /** 设备 → server 消息分发（R-4/R-5 扩展；缺省只回 ping/pong）。 */
   onDeviceMessage?(entry: DeviceEntry, msg: unknown): void;
+  /** 设备连接关闭（含被顶号/断线）通知——R-5 在飞工具调用失败挂这里。 */
+  onDeviceClose?(entry: DeviceEntry, code: number, reason: string): void;
 }
 
 export interface ServerHandle {
@@ -32,7 +34,7 @@ export interface ServerHandle {
 }
 
 const WS_PATH = "/ws/device";
-const bearerOf = (h?: string): string | null => (h && h.startsWith("Bearer ") ? h.slice(7) : null);
+const bearerOf = (h?: string | null): string | null => (h && h.startsWith("Bearer ") ? h.slice(7) : null);
 const DEVICE_ID_MAX = 128;
 
 export function serve(app: Hono<any>, opts: ServeOpts): ServerHandle {
@@ -78,7 +80,7 @@ export function serve(app: Hono<any>, opts: ServeOpts): ServerHandle {
       }
       opts.onDeviceMessage?.(entry, msg);
     },
-    close(ws, _code, _reason) {
+    close(ws, code, reason) {
       const d = ws.data as DeviceConnData;
       registry.detach(d.userId, ws);
       // 离线语义：本连接关闭后，只要没有「同设备新连接仍在线」，该设备即离线。
@@ -87,6 +89,7 @@ export function serve(app: Hono<any>, opts: ServeOpts): ServerHandle {
       // - 同设备重连覆盖：现存=同 deviceId 新连接 → 不误标
       const cur = registry.get(d.userId);
       if (!cur || cur.deviceId !== d.deviceId) remote.setClientOffline(d.userId, d.deviceId);
+      opts.onDeviceClose?.({ userId: d.userId, deviceId: d.deviceId, token: d.token, ws }, code, reason); // R-5：在飞工具调用失败
     },
   };
 
@@ -104,7 +107,7 @@ export function serve(app: Hono<any>, opts: ServeOpts): ServerHandle {
 
   const base = (scheme: string, path = "") => `${scheme}://127.0.0.1:${server.port}${path}`;
   return {
-    port: server.port,
+    port: server.port as number, // Bun.Server.port 类型 number|undefined；实际已绑定实端口（port:0 亦然）
     url: (p = "") => base("http", p),
     wsUrl: (p = "") => base("ws", p),
     close: () => server.stop(true),
@@ -112,9 +115,9 @@ export function serve(app: Hono<any>, opts: ServeOpts): ServerHandle {
   };
 }
 
-/** 内部定型：与 Bun WebSocketHandler 结构一致（位类型卫生兜底）。 */
+/** 内部定型：与 Bun WebSocketHandler 结构一致（位类型卫生兜底）；DeviceConnData 使 ws.data 具型。 */
 type BunWebSocketHandlers = {
-  open(ws: ServerWebSocket<unknown>): void;
-  message(ws: ServerWebSocket<unknown>, message: string | Buffer): void;
-  close(ws: ServerWebSocket<unknown>, code: number, reason: string): void;
+  open(ws: ServerWebSocket<DeviceConnData>): void;
+  message(ws: ServerWebSocket<DeviceConnData>, message: string | Buffer): void;
+  close(ws: ServerWebSocket<DeviceConnData>, code: number, reason: string): void;
 };

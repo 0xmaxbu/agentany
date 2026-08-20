@@ -69,7 +69,11 @@ const remoteWf = defineWorkflow({
 
 // 反向护栏 fixture：remote 但无 environment 声明 → 不触发环境检测。
 const noEnvWf = defineWorkflow({ id: "remote-no-env", tools: ["device_shell"] })
-  .step("s1", async () => ({ ok: true }))
+  .step("s1", {
+    async execute() {
+      return { ok: true };
+    },
+  })
   .commit();
 
 /** 等 check_environment 并用指定表格回 env_report。 */
