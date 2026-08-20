@@ -2,22 +2,17 @@
 // env_remediated（设备用户对挂起补全的同意/拒绝）→ 复检自动续 / 取消。
 // 可信性：服务端不信任上报的 status 汇总，从 table 逐项重派 status（fail_hard = 存在不可自动补全的缺失）；
 // env_remediated 必须来自 pending 对应设备连接，pending 已终态幂等忽略。
-import type { EnvRequirement } from "../workflow-engine/defineWorkflow";
 import type { RemoteStore, PendingRow } from "../remote/store";
 import type { DeviceEntry, DeviceRegistry } from "./registry";
 import type { EventBus } from "../chat/eventbus"; // ADR-0033/R-4 D7：pending 终态按原渠道告知
 import { getWorkflow } from "../registry";
+// 线帧值类型从 @agentany/ws-protocol 导入（ADR-0034 D2；此处 re-export 兼容旧路径）。
+import type { EnvRequirement, EnvCheckItem, EnvCheckStatus } from "@agentany/ws-protocol";
+import type { CheckEnvironmentFrame } from "@agentany/ws-protocol";
 
-export interface EnvCheckItem {
-  id: string;
-  name: string;
-  ok: boolean;
-  reason?: string;
-  autoInstallable: boolean;
-}
+export type { EnvRequirement, EnvCheckItem, EnvCheckStatus };
 
-export type EnvCheckStatus = "pass" | "fail_hard" | "fail_installable";
-
+/** env_report 消费端的服务端视角结果（deviceId 为服务端从连接补充，不在线帧上）。 */
 export interface EnvReportResult {
   deviceId: string;
   status: EnvCheckStatus;
@@ -62,8 +57,9 @@ export class DeviceEnvRpc {
     const entry = this.opts.registry.get(userId);
     if (!entry) throw new Error(`device not online for user ${userId}`);
     const id = `env-${++this.seq}`;
+    const frame: CheckEnvironmentFrame = { type: "check_environment", id, requirements };
     try {
-      entry.ws.send(JSON.stringify({ type: "check_environment", id, requirements }));
+      entry.ws.send(JSON.stringify(frame));
     } catch {
       throw new Error(`device send failed for user ${userId}`);
     }

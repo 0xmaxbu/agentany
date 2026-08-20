@@ -1,16 +1,11 @@
 // Mastra 风格 fluent builder（手搓，不用 @mastra；ADR-0001/0007）。
 // 默认链按声明顺序；execute 返回 { ...output, __next?: "stepId" } 命令式覆盖下一步（可往回=循环）。
 import type { Schema } from "./schema";
+// ADR-0033/R-1（#73）的设备环境要求类型已下沉 @agentany/ws-protocol（ADR-0034 D2，check_environment 线帧随带）；
+// DSL 仅在此 import + re-export（消费方保持原路径不变）。
+import type { EnvRequirement } from "@agentany/ws-protocol";
 
-// ADR-0033/R-1（#73）：设备环境要求（设备侧 shell 探测 + 可自动补全）。check 为设备上探测命令，
-// exit 0=通过；autoInstall 非 null 表示"软件因素可一键补装"，null=硬失败（缺显卡/缺系统这类装不了的）。
-export interface EnvRequirement {
-  id: string;
-  name: string;
-  check: string; // 设备上 shell 探测命令（exit 0=通过 / stdout 匹配约定）
-  autoInstall: string | null; // 有值=软件因素可自动补全；null=硬失败
-  hint?: string;
-}
+export type { EnvRequirement };
 
 export interface RunPiResult {
   text: string;

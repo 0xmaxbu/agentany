@@ -1,23 +1,13 @@
 // 远端工具转发 RPC（ADR-0033 / R-5）：bridge /run/remote-tool → 设备 WS tool_call → 设备 tool_result。
 // correlationId async-map；同一连接多 run 并发复用（条目带 runId 上下文）。默认超时；设备断连/被顶号
 // → 在飞调用失败（failAllForUser）；不做自动重试（spec R-5 决策）。schema 随 tool_call 下发（设备侧同名 handler 用）。
+// tool_call / tool_result 线帧类型从 @agentany/ws-protocol 导入（ADR-0034 D2 单一真相；此处 re-export 兼容旧路径）。
 import type { Schema } from "../workflow-engine/schema";
 import type { DeviceEntry, DeviceRegistry } from "./registry";
+import type { ToolArtifact, ToolCallResult } from "@agentany/ws-protocol";
+import type { ToolCallFrame } from "@agentany/ws-protocol";
 
-export interface ToolArtifact {
-  name: string;
-  size?: number;
-  path?: string; // 上传后 run 工作区内相对路径
-}
-
-export interface ToolCallResult {
-  ok: boolean;
-  code?: string | number;
-  stdout?: string;
-  stderr?: string;
-  artifacts?: ToolArtifact[];
-  error?: string;
-}
+export type { ToolArtifact, ToolCallResult };
 
 export interface ToolRpcOpts {
   registry: DeviceRegistry;
@@ -49,10 +39,9 @@ export class DeviceToolRpc {
       return Promise.resolve({ ok: false, error: "device offline", code: "device_offline" });
     }
     const id = `tool-${++this.seq}`;
+    const frame: ToolCallFrame = { type: "tool_call", id, tool: p.tool, args: p.args, schema: p.schema, runId: p.runId };
     try {
-      entry.ws.send(
-        JSON.stringify({ type: "tool_call", id, tool: p.tool, args: p.args, schema: p.schema, runId: p.runId }),
-      );
+      entry.ws.send(JSON.stringify(frame));
     } catch {
       return Promise.resolve({ ok: false, error: "device send failed", code: "device_send_failed" });
     }

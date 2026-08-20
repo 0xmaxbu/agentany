@@ -5,7 +5,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stubDirs } from "../config";
-import type { Schema } from "../workflow-engine/schema";
+import type { Schema } from "@agentany/ws-protocol"; // ADR-0034 D2：argsSchema 类型真相在协议包
 
 // —— schema.ts → TypeBox 桥（R-5 决策：stub 的参数筛查与本地工具一致）——
 // 注意：本模块**不在** pi 进程内 import typebox（那是扩展产物做的事）；这里只产出含 typebox 调用的代码文本。

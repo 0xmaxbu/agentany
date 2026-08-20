@@ -2,8 +2,8 @@
 // 供 R-3/R-4 preflight 的 remote 判定、R-5 pi stub 生成查询。argsSchema 用本仓**可序列化** schema.ts 原语
 // （不引 zod/TypeBox——那是 pi 侧筛查；TypeBox 桥接归 R-5）。registry 全局态惯例同 ../registry.ts
 // （workflow 注册表 boot 静态 import map；测试按需不动它）。
-import type { Schema } from "./workflow-engine/schema";
-import { schema, validate } from "./workflow-engine/schema";
+import type { Schema } from "@agentany/ws-protocol"; // ADR-0034 D2：argsSchema 随 tool_call 下发设备，类型真相在协议包
+import { schema, validate } from "@agentany/ws-protocol";
 
 export interface ToolDef {
   name: string;

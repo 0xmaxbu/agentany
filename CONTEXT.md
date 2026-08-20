@@ -73,3 +73,13 @@
 | 绑定码 (Bind code) | 用户自助绑定 IM 的凭证：Web 已登录用户点「绑定 IM」生成 **4 位数字、10 分钟有效、单次使用**的码，到 IM 发 `#bind <码>` → 把该 IM 身份（如飞书 open_id）绑到自己的 agentany 账号。安全靠 TTL+单次消费双兜底（ADR-0028 决策 2；推翻 #49 决策 6 的 admin 静态绑定）。 |
 | 绑定补发 (Bind backfill) | 绑定成功的瞬间，把该用户全部存量 pending 卡各补发一次通知+卡——用户最该看见历史积压的时刻。仅绑定时刻触发，不做启动扫描（防重启风暴）。 |
 | 回执 (Receipt) | IM 上对一次决策/绑定的即时反馈文本，一律来自输出方状态判读、不假装成功：成功「已处理：<内容>」/ 幂等「该卡已被处理」/ 归一化失败「无法据此推进，请重试或点选」/ 绑定成功「已完成，N 张待办」。 |
+
+## 远程执行（Device）
+
+| 术语 | 含义 |
+|------|------|
+| 设备 (Device) | 运行远程工具的**目标机器 + 其上常驻的执行端**：经 `/ws/device`（Bearer token + deviceId）连服务器，收 `tool_call` 本地执行并回 `tool_result`，收 `check_environment` 探测并回 `env_report`。同一用户一次一连接（单机顶号，`remote_clients` 表）。_Avoid_: 远程代理、agent |
+| 设备客户端 (Device client) | 安装在设备上、连接服务器的执行端程序（**远程执行唯一缺失件**；现仅有测试用 FakeDevice）。定位是薄转发：不关心 run/工作流，只按服务端下发的 `tool`/`args`/`schema` 在设备本地执行并回传结果与产物。 |
+| 远程工具 (Remote tool) | 实际执行发生在设备上的工具：服务器工具注册表负责（`remote:true`）schema 校验与转发，设备按下发协议实现同名执行器。现状仅 `device_shell`；规划 bash/write/read/grep、computer-use、浏览器工具。 |
+| computer-use | **桌面级**控制工具：不止浏览器——无障碍树优先（mac AX / Win UIA / Linux AT-SPI2）+ 截图坐标兜底，观察→动作→结果验证的事务循环；浏览器只是其中一个可控目标。工具面=双通道三工具 `computer_use.screens/observe/act` + 独立 `browser_*` 组（ADR-0036） |
+| 登录态 (Login session) | 设备浏览器持久 profile 中的**已登录会话**（cookies/localStorage）。**只存设备本地**：远端操作者/服务器拿不到 cookie 原文，只是"借用设备用户已授权会话"在设备用户名下做动作；首次绑定浏览器/桌面会话给远端使用时需设备本地弹窗确认（ADR-0035）。 |
