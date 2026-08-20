@@ -45,6 +45,24 @@ export interface RunDeps {
 export class WorkflowNotFound extends Error {
   constructor(id: string) { super(`workflow not found: ${id}`); this.name = "WorkflowNotFound"; }
 }
+
+// ADR-0033 / R-3（#75）：preflight 结构化错误契约（三入口共用，供通知/呈现）。
+export type WorkflowStartErrorCode =
+  | "not_granted" // 未授权（workflow_grants 默认锁定：无授权行仅 admin）
+  | "disabled" // workflow_cfg.enabled=false：停用只拦新开
+  | "device_offline" // 含 remote 工具但发起用户设备离线
+  | "env_fail" // R-4：环境硬失败（含缺失表格）
+  | "env_installable_pending"; // R-4：环境缺软件因素 → 挂起（pending_start 已建）
+export class WorkflowStartError extends Error {
+  constructor(
+    public code: WorkflowStartErrorCode,
+    message: string,
+    public detail?: unknown,
+  ) {
+    super(message);
+    this.name = "WorkflowStartError";
+  }
+}
 export class RunNotFound extends Error {
   constructor(id: string) { super(`run not found: ${id}`); this.name = "RunNotFound"; }
 }

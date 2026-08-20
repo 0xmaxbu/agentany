@@ -10,6 +10,7 @@ import { registerScheduledTaskRoutes } from "./routes/scheduled-tasks";
 import { registerFileRoutes } from "./routes/files";
 import { registerImRoutes } from "./routes/im";
 import { registerDeviceAuthRoutes } from "./device/routes"; // ADR-0033/R-2：设备登录/登出
+import { registerAdminWorkflowRoutes } from "./routes/admin-workflows"; // ADR-0033/R-3：工作流管理（启停/授权）
 import type { RunDeps } from "./runs";
 
 export function createApp(deps: RunDeps): Hono<AppEnv> {
@@ -33,5 +34,6 @@ export function createApp(deps: RunDeps): Hono<AppEnv> {
   registerScheduledTaskRoutes(app, deps); // #25：taskStore 未接线时路由自 500（ts() 守卫）——测试/prod 均已装配
   registerFileRoutes(app, deps); // #30：文件预览/下载（workspaceStore 必装——鉴权口径）
   registerImRoutes(app, deps); // #51/T2：IM 身份绑定管理（imStore 未装配时自 503——IM 立项后 prod 装配）
+  registerAdminWorkflowRoutes(app, deps); // ADR-0033/R-3：工作流管理（remote 未装配自 503）
   return app;
 }

@@ -63,3 +63,15 @@ registerTool({
   }),
   remote: false,
 });
+
+// ADR-0033/R-3（#75）：首个 remote 占位工具——语义=「服务器注定跑不成的设备侧命令」（GPU/windows 桌面类）。
+// 当前惰性（无 stub/转发，R-5 接 tool_call 通道）；预检已能据 remote:true 判定设备在线（R-3 设备门测试载体）。
+registerTool({
+  name: "device_shell",
+  argsSchema: schema.object({
+    command: schema.string(),
+    cwd: schema.optional(schema.string()),
+    timeoutMs: schema.optional(schema.number()),
+  }),
+  remote: true,
+});

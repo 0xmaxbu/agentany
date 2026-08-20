@@ -35,10 +35,11 @@ describe("R-1 · 全局工具注册表", () => {
     expect(validate(t.argsSchema, { query: "x" })).toEqual({ ok: true });
     expect(validate(t.argsSchema, {})).toEqual({ ok: false, error: "root.query: missing" });
   });
-  test("全量枚举覆盖既有本地工具、均有 remote 标识", () => {
+  test("全量枚举覆盖既有工具（本地三件套 + remote 占位 device_shell）、均有 remote 标识", () => {
     const names = listTools().map((t) => t.name).sort();
-    expect(names).toEqual(["web_crawl", "web_extract", "web_search"]);
+    expect(names).toEqual(["device_shell", "web_crawl", "web_extract", "web_search"]);
     expect(listTools().every((t) => typeof t.remote === "boolean")).toBe(true);
+    expect(getTool("device_shell")!.remote).toBe(true); // ADR-0033/R-3：首个 remote 占位（R-5 接转发）
   });
   test("未注册名字解析为 undefined", () => {
     expect(getTool("nope")).toBeUndefined();

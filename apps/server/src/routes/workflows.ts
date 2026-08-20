@@ -4,7 +4,7 @@ import type { Hono } from "hono";
 import type { AppEnv } from "../auth/middleware";
 import { principalOf } from "../auth/middleware";
 import { listWorkflows } from "../registry";
-import { WorkflowNotFound, RunNotFound, InvalidInput, type RunDeps } from "../runs";
+import { WorkflowNotFound, RunNotFound, InvalidInput, WorkflowStartError, type RunDeps } from "../runs";
 import { InvalidWorkspaceId } from "../config";
 import { canAccessWorkspace, resolveRequestWorkspace } from "../workspaces/guard";
 import { PiBusy } from "../pi/runPi";
@@ -25,11 +25,16 @@ export function registerWorkflowRoutes(app: Hono<AppEnv>, deps: RunDeps): void {
     const lifecycle = deps.runLifecycle;
     if (!lifecycle) return c.json({ error: "run lifecycle unavailable" }, 503);
     try {
-      return c.json(await lifecycle.start({ workflowId: id, input, workspaceId: r.workspaceId, sync: true }));
+      return c.json(await lifecycle.start({ workflowId: id, input, workspaceId: r.workspaceId, caller: principalOf(c), sync: true }));
     } catch (e) {
       if (e instanceof WorkflowNotFound) return c.json({ error: e.message }, 404);
       if (e instanceof InvalidWorkspaceId || e instanceof InvalidInput) return c.json({ error: e.message }, 400);
       if (e instanceof PiBusy) return c.json({ error: e.message }, 429);
+      // ADR-0033/R-3（#75）：preflight 结构化拒绝（not_granted/disabled/device_offline；env_* 交给 R-4）
+      if (e instanceof WorkflowStartError) {
+        const status = e.code === "not_granted" ? 403 : 409; // 其余（disabled/device_offline/env_*）→ 409
+        return c.json({ error: e.message, code: e.code, ...(e.detail !== undefined ? { detail: e.detail } : {}) }, status);
+      }
       return c.json({ error: (e as Error).message }, 500);
     }
   });

@@ -14,6 +14,7 @@ import type { UserStore } from "../auth/store";
 import type { ScheduledTaskStore } from "../scheduled-tasks/store";
 import { validateCronAndFirstFire, InvalidCron, TooFrequent } from "../scheduled-tasks/cron";
 import { decide } from "../security/policy";
+import { WorkflowStartError } from "../runs"; // ADR-0033/R-3：preflight 结构化拒绝
 import { jsonBody } from "../http";
 
 export const BRIDGE_PORT = Number(process.env.BRIDGE_PORT ?? 3199);
@@ -60,9 +61,17 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     const body = await jsonBody(c);
     const { workflowId, input } = body as { workflowId?: string; input?: unknown };
     if (!workflowId) return c.json({ error: "workflowId required" }, 400);
+    // ADR-0033/R-3：nonce→conv→userId→role 推导发起人（与 #28 taskCtx 同口径），汇入单一 preflight
+    let caller: { id: string; role: import("../auth/store").UserRole } | undefined;
+    const conv = chatStore?.getConversation(conversationId);
+    const u = conv?.userId ? userStore?.getUserById(conv.userId) : undefined;
+    if (u) caller = { id: u.id, role: u.role };
     try {
-      return c.json(await reg.start({ conversationId, workflowId, input: input ?? {} }));
+      return c.json(await reg.start({ conversationId, workflowId, input: input ?? {}, caller }));
     } catch (e) {
+      if (e instanceof WorkflowStartError) {
+        return c.json({ error: e.message, code: e.code, ...(e.detail !== undefined ? { detail: e.detail } : {}) }, e.code === "not_granted" ? 403 : 409);
+      }
       return c.json({ error: (e as Error).message }, 400);
     }
   });

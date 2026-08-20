@@ -27,6 +27,8 @@ describe("workspace + 鉴权边界（ADR-0018）", () => {
     const out = await deps.userStore.createUser({ username: "out", password: "password1" });
     m1Id = m1.id;
     outId = out.id;
+    // #75/ADR-0033 R-3：工作流授权默认锁定（无授权行仅 admin）——成员起 run 用例显式授权 m1
+    deps.remote!.addGrant("synthetic-3step", m1Id);
     app = createApp(deps);
     const tok = async (u: string): Promise<string> =>
       ((await (await app.request("/auth/login", { method: "POST", headers: JH, body: JSON.stringify({ username: u, password: "password1" }) })).json()) as any).token;

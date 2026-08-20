@@ -15,7 +15,7 @@ import type { RunDeps } from "../src/runs";
 // 覆盖传了 runLifecycle 则用之（bridge/特殊配置测试）。
 function withDefaultLifecycle(base: RunDeps, store: Stores, overrides: Partial<RunDeps>): RunDeps {
   if (Object.prototype.hasOwnProperty.call(overrides, "runLifecycle")) return { ...base, ...overrides }; // 显式（含 undefined=unavailable 测试）优先
-  return { ...base, ...overrides, runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), runPiFactory: overrides.runPiFactory ?? base.runPiFactory }) };
+  return { ...base, ...overrides, runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), remote: store.remote, runPiFactory: overrides.runPiFactory ?? base.runPiFactory }) };
 }
 
 export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {

@@ -17,7 +17,10 @@ import type { HitlStore } from "../hitl/store";
 import type { ChatStore } from "../chat/store";
 import type { Workflow } from "../workflow-engine/defineWorkflow";
 import type { EventBus, Frame } from "../chat/eventbus";
-import { WorkflowNotFound, InvalidInput, makeRunId } from "../runs";
+import type { UserRole } from "../auth/store";
+import type { RemoteStore } from "../remote/store";
+import { getTool } from "../tool-registry"; // ADR-0033：workflow.tools → registry 的 remote 判定
+import { WorkflowNotFound, InvalidInput, WorkflowStartError, makeRunId } from "../runs";
 
 // 句柄只留「运行期需要、DB 没有」的：abort 控制器 + scope/session（resume 重建 ctx 用）。
 // 状态走 DB（ADR-0007：进程无内存态）。
@@ -33,6 +36,9 @@ export interface RunLifecycleDeps {
   chatStore: ChatStore; // getConversation（start 定位会话 ws/scope）
   hitlStore: HitlStore; // 审批门（幂等查/建卡）+ 挂起卡行直读（帧素材）
   eventBus: EventBus;
+  remote?: RemoteStore; // ADR-0033/R-1：grants/cfg/remote_clients（R-3 preflight 消费）
+  // ADR-0033/R-3：工作流解析可注入（同 ADR-0029 listWorkflows 模式）——测试可挂含 remote 工具的测试工作流，免触全局态
+  getWorkflow?: typeof getWorkflow;
   runPiFactory?: (opts: { extensions?: string[]; scope: Scope; workspaceId: string | null; sessionId: string }) => ConfiguredRunPi;
 }
 
@@ -57,12 +63,18 @@ export class RunLifecycle {
     workspaceId?: string; // 无会话直调（HTTP 同步路由）用
     conversationId?: string; // bridge/chat（审批卡/推流需会话锚）
     approved?: boolean;
+    caller?: { id: string; role: UserRole }; // ADR-0033/R-3：三入口（HTTP/bridge/chat 桥工具）传来的发起人身份——preflight 依据
     sync?: boolean; // true=await 完直接返 RunOutcome（HTTP 同步）；缺省=detached 后台续跑
   }): Promise<StartResult> {
-    const wf = getWorkflow(p.workflowId);
+    const wf = (this.deps.getWorkflow ?? getWorkflow)(p.workflowId);
     if (!wf) throw new WorkflowNotFound(p.workflowId);
     const v = validate(wf.inputSchema as any, p.input);
     if (!v.ok) throw new InvalidInput(v.error);
+
+    // ADR-0033/R-3（#75）：单一 preflight 校验点（授权→启停→remote/设备在线→环境钩子占位）。
+    // 三入口 [HTTP(principal) / bridge(nonce→conv→user) / chat 桥工具] 全汇于此、一处生效。
+    // approved 续跑（审批卡已通过前一轮 preflight）与无 caller 直调（系统/测试内部）不重复拦截。
+    if (!p.approved && p.caller) this.preflight(p.caller, wf);
 
     // #18 审批门（统一堵口：HTTP 直调与 bridge 同一条 gate）。validate 已过→审批卡只为合法 input 弹。
     if (!p.approved) {
@@ -96,6 +108,27 @@ export class RunLifecycle {
     }
     void this.runDetached(runId, conversationId ?? "", wf, ctx); // detached：fire-and-forget
     return { runId, status: "running" };
+  }
+
+  /** ADR-0033/R-3（#75）：preflight 校验链——①授权（workflow_grants 默认锁定）→ ②启停（cfg.enabled）
+   *  → ③含 remote 工具则设备在线判定 → ④环境检测钩子占位（R-4 落地 fail_installable → pending）。
+   *  非 remote 工作流不受设备检查影响（回归护栏）；授权/启停对所有工作流生效。被拒 = 抛 WorkflowStartError（三入口结构化）。 */
+  private preflight(caller: { id: string; role: UserRole }, wf: Workflow): void {
+    const remote = this.deps.remote;
+    // ① 授权：默认锁定（无授权行仅 admin 可跑）；未接线 store 时 member 失败关闭（安全兜底）
+    if (caller.role !== "admin" && !remote?.isGranted(wf.id, caller.id)) {
+      throw new WorkflowStartError("not_granted", `workflow ${wf.id} not granted to user ${caller.id}`);
+    }
+    // ② 启停：停用只拦新开（cfg.enabled 缺省 true）
+    if (remote && !remote.getCfg(wf.id).enabled) {
+      throw new WorkflowStartError("disabled", `workflow ${wf.id} is disabled`);
+    }
+    // ③ remote 工具 → 发起用户设备须在线
+    const hasRemoteTools = wf.tools?.some((name) => getTool(name)?.remote === true) ?? false;
+    if (hasRemoteTools && !remote?.hasOnlineClient(caller.id)) {
+      throw new WorkflowStartError("device_offline", `workflow ${wf.id} requires remote tools; no online device for user ${caller.id}`);
+    }
+    // ④ 环境检测钩子占位（R-4 实现：check_environment → fail_hard/env_installable_pending → pending_starts）
   }
 
   /** #18 require_approval 出口：幂等建审批卡（同 conv+workflow 已有 pending → 复用）+ 发 hitl_request；不 createRun。 */

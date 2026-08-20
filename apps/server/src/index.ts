@@ -80,6 +80,6 @@ const server = serve(app, {
   remote: remoteStore,
   registry: deviceRegistry,
 });
-startBridge(BRIDGE_PORT, { runLifecycle, runStore, chatStore, hitlStore, eventBus }); // bridge RPC（loopback:3199，pi↔server；nonce 闸；#11/#14/#16）
+startBridge(BRIDGE_PORT, { runLifecycle, runStore, chatStore, hitlStore, eventBus, userStore }); // bridge RPC（loopback:3199，pi↔server；nonce 闸；#11/#14/#16；R-3 身份推导）
 console.log(`agentany server on http://localhost:${server.port}`);
 console.log(`agentany bridge on http://localhost:${BRIDGE_PORT} (pi↔server RPC, nonce-gated)`);
