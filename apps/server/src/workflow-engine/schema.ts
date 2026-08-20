@@ -14,6 +14,7 @@ export const schema = {
   /** 可接受任意字面值的 schema（显式卡片选项的 resumeSchema：value 即 resumeData；复用 enum 的 includes 判定）。 */
   values: (...vals: unknown[]): Schema => ({ _t: "enum", vals }),
   optional: (inner: Schema): Schema => ({ _t: "optional", inner }),
+  array: (inner: Schema): Schema => ({ _t: "array", inner }),
   object: (shape: Record<string, Schema>): Schema => ({ _t: "object", shape }),
 };
 
@@ -34,6 +35,14 @@ export function validate(s: Schema | undefined, data: unknown, path = "root"): V
       return typeof data === "boolean" ? { ok: true } : { ok: false, error: `${path}: expected boolean` };
     case "enum":
       return (s.vals as unknown[]).includes(data) ? { ok: true } : { ok: false, error: `${path}: expected one of ${JSON.stringify(s.vals)}` };
+    case "array": {
+      if (!Array.isArray(data)) return { ok: false, error: `${path}: expected array` };
+      for (let i = 0; i < data.length; i++) {
+        const r = validate(s.inner as Schema, data[i], `${path}[${i}]`);
+        if (!r.ok) return r;
+      }
+      return { ok: true };
+    }
     case "object": {
       if (typeof data !== "object" || data === null) return { ok: false, error: `${path}: expected object` };
       const shape = s.shape as Record<string, Schema>;

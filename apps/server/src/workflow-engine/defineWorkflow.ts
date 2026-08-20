@@ -2,6 +2,16 @@
 // 默认链按声明顺序；execute 返回 { ...output, __next?: "stepId" } 命令式覆盖下一步（可往回=循环）。
 import type { Schema } from "./schema";
 
+// ADR-0033/R-1（#73）：设备环境要求（设备侧 shell 探测 + 可自动补全）。check 为设备上探测命令，
+// exit 0=通过；autoInstall 非 null 表示"软件因素可一键补装"，null=硬失败（缺显卡/缺系统这类装不了的）。
+export interface EnvRequirement {
+  id: string;
+  name: string;
+  check: string; // 设备上 shell 探测命令（exit 0=通过 / stdout 匹配约定）
+  autoInstall: string | null; // 有值=软件因素可自动补全；null=硬失败
+  hint?: string;
+}
+
 export interface RunPiResult {
   text: string;
   messages: unknown[];
@@ -56,6 +66,9 @@ export interface Workflow {
   outputSchema?: Schema;
   extensions?: string[]; // -e 显式扩展（ADR-0005）。skills 走标准发现，不在此声明。
   roles?: string[];
+  // ADR-0033/R-1（#73）：工具声明与设备环境要求——remote 判定（R-3 preflight）与 stub 生成（R-5）以此为据。
+  tools?: string[]; // 本工作流将调用的全部工具名（查全局工具注册表，见 tool-registry）
+  environment?: EnvRequirement[]; // 设备环境要求（仅 remote 工作流消费）
   steps: Record<string, StepDef>;
   order: string[];
   start: string;
@@ -75,6 +88,8 @@ export function defineWorkflow(opts: {
   outputSchema?: Schema;
   extensions?: string[];
   roles?: string[];
+  tools?: string[];
+  environment?: EnvRequirement[];
   start?: string;
 }): WorkflowBuilder {
   const steps: Record<string, StepDef> = {};

@@ -229,3 +229,57 @@ export const taskFiles = sqliteTable(
     run: index("task_files_taskRunId_idx").on(t.taskRunId),
   }),
 );
+
+// ===== ADR-0033 / R-1（#73）四表：远端执行的持久层（remote_clients / workflow_grants / workflow_cfg / pending_starts）=====
+
+// 设备入网（R-2 写）：用户↔设备 1:1 映射 + 在线状态。UNIQUE(user_id, device_id) 防重复；
+// 单机登录靠内存 registry（R-2），本表是落库语义与 preflight（R-3）的在线判定依据。
+export const remoteClients = sqliteTable(
+  "remote_clients",
+  {
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id),
+    deviceId: text("deviceId").notNull(), // 客户端生成并持久化（同机重连认作同设备）
+    deviceName: text("deviceName"), // 设备自报名（展示用）
+    lastSeen: text("lastSeen").notNull(),
+    status: text("status").notNull(), // online | offline
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.deviceId] }),
+    byUser: index("remote_clients_userId_idx").on(t.userId),
+  }),
+);
+
+// 工作流调用授权（R-3 消费）：默认锁定——无授权行 ⇒ 仅 admin 可跑。PK(workflow_id, user_id)。
+export const workflowGrants = sqliteTable(
+  "workflow_grants",
+  {
+    workflowId: text("workflowId").notNull(),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.workflowId, t.userId] }),
+    byWorkflow: index("workflow_grants_workflowId_idx").on(t.workflowId),
+  }),
+);
+
+// 工作流启停开关（R-3 消费）：enabled=false 只拦新开，进行中 run 不打断。
+export const workflowCfg = sqliteTable("workflow_cfg", {
+  workflowId: text("workflowId").primaryKey(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true), // 缺省放行（未配置=启用）
+});
+
+// 环境挂起-自动续（R-4 消费）：设备环境缺软件因素时的等待补装记录；TTL 超时兜底。
+export const pendingStarts = sqliteTable("pending_starts", {
+  id: text("id").primaryKey(), // uuid（store 生成）
+  workflowId: text("workflowId").notNull(),
+  userId: text("userId").notNull().references(() => users.id),
+  deviceId: text("deviceId").notNull(),
+  envStatus: text("envStatus").notNull(), // waiting_remediation | ready | cancelled | failed
+  reason: text("reason"), // 失败/取消原因
+  createdAt: text("createdAt").notNull(),
+  ttlAt: text("ttlAt").notNull(), // 过期判定键（sweep/惰性检查）
+});

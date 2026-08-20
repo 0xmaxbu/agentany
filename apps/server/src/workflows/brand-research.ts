@@ -21,6 +21,7 @@ export const brandResearch = defineWorkflow({
     focus: schema.optional(schema.string()), // 定向重跑
   }),
   extensions: [TAVILY_EXT],
+  tools: ["web_search", "web_extract", "web_crawl"], // 声明本工作流会调用的全部工具（tavily 三件套，本地执行）
 })
   .step("research", {
     async execute({ input, runPi, cwd }) {

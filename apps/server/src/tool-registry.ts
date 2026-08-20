@@ -1,0 +1,65 @@
+// 全局工具注册表（ADR-0033/R-1 决策 3）：{name, argsSchema, remote} 单一真相。
+// 供 R-3/R-4 preflight 的 remote 判定、R-5 pi stub 生成查询。argsSchema 用本仓**可序列化** schema.ts 原语
+// （不引 zod/TypeBox——那是 pi 侧筛查；TypeBox 桥接归 R-5）。registry 全局态惯例同 ../registry.ts
+// （workflow 注册表 boot 静态 import map；测试按需不动它）。
+import type { Schema } from "./workflow-engine/schema";
+import { schema, validate } from "./workflow-engine/schema";
+
+export interface ToolDef {
+  name: string;
+  argsSchema: Schema;
+  remote: boolean; // false=服务器本地执行（现状）；true=远端设备执行（R-5 起引入）
+}
+
+const registry = new Map<string, ToolDef>();
+
+/** 注册（boot 期静态调用；重名抛——单一真相不静默覆盖）。 */
+export function registerTool(def: ToolDef): void {
+  if (registry.has(def.name)) throw new Error(`tool already registered: ${def.name}`);
+  registry.set(def.name, def);
+}
+
+/** 按名解析；未注册返回 undefined。 */
+export function getTool(name: string): ToolDef | undefined {
+  return registry.get(name);
+}
+
+/** 全量枚举（R-5 stub 生成的候选集）。 */
+export function listTools(): ToolDef[] {
+  return [...registry.values()];
+}
+
+/** R-5 复用：参数校验与本地工具行为一致（schema 原语 validate）。 */
+export function validateToolArgs(name: string, args: unknown): { ok: true } | { ok: false; error: string } {
+  const t = registry.get(name);
+  if (!t) return { ok: false, error: `unknown tool: ${name}` };
+  return validate(t.argsSchema, args);
+}
+
+// —— 初始种子：现状真实被工作流/chat 调用的工具（tavily 三件套，本地执行）。——
+// web_search / web_extract / web_crawl 的 TypeBox 参数形状→可序列化 schema（与 tavily-search 扩展一致）。
+registerTool({
+  name: "web_search",
+  argsSchema: schema.object({
+    query: schema.string(),
+    max_results: schema.optional(schema.number()),
+    search_depth: schema.optional(schema.enum("basic", "advanced")),
+  }),
+  remote: false,
+});
+registerTool({
+  name: "web_extract",
+  argsSchema: schema.object({
+    urls: schema.array(schema.string()),
+  }),
+  remote: false,
+});
+registerTool({
+  name: "web_crawl",
+  argsSchema: schema.object({
+    url: schema.string(),
+    max_depth: schema.optional(schema.number()),
+    limit: schema.optional(schema.number()),
+  }),
+  remote: false,
+});
