@@ -113,8 +113,8 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     if (!v.ok) return c.json({ ok: false, error: v.error, code: "invalid_args" }, 400);
 
     const result = await toolRpc.invoke({ userId: user.id, tool, args: args ?? {}, schema: toolDef.argsSchema, runId });
-    // spec R-5 失败语义：转发中设备掉线/被顶号/超时 → 该工具调用失败 → run 收 failed（不做自动重试）
-    if (!result.ok && (result.code === "tool_timeout" || result.code === "device_disconnected" || result.code === "device_offline")) {
+    // spec R-5 失败语义：转发中设备掉线/被顶号/超时/发送失败 → 该工具调用失败 → run 收 failed（不做自动重试）
+    if (!result.ok && (result.code === "tool_timeout" || result.code === "device_disconnected" || result.code === "device_offline" || result.code === "device_send_failed")) {
       reg.abort(runId);
     }
     return c.json(result);

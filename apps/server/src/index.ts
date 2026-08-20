@@ -63,11 +63,14 @@ const envRpc = new DeviceEnvRpc({
         conversationId: p.conversationId ?? undefined,
         caller: { id: p.userId, role },
         skipEnvCheck: true, // 刚复检通过：授权/启停/设备在线照常，仅跳过环境 RPC
+        pendingAutoResume: { pendingId: p.id }, // 复检通过即批准：跳过审批门，createRun 后移除 pending
       })
       .catch((e) => console.log("[env] auto-resume failed", p.id, e instanceof Error ? e.message : e));
   },
 });
 lifecycleDeps.deviceRpc = envRpc; // 晚绑定（preflight ④ 调用时读取）
+envRpc.sweepExpired(); // R-4 boot：启动即扫已过期 pending（TTL 超时不再永久挂起）
+setInterval(() => envRpc.sweepExpired(), 60_000); // R-4：周期 TTL 清扫（与 TaskScheduler 同刻钟节奏）
 
 // ADR-0033/R-5：远端工具转发 RPC——tool_call/tool_result async-map；设备断连 → 在飞全失败
 const toolRpc = new DeviceToolRpc({ registry: deviceRegistry });

@@ -5,6 +5,7 @@
 import type { EnvRequirement } from "../workflow-engine/defineWorkflow";
 import type { RemoteStore, PendingRow } from "../remote/store";
 import type { DeviceEntry, DeviceRegistry } from "./registry";
+import type { EventBus } from "../chat/eventbus"; // ADR-0033/R-4 D7：pending 终态按原渠道告知
 import { getWorkflow } from "../registry";
 
 export interface EnvCheckItem {
@@ -46,6 +47,8 @@ export interface DeviceEnvRpcOpts {
   getWorkflow?: typeof getWorkflow;
   /** pending 复检通过 → 触发建 run 续跑（index 装配；重入 RunLifecycle.start 剩余流程）。 */
   onReady?(pending: PendingRow): void;
+  /** pending 终态（declined/TTL）按原渠道告知（D7 附则；无该依赖 → 不告知）。 */
+  eventBus?: EventBus;
 }
 
 export class DeviceEnvRpc {
@@ -127,10 +130,12 @@ export class DeviceEnvRpc {
     if (pending.userId !== entry.userId || pending.deviceId !== entry.deviceId) return; // 来源设备不匹配 → 忽略
     if (pending.ttlAt < new Date().toISOString()) {
       remote.updatePendingStatus(pendingId, "failed", "ttl_expired"); // 惰性 TTL 兜底
+      this.notify(pending, "failed", "ttl_expired");
       return;
     }
     if (!approved) {
       remote.updatePendingStatus(pendingId, "cancelled", "declined_by_device");
+      this.notify(pending, "cancelled", "declined_by_device");
       return;
     }
     // 复检：重发 check_environment，要求 pass 才 ready
@@ -144,5 +149,26 @@ export class DeviceEnvRpc {
     }
     if (!remote.updatePendingStatus(pendingId, "ready")) return; // 并发终态 → 忽略
     this.opts.onReady?.(pending);
+  }
+
+  /** TTL sweep：仍 waiting_remediation 且已过 ttl_at 的 pending → failed + 按原渠道告知（boot/定时调；消除永久挂起）。返扫掉数。 */
+  sweepExpired(nowIso?: string): number {
+    const remote = this.opts.remote;
+    let n = 0;
+    for (const p of remote.listExpired(nowIso ?? new Date().toISOString())) {
+      if (!remote.updatePendingStatus(p.id, "failed", "ttl_expired")) continue; // 并发已终态 → 跳过
+      this.notify(p, "failed", "ttl_expired");
+      n++;
+    }
+    return n;
+  }
+
+  /** D7 附则：pending 终态（declined/TTL）经原渠道（会话事件流）告知请求方。无会话锚/无 bus → 丢弃。 */
+  private notify(pending: PendingRow, outcome: "cancelled" | "failed", reason: string): void {
+    const bus = this.opts.eventBus;
+    if (!bus || !pending.conversationId) return;
+    bus.publish(pending.conversationId, {
+      type: "env_pending_status", pendingId: pending.id, workflowId: pending.workflowId, outcome, reason,
+    });
   }
 }

@@ -42,22 +42,21 @@ const STUB_TEMPLATE = (toolName: string, typeboxParams: string): string => `// A
 import type { ExtensionAPI, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-async function forwardBridge(tool: string, args: unknown): Promise<string> {
+async function forwardBridge(tool: string, args: unknown): Promise<{ ok: boolean; text: string }> {
   const url = process.env.AGENTANY_BRIDGE_URL;
   const nonce = process.env.AGENTANY_BRIDGE_NONCE;
   const runId = process.env.AGENTANY_RUN_ID;
-  if (!url || !nonce || !runId) throw new Error("tool " + tool + ": bridge 环境缺失（AGENTANY_BRIDGE_URL/NONCE/RUN_ID）");
+  if (!url || !nonce || !runId) return { ok: false, text: "tool " + tool + ": bridge 环境缺失（AGENTANY_BRIDGE_URL/NONCE/RUN_ID）" };
   const r = await fetch(url + "/run/remote-tool", {
     method: "POST",
     headers: { authorization: "Bearer " + nonce, "content-type": "application/json" },
     body: JSON.stringify({ runId, tool, args: args ?? {} }),
   });
   const body = (await r.json().catch(() => ({}))) as any;
-  // tool_result 摘要（失败带 isError：错误/原因直达 LLM）
-  const text = body?.ok
-    ? (body.stdout ?? "tool completed")
-    : ("tool " + tool + " 失败: " + (body?.error ?? body?.stderr ?? r.status));
-  return text;
+  // tool_result 摘要（失败带 isError=true：错误/原因直达 LLM，agentic loop 可据此重试/止损）
+  return body?.ok
+    ? { ok: true, text: body.stdout ?? "tool completed" }
+    : { ok: false, text: "tool " + tool + " 失败: " + (body?.error ?? body?.stderr ?? r.status) };
 }
 
 export default function remoteTools(pi: ExtensionAPI) {
@@ -69,18 +68,20 @@ export default function remoteTools(pi: ExtensionAPI) {
     parameters: ${typeboxParams},
     executionMode: "sequential",
     async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
-      return { content: [{ type: "text", text: await forwardBridge(${JSON.stringify(toolName)}, params) }], isError: false };
+      const call = await forwardBridge(${JSON.stringify(toolName)}, params);
+      return { content: [{ type: "text", text: call.text }], isError: !call.ok };
     },
   });
 }
 `;
 
-/** 生成一条工具对应的 stub 扩展文件 → 返回绝对路径（同 runId 覆盖写；per-run 唯一不碰撞）。 */
+/** 生成一条工具对应的 stub 扩展文件 → 返回绝对路径（per-run per-tool 唯一：文件名带工具名，多 remote 工具互不覆写）。 */
 export function writeStubExtension(toolName: string, argsSchema: Schema, runId: string): string {
   const content = STUB_TEMPLATE(toolName, schemaToTypeBox(argsSchema).replace(/^\s{4}/, ""));
   const dir = stubDirs();
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `remote-${runId.slice(0, 12)}.ts`);
+  const safe = toolName.replace(/[^A-Za-z0-9_-]/g, "_"); // 文件名安全（工具名限 registry 名）
+  const path = join(dir, `remote-${runId.slice(0, 12)}-${safe}.ts`);
   writeFileSync(path, content);
   return path;
 }

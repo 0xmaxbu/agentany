@@ -158,6 +158,12 @@ export class RemoteStore {
     return rows[0] ? this.pendingRow(rows[0]) : undefined;
   }
 
+  /** 终态/续跑成功后移除 pending 行（spec R-4「通过则移除 pending」；避免 ready 行永滞）。 */
+  deletePending(id: string): boolean {
+    const res = this.db.delete(pendingStarts).where(eq(pendingStarts.id, id)).run() as unknown as { changes: number };
+    return res.changes > 0;
+  }
+
   /** TTL 扫描：仍 waiting_remediation 且已过 ttl_at。 */
   listExpired(nowIso: string): PendingRow[] {
     return this.db

@@ -28,7 +28,7 @@ import { FakeDevice } from "./device-ws";
 import { getWorkflow } from "../src/registry";
 import { defineWorkflow } from "../src/workflow-engine/defineWorkflow";
 import { schema } from "../src/workflow-engine/schema";
-import { issueRunNonce } from "../src/bridge/nonce";
+import { issueRunNonce, revokeRunNonce, verifyNonce } from "../src/bridge/nonce";
 import type { MakeRunPiOpts } from "../src/pi/runPi-factory";
 import type { RunDeps } from "../src/runs";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
@@ -68,7 +68,18 @@ describe("R-5 · stub 生成（schema 桥 + 注入）", () => {
     expect(content).toContain("Type.String()");
     expect(content).toContain("/run/remote-tool");
     expect(content).toContain("AGENTANY_RUN_ID");
+    expect(content).toContain("isError: !call.ok"); // 转发失败 → 工具结果 isError=true（错误直达 LLM）
     expect(content).not.toContain("exec("); // 无本地执行
+  });
+
+  test("writeStubExtension：同一 runId 的多个工具 → 各自独立文件（不互覆写）", () => {
+    const p1 = writeStubExtension("device_shell", schema.object({ command: schema.string() }), "r_test_1");
+    const p2 = writeStubExtension("device_sysinfo", schema.object({ all: schema.optional(schema.boolean()) }), "r_test_1");
+    expect(p1).not.toBe(p2); // 修复前：同 runId 写同一文件 → 仅最后一个工具的 stub 生效
+    expect(existsSync(p1)).toBe(true);
+    expect(existsSync(p2)).toBe(true);
+    expect(readFileSync(p1, "utf8")).toContain('name: "device_shell"');
+    expect(readFileSync(p2, "utf8")).toContain('name: "device_sysinfo"');
   });
 });
 
@@ -290,5 +301,15 @@ describe("R-5 · 转发往返 + 守卫 + 失败语义 + 文件回传", () => {
     fd2.append("file", new Blob(["x"]), "x.txt");
     expect((await fetch(server.url("/files/device-upload"), { method: "POST", headers: { authorization: `Bearer ${((await otherTok.json()) as any).token}` }, body: fd2 })).status).toBe(403);
     void other;
+  });
+});
+
+describe("R-5 · run nonce 终态清退（revokeRunNonce）", () => {
+  test("revoke 后 stub 凭据失效（verifyNonce false）", () => {
+    const t = issueRunNonce("r_rev", "c_rev");
+    expect(verifyNonce(t)).toBe(true);
+    expect(revokeRunNonce("r_rev")).toBe(1);
+    expect(verifyNonce(t)).toBe(false);
+    expect(revokeRunNonce("r_rev")).toBe(0); // 幂等
   });
 });

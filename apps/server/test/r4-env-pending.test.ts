@@ -92,6 +92,7 @@ describe("R-4 环境检测与挂起-自动续（#76）", () => {
   let envRpc: DeviceEnvRpc;
   let runLifecycle: RunLifecycle;
   let deps: RunDeps;
+  let eventBus: EventBus;
   let member: Awaited<ReturnType<UserStore["createUser"]>>;
   let member2: Awaited<ReturnType<UserStore["createUser"]>>;
 
@@ -100,11 +101,12 @@ describe("R-4 环境检测与挂起-自动续（#76）", () => {
     store = createStores(db);
     userStore = new UserStore(db);
     registry = new DeviceRegistry();
+    eventBus = new EventBus(); // hoist：测试可订阅观察 pending 终态告知帧
     const lifecycleDeps: RunLifecycleDeps = {
       runStore: store.runs,
       chatStore: store.chat,
       hitlStore: store.hitl,
-      eventBus: new EventBus(),
+      eventBus,
       remote: store.remote,
       runPiFactory: stubFactory,
       getWorkflow: (id) => (id === remoteWf.id ? remoteWf : id === noEnvWf.id ? noEnvWf : getWorkflow(id)),
@@ -114,6 +116,7 @@ describe("R-4 环境检测与挂起-自动续（#76）", () => {
       registry,
       remote: store.remote,
       getWorkflow: lifecycleDeps.getWorkflow,
+      eventBus, // D7：declined/TTL 终态按原渠道告知
       onReady: (p) => {
         let input: unknown = {};
         try { input = p.input ? JSON.parse(p.input) : {}; } catch { /* 兜底 */ }
@@ -124,6 +127,7 @@ describe("R-4 环境检测与挂起-自动续（#76）", () => {
           conversationId: p.conversationId ?? undefined,
           caller: { id: p.userId, role: "member" },
           skipEnvCheck: true,
+          pendingAutoResume: { pendingId: p.id }, // 复检通过即批准：跳过审批门、createRun 后移除 pending
         });
       },
     });
@@ -228,7 +232,29 @@ describe("R-4 环境检测与挂起-自动续（#76）", () => {
     dev.send({ type: "env_remediated", pendingStartId: pendingId, approved: true });
     await answerEnvCheck(dev, ENV_TABLE.pass()); // 复检（第二次 check_environment）
     await delayUntil(() => runsOf().length === 1);
-    expect(store.remote.getPending(pendingId)!.envStatus).toBe("ready");
+    // spec「通过则移除 pending」：续跑建 run 后行已被删
+    await delayUntil(() => store.remote.getPending(pendingId) === undefined);
+    dev.close();
+    await dev.waitClose();
+  });
+
+  test("approval 门控工作流：pending ready 续跑绕过审批门（spec「重入剩余流程 createRun 之后照旧」）", async () => {
+    process.env.SECURITY_POSTURE = "strict"; // 严格态：未列规则 → require_approval（fail-closed）
+    const tok = await mTok();
+    const dev = await FakeDevice.connect(server.wsUrl("/ws/device"), { token: tok, deviceId: "dev1" });
+    const startP = startRemote(tok);
+    // 首轮：preflight 在审批门前因 env 挂起拦下（409 + pending），不发审批卡
+    await answerEnvCheck(dev, ENV_TABLE.installable(), "fail_installable");
+    const res = await startP;
+    expect(res.status).toBe(409);
+    const pendingId = ((await res.json()) as any).detail.pendingStartId;
+
+    // 设备同意 → 复检通过 → 自动续：绕过 require_approval（否则必须 conversationId 建卡 / 无会话则卡死），
+    // 直接建 run（证明未重放审批门）+ 删 pending
+    dev.send({ type: "env_remediated", pendingStartId: pendingId, approved: true });
+    await answerEnvCheck(dev, ENV_TABLE.pass());
+    await delayUntil(() => runsOf().length === 1);
+    await delayUntil(() => store.remote.getPending(pendingId) === undefined);
     dev.close();
     await dev.waitClose();
   });
@@ -291,6 +317,39 @@ describe("R-4 环境检测与挂起-自动续（#76）", () => {
     dev.send({ type: "env_remediated", pendingStartId: id, approved: true });
     await delayUntil(() => store.remote.getPending(id)!.envStatus === "failed");
     expect(store.remote.getPending(id)!.reason).toBe("ttl_expired");
+    expect(runsOf()).toHaveLength(0);
+    dev.close();
+    await dev.waitClose();
+  });
+
+  test("TTL sweep：过期 pending 置 failed 并按原渠道告知（不再永久挂起）", async () => {
+    const cid = store.chat.createConversation({ id: "c-sweep", workspaceId: "ws_company", userId: member.id }).id;
+    const frames: unknown[] = [];
+    eventBus.subscribe(cid, (f) => frames.push(f));
+    store.remote.createPendingStart({
+      id: "p_sweep", workflowId: remoteWf.id, userId: member.id, deviceId: "dev1",
+      ttlAt: new Date(Date.now() - 1000).toISOString(), input: "{}", conversationId: cid,
+    });
+    expect(envRpc.sweepExpired()).toBe(1);
+    expect(store.remote.getPending("p_sweep")!.envStatus).toBe("failed");
+    expect(store.remote.getPending("p_sweep")!.reason).toBe("ttl_expired");
+    expect(frames).toContainEqual({ type: "env_pending_status", pendingId: "p_sweep", workflowId: remoteWf.id, outcome: "failed", reason: "ttl_expired" });
+    expect(runsOf()).toHaveLength(0);
+  });
+
+  test("declined 若带会话锚 → pending cancelled 并按原渠道告知（D7 附则）", async () => {
+    const tok = await mTok();
+    const dev = await FakeDevice.connect(server.wsUrl("/ws/device"), { token: tok, deviceId: "dev1" });
+    const cid = store.chat.createConversation({ id: "c-dec", workspaceId: "ws_company", userId: member.id }).id;
+    const frames: unknown[] = [];
+    eventBus.subscribe(cid, (f) => frames.push(f));
+    store.remote.createPendingStart({
+      id: "p_dec", workflowId: remoteWf.id, userId: member.id, deviceId: "dev1",
+      ttlAt: new Date(Date.now() + 60_000).toISOString(), input: "{}", conversationId: cid,
+    });
+    dev.send({ type: "env_remediated", pendingStartId: "p_dec", approved: false });
+    await delayUntil(() => store.remote.getPending("p_dec")!.envStatus === "cancelled");
+    expect(frames).toContainEqual({ type: "env_pending_status", pendingId: "p_dec", workflowId: remoteWf.id, outcome: "cancelled", reason: "declined_by_device" });
     expect(runsOf()).toHaveLength(0);
     dev.close();
     await dev.waitClose();

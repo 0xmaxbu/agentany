@@ -22,7 +22,7 @@ import type { RemoteStore } from "../remote/store";
 import type { DeviceEnvRpc } from "../device/env"; // ADR-0033/R-4：环境检测 RPC
 import { getTool, listTools } from "../tool-registry"; // ADR-0033：workflow.tools → registry 的 remote 判定
 import { writeStubExtension } from "../device/stub"; // ADR-0033/R-5：remote stub 扩展产物
-import { issueRunNonce } from "../bridge/nonce"; // ADR-0033/R-5：run 级桥 nonce
+import { issueRunNonce, revokeRunNonce } from "../bridge/nonce"; // ADR-0033/R-5：run 级桥 nonce + 终态清退
 import { BRIDGE_PORT } from "../bridge/server";
 import { WorkflowNotFound, InvalidInput, WorkflowStartError, makeRunId } from "../runs";
 
@@ -73,6 +73,7 @@ export class RunLifecycle {
     approved?: boolean;
     caller?: { id: string; role: UserRole }; // ADR-0033/R-3：三入口（HTTP/bridge/chat 桥工具）传来的发起人身份——preflight 依据
     skipEnvCheck?: boolean; // ADR-0033/R-4：pending ready 自动续重入时跳过环境钩子（刚复检通过）
+    pendingAutoResume?: { pendingId: string }; // ADR-0033/R-4：复检通过自动续的重入标识——保留 ①② 授权/启停复核、跳过 ③④ 与 decide 审批门（spec「重入剩余流程 createRun 之后照旧」）；createRun 后移除 pending 行
     sync?: boolean; // true=await 完直接返 RunOutcome（HTTP 同步）；缺省=detached 后台续跑
   }): Promise<StartResult> {
     const wf = (this.deps.getWorkflow ?? getWorkflow)(p.workflowId);
@@ -87,7 +88,8 @@ export class RunLifecycle {
     if (!p.approved && p.caller) await this.preflight(p.caller, wf, { input: p.input, workspaceId: p.workspaceId, conversationId: p.conversationId }, p.skipEnvCheck ?? false);
 
     // #18 审批门（统一堵口：HTTP 直调与 bridge 同一条 gate）。validate 已过→审批卡只为合法 input 弹。
-    if (!p.approved) {
+    // pendingAutoResume：设备用户复检通过已构成批准（spec「createRun 之后照旧」）——不再重放审批门。
+    if (!p.approved && !p.pendingAutoResume) {
       const verdict = decide(p.workflowId);
       if (verdict.decision === "deny") return { status: "denied", reason: verdict.reason };
       if (verdict.decision === "require_approval") return this.requireApproval(p, wf);
@@ -105,6 +107,8 @@ export class RunLifecycle {
 
     const runId = makeRunId();
     this.deps.runStore.createRun({ runId, workflowId: p.workflowId, workspaceId, conversationId, input: p.input });
+    // ADR-0033/R-4：自动续 run 已建 → 移除 pending 行（「通过则移除 pending」；幂等——行缺失无害）。
+    if (p.pendingAutoResume) this.deps.remote?.deletePending(p.pendingAutoResume.pendingId);
 
     const abortCtrl = new AbortController();
     this.handles.set(runId, { conversationId: conversationId ?? "", scope: scopeOf(workspaceId), sessionId: `run-${runId}`, abortCtrl });
@@ -336,9 +340,11 @@ export class RunLifecycle {
     const publish = (frame: Frame) => (publishTo ? this.deps.eventBus.publish(publishTo, frame) : undefined);
     const run = this.deps.runStore.getRun(runId);
     if (outcome.status === "completed") {
+      revokeRunNonce(runId); // R-5：run 终态即清退 run nonce（远端 stub 凭据失效；调用方显然无法再用）
       // ADR-0031 决策 4：completed 权威 raw 源 = 引擎 lastOutput（不再从 raw log 末条重派生）；log 仅 stepListFallback 兜底用。
       this.deliverBrief(publish, runId, run, "completed", { lastOutput: outcome.lastOutput, log: this.deps.runStore.getLog(runId), note: undefined });
     } else if (outcome.status === "failed") {
+      revokeRunNonce(runId);
       this.deliverBrief(publish, runId, run, "failed", { log: [], note: outcome.note });
     } else if (outcome.status === "suspended") {
       publish({ type: "run_suspended", runId, stepId: outcome.stepId, questionId: outcome.questionId });

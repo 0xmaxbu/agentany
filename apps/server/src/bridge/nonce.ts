@@ -35,6 +35,18 @@ export function nonceRun(token: string): { runId: string; conversationId: string
   return e?.runId ? { runId: e.runId, conversationId: e.conversationId } : null;
 }
 
+/** run 终态后清退其全部 run nonce（ADR-0033/R-5 注释兑现）：删该 run 全部条目，stub 凭据此后失效。返清退条数。 */
+export function revokeRunNonce(runId: string): number {
+  let n = 0;
+  for (const [token, e] of entries) {
+    if (e.runId === runId) {
+      entries.delete(token);
+      n++;
+    }
+  }
+  return n;
+}
+
 function setEntry(token: string, e: Entry): void {
   if (entries.size >= maxNonces) {
     const oldest = entries.keys().next().value;

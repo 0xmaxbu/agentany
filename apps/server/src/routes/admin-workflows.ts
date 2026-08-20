@@ -3,7 +3,7 @@
 // （workflow_cfg.enabled / workflow_grants）。启停只拦新开（不影响进行中 run）——由 lifecycle preflight 消费。
 import type { Hono } from "hono";
 import type { RunDeps } from "../runs";
-import { listWorkflows } from "../registry";
+import { getWorkflow, listWorkflows } from "../registry";
 import { type AppContext, type AppEnv, userRoleOf } from "../auth/middleware";
 import { jsonBody } from "../http";
 
@@ -24,7 +24,7 @@ export function registerAdminWorkflowRoutes(app: Hono<AppEnv>, deps: RunDeps): v
         description: w.description ?? null,
         enabled: r.getCfg(w.id).enabled,
         grantCount: r.grantCount(w.id),
-        remoteTools: (w as any).tools?.some(() => true) ?? false, // 工作流声明了工具（remote 与否展示用）
+        remoteTools: (getWorkflow(w.id)?.tools?.length ?? 0) > 0, // listWorkflows 是收窄公共形状（不含 tools）；admin 用全量 Workflow 判声明
       })),
     );
   });
