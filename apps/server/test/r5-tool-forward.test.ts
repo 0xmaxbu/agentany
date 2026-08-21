@@ -28,7 +28,7 @@ import { FakeDevice } from "./device-ws";
 import { getWorkflow } from "../src/registry";
 import { defineWorkflow } from "../src/workflow-engine/defineWorkflow";
 import { schema } from "../src/workflow-engine/schema";
-import { issueRunNonce, revokeRunNonce, verifyNonce } from "../src/bridge/nonce";
+import { issueRunNonce, nonceRun, revokeRunNonce, verifyNonce } from "../src/bridge/nonce";
 import type { MakeRunPiOpts } from "../src/pi/runPi-factory";
 import type { RunDeps } from "../src/runs";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
@@ -81,6 +81,16 @@ describe("R-5 · stub 生成（schema 桥 + 注入）", () => {
     expect(readFileSync(p1, "utf8")).toContain('name: "device_shell"');
     expect(readFileSync(p2, "utf8")).toContain('name: "device_sysinfo"');
   });
+
+  // 2026-08-21 真机验收发现：带点工具名（browser.navigate 等）原样注册 → OpenAI 兼容 API 400
+  // （function.name 须 ^[a-zA-Z0-9_-]+$）。pi 侧注册名必须净化；桥转发仍用注册表原名。
+  test("writeStubExtension：带点工具名 → pi 注册名净化为下划线，桥转发保留原名", () => {
+    const p = writeStubExtension("browser.navigate", schema.object({ url: schema.string() }), "r_test_2");
+    const content = readFileSync(p, "utf8");
+    expect(content).toContain('name: "browser_navigate"'); // pi/供应商侧名（点号→下划线）
+    expect(content).not.toContain('name: "browser.navigate"');
+    expect(content).toContain('forwardBridge("browser.navigate"'); // 桥侧 = 注册表原名（桥按原名查表）
+  });
 });
 
 describe("R-5 · ctxFor 注入（仅含 remote 工具时）", () => {
@@ -89,6 +99,7 @@ describe("R-5 · ctxFor 注入（仅含 remote 工具时）", () => {
   let userStore: UserStore;
   let lifecycle: RunLifecycle;
   let captured: MakeRunPiOpts | null = null;
+  let nonceSnap: { runId: string; conversationId: string; userId?: string } | null = null;
   let server: ServerHandle;
   let member: Awaited<ReturnType<UserStore["createUser"]>>;
 
@@ -97,6 +108,7 @@ describe("R-5 · ctxFor 注入（仅含 remote 工具时）", () => {
     store = createStores(db);
     userStore = new UserStore(db);
     captured = null;
+    nonceSnap = null;
     const deps: RunLifecycleDeps = {
       runStore: store.runs,
       chatStore: store.chat,
@@ -106,6 +118,8 @@ describe("R-5 · ctxFor 注入（仅含 remote 工具时）", () => {
       getWorkflow: (id) => (id === remoteWf.id ? remoteWf : getWorkflow(id)),
       runPiFactory: (optsParts) => {
         captured = optsParts as MakeRunPiOpts;
+        // 工厂装配时（ctxFor 内）同步快照 nonce 条目——sync run 终态即 revoke，事后查必 null（时序非语义）
+        nonceSnap = captured?.runBridge ? nonceRun(captured.runBridge.nonce) : null;
         return stubFactory();
       },
     };
@@ -156,6 +170,18 @@ describe("R-5 · ctxFor 注入（仅含 remote 工具时）", () => {
     expect(captured!.extensions).toEqual([]); // 原样（synthetic extensions:[]）
     expect(captured!.runBridge).toBeUndefined(); // 回归护栏：本地工作流零桥注入
     void tok;
+  });
+
+  // 2026-08-21 真机验收发现：headless run（HTTP 同步直调，无会话）远端工具全 403——
+  // 「run 在 nonce 会话」守卫 + 会话→user 归属链均断。修复：nonce 签发带 caller.id，桥按它解析所有者。
+  test("headless start：runBridge nonce 带 caller.id（无会话归属链）", async () => {
+    const tok = await mTok();
+    const dev = await FakeDevice.connect(server.wsUrl("/ws/device"), { token: tok, deviceId: "dev1" });
+    await lifecycle.start({ workflowId: remoteWf.id, input: {}, workspaceId: "ws_company", caller: { id: member.id, role: "member" }, sync: true });
+    expect(captured!.runBridge).toBeTruthy();
+    expect(nonceSnap).toEqual({ runId: captured!.runBridge!.runId, conversationId: "", userId: member.id });
+    dev.close();
+    await dev.waitClose();
   });
 });
 
@@ -244,6 +270,26 @@ describe("R-5 · 转发往返 + 守卫 + 失败语义 + 文件回传", () => {
     expect((await invoke({ nonce: newRunNonce(), runId: "r_other" })).status).toBe(403);
     expect((await invoke({ nonce: newRunNonce(), tool: "web_search" })).status).toBe(400); // 本地工具不走转发
     expect((await invoke({ nonce: newRunNonce(), args: { command: 42 } })).status).toBe(400); // 参数筛查
+  });
+
+  // 2026-08-21 真机验收发现（同上）：headless run 过不了「run 在 nonce 会话」守卫（null ≠ ""），
+  // 会话→user 归属链也断。修复：桥对无会话 run 按 nonce 携带的 userId 解析所有者，转发照常可达设备。
+  test("headless run：无会话 + nonce 带 userId → 转发往返可达设备", async () => {
+    const headlessRunId = "r_test_headless";
+    store.runs.createRun({ runId: headlessRunId, workflowId: remoteWf.id, workspaceId: "ws_company", input: {} }); // 无 conversationId
+    const nonce = issueRunNonce(headlessRunId, "", member.id);
+    const tok = await mTok();
+    const dev = await FakeDevice.connect(server.wsUrl("/ws/device"), { token: tok, deviceId: "dev1" });
+    const invokeP = invoke({ nonce, runId: headlessRunId });
+    const call = (await dev.waitForMessage("tool_call")) as any;
+    dev.send({ type: "tool_result", id: call.id, ok: true, stdout: "/home/max/headless" });
+    const resp = await invokeP;
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as any;
+    expect(body.ok).toBe(true);
+    expect(body.stdout).toBe("/home/max/headless");
+    dev.close();
+    await dev.waitClose();
   });
 
   test("失败语义：设备离线 → ok:false device_offline", async () => {

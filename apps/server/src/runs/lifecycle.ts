@@ -112,7 +112,7 @@ export class RunLifecycle {
 
     const abortCtrl = new AbortController();
     this.handles.set(runId, { conversationId: conversationId ?? "", scope: scopeOf(workspaceId), sessionId: `run-${runId}`, abortCtrl });
-    const ctx = this.ctxFor(wf, workspaceId, runId, abortCtrl, conversationId ?? "");
+    const ctx = this.ctxFor(wf, workspaceId, runId, abortCtrl, conversationId ?? "", p.caller?.id);
 
     if (p.sync) {
       const outcome = await run(wf, this.deps.runStore, runId, ctx); // 引擎诚实化：顶层 catch-all → failed
@@ -310,7 +310,7 @@ export class RunLifecycle {
   }
 
   // —— 内部 ——
-  private ctxFor(wf: Workflow, workspaceId: string, runId: string, abortCtrl: AbortController, conversationId: string): RunCtx {
+  private ctxFor(wf: Workflow, workspaceId: string, runId: string, abortCtrl: AbortController, conversationId: string, userId?: string): RunCtx {
     const factory = this.deps.runPiFactory ?? makeRunPi;
     const scope = scopeOf(workspaceId);
     const { cwd } = resolveScopePaths(scope, workspaceId);
@@ -323,7 +323,8 @@ export class RunLifecycle {
     const runBridge = stubPaths.length > 0
       ? {
           url: `http://127.0.0.1:${BRIDGE_PORT}`,
-          nonce: issueRunNonce(runId, conversationId), // run 级长寿 nonce（远端 stub 调 /run/remote-tool）
+          // run 级长寿 nonce（远端 stub 调 /run/remote-tool）；userId：headless run 归属链（桥对无会话 run 按此解析所有者）
+          nonce: issueRunNonce(runId, conversationId, userId),
           port: BRIDGE_PORT,
           runId,
         }

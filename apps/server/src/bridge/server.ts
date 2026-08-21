@@ -99,11 +99,17 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     }
     const run = runStore.getRun(runId);
     if (!run) return c.json({ ok: false, error: "run not found", code: "run_not_found" }, 404);
-    if (run.conversationId !== runN.conversationId) {
+    if ((run.conversationId ?? "") !== runN.conversationId) { // headless（无会话 run）：null≈""（lifecycle 签发即 ""）
       return c.json({ ok: false, error: "run not in nonce conversation", code: "run_nonce_mismatch" }, 403);
     }
+    // 归属链：会话 run 维持 nonce→会话→所有者不变；headless run（HTTP 同步直调，2026-08-21 真机验收补）
+    // 断于会话——nonce 签发时已带 caller.id（lifecycle ctxFor），据此解析所有者（其在线设备即转发目标）。
     const conv = chatStore?.getConversation(runN.conversationId);
-    const user = conv?.userId ? userStore?.getUserById(conv.userId) : undefined;
+    const user = conv?.userId
+      ? userStore?.getUserById(conv.userId)
+      : !run.conversationId && runN.userId
+        ? userStore?.getUserById(runN.userId)
+        : undefined;
     if (!user) return c.json({ ok: false, error: "run owner not found", code: "run_owner_not_found" }, 403);
     const toolDef = getTool(tool);
     if (!toolDef || !toolDef.remote) {
