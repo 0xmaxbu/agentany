@@ -1,4 +1,4 @@
-// R-6 P3（agentany-client issue #4 / ADR-0036）真桥 seam：真 hyper-workflow 服务器 + 真 AgentClient + **真 macOS computer-use 桥**。
+// R-6 P3（agentany-client issue #4 / ADR-0036）**集成层**（issue #9 双仓分层）：真 hyper-workflow 服务器 + 真 AgentClient + **真 macOS computer-use 桥**。
 // 与 r6-e2e-client.test.ts 同构（serve port:0 + bridge /run/remote-tool + /files/device-upload），但执行器表用 allExecutors()
 // （含 computer_use.screens/observe/act），桥走默认路径 ~/.agentany/bin/computeruse（scripts/build-cu-macos.sh 安装产物）。
 // 环境级验证真实 AX / 真实截图（screen recording + accessibility 授权为本机已验证前置）；动作仅取无害子集（move → 鼠标到主屏中
@@ -41,7 +41,7 @@ async function waitOnline(agent: AgentClient, ms = 5_000): Promise<void> {
   }
 }
 
-describe.skipIf(!bridgePresent())("R-6 P3 · 真桥 computer-use round-trip（真实 AX / 真实截图，主 seam）", () => {
+describe.skipIf(!bridgePresent())("R-6 P3 · 集成层：真桥 computer-use round-trip（真实 AX / 真实截图）", () => {
   let db: ReturnType<typeof openDbMigrated>;
   let store: ReturnType<typeof createStores>;
   let userStore: UserStore;

@@ -1,4 +1,4 @@
-// R-6 P4（agentany-client issue #5 / ADR-0035 修订）真 Chrome seam：真 hyper-workflow 服务器 + 真 AgentClient
+// R-6 P4（agentany-client issue #5 / ADR-0035 修订）**集成层**（issue #9 双仓分层）：真 hyper-workflow 服务器 + 真 AgentClient
 // + **真 Chrome**（headless=new + 一次性 tmp profile——生产姿态是有头 + 持久 profile，headless 是 seam 显式例外）。
 // 与 r6-computer-use.test.ts 同构（serve port:0 + bridge /run/remote-tool + /files/device-upload），
 // 执行器表用 allExecutors()（含 browser 六件套）。页面用 data: URL（无外网依赖）；
@@ -51,7 +51,7 @@ const PAGE =
   '<input id="q">' +
   '<button id="b" onclick="this.dataset.c=1" style="position:fixed;left:0;top:0;width:300px;height:150px">B</button>';
 
-describe.skipIf(!chromePresent())("R-6 P4 · 真 Chrome browser round-trip（headless seam，主 seam）", () => {
+describe.skipIf(!chromePresent())("R-6 P4 · 集成层：真 Chrome browser round-trip（headless seam）", () => {
   let db: ReturnType<typeof openDbMigrated>;
   let store: ReturnType<typeof createStores>;
   let userStore: UserStore;

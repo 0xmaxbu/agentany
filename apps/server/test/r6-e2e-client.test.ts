@@ -1,7 +1,9 @@
-// R-6 P2（agentany-client issue #3 / ADR-0036）主 seam 验收：真客户端端到端 round-trip。
+// R-6 P2（agentany-client issue #3 / ADR-0036）**集成层**（issue #9 双仓分层，2026-08-21 起）：真客户端端到端 round-trip。
 // 真实 hyper-workflow 服务器（serve port:0 + bridge + /files/device-upload）+ **真 AgentClient**（@agentany/device-core，
 // P2 五执行器）——替代 r5 的脚本化 FakeDevice。触发路径：workflow 声明 tools → stub（R-5）→ bridge /run/remote-tool
 // → WS tool_call → 真客户端本地执行 → tool_result + artifacts 回传 → 断言 stdout/exit code/文件落盘。
+// 单测层已下沉两仓 mock（client 仓 @agentany/mock-server / 本仓 FakeDevice 系）——真+真只在本层，
+// 本层同时是 mock 漂移的契约锚（协议改动 → mock 与真实现同改，此处兜底）。
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,7 +38,7 @@ async function waitOnline(agent: AgentClient, ms = 3_000): Promise<void> {
   }
 }
 
-describe("R-6 P2 · 真客户端五执行器 round-trip（主 seam）", () => {
+describe("R-6 P2 · 集成层：真客户端五执行器 round-trip（真服务器+真客户端）", () => {
   let db: ReturnType<typeof openDbMigrated>;
   let store: ReturnType<typeof createStores>;
   let userStore: UserStore;
