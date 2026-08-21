@@ -81,5 +81,6 @@
 | 设备 (Device) | 运行远程工具的**目标机器 + 其上常驻的执行端**：经 `/ws/device`（Bearer token + deviceId）连服务器，收 `tool_call` 本地执行并回 `tool_result`，收 `check_environment` 探测并回 `env_report`。同一用户一次一连接（单机顶号，`remote_clients` 表）。_Avoid_: 远程代理、agent |
 | 设备客户端 (Device client) | 安装在设备上、连接服务器的执行端程序（**远程执行唯一缺失件**；现仅有测试用 FakeDevice）。定位是薄转发：不关心 run/工作流，只按服务端下发的 `tool`/`args`/`schema` 在设备本地执行并回传结果与产物。 |
 | 远程工具 (Remote tool) | 实际执行发生在设备上的工具：服务器工具注册表负责（`remote:true`）schema 校验与转发，设备按下发协议实现同名执行器。现状仅 `device_shell`；规划 bash/write/read/grep、computer-use、浏览器工具。 |
+| 接入配置 (Connection settings) | 设备客户端连入一台服务器所需的本地设置：**服务器地址**（base URL，客户端自行推导 WS 端点，连接前先探服务器健康）+ 登录凭证（账号登录换得的**长效 token** 与客户端自动生成、一次定型的 deviceId）。凭证只存设备本地、不存密码；v1 单服务器。接入即授权本机执行——登录时须向设备用户明示"该服务器将能在此设备执行任意命令（含桌面控制）"，是显式信任决策。改配置需重启客户端生效。 |
 | computer-use | **桌面级**控制工具：不止浏览器——无障碍树优先（mac AX / Win UIA / Linux AT-SPI2）+ 截图坐标兜底，观察→动作→结果验证的事务循环；浏览器只是其中一个可控目标。工具面=双通道三工具 `computer_use.screens/observe/act` + 独立 `browser_*` 组（ADR-0036） |
 | 登录态 (Login session) | 设备浏览器持久 profile 中的**已登录会话**（cookies/localStorage）。**只存设备本地**：远端操作者/服务器拿不到 cookie 原文，只是"借用设备用户已授权会话"在设备用户名下做动作；首次绑定浏览器/桌面会话给远端使用时需设备本地弹窗确认（ADR-0035）。 |
