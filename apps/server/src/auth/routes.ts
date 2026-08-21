@@ -13,7 +13,7 @@ const USERNAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MIN_PW = 8;
 const pwError = (pw: string): string | null => (pw.length < MIN_PW ? `password too short (min ${MIN_PW})` : null);
 
-const toPublic = (u: UserRow): Record<string, unknown> => ({
+export const toPublic = (u: UserRow): Record<string, unknown> => ({
   id: u.id,
   username: u.username,
   displayName: u.displayName ?? null,

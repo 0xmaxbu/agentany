@@ -8,18 +8,53 @@
 // per-turn nonce 即此闸。pi 持本 turn 的 nonce 才能调；吊销/淘汰后即便泄露也已失效。
 
 let maxNonces = Number(process.env.BRIDGE_MAX_NONCES ?? 10_000);
-const entries = new Map<string, { conversationId: string }>(); // token → 会话（审计用，#12+ 端点日志）
+const entries = new Map<string, Entry>(); // token → 会话（审计用，#12+ 端点日志）| R-5 加 runId（远端工具 stub）
+type Entry = { conversationId: string; runId?: string; userId?: string };
 
 /** 为某会话的当前 turn 签发一个 nonce。返回值经 env 注入 pi 子进程。 */
 export function issueNonce(conversationId: string): string {
+  const token = globalThis.crypto.randomUUID(); // 122-bit 强随机
+  setEntry(token, { conversationId });
+  return token;
+}
+
+/**
+ * 为某 run 签发**跨 turn 长寿 nonce**（ADR-0033/R-5）：远端工具 stub（pi 子进程内）调 bridge /run/remote-tool
+ * 的凭据——run 生命周期与 per-turn 无关（detached 后台长跑），故不能用 per-turn nonce（turn 末即吊销）。
+ * 同 cap 淘汰兜底（插入序最老优先）；run 终态后可主动 revokeRunNonce 清退。
+ * userId（2026-08-21 真机验收补）：headless run（HTTP 同步直调，无会话）的归属链断于会话——
+ * 签发时带 caller.id，桥对无会话 run 据此解析所有者（会话 run 维持会话链不变）。
+ */
+export function issueRunNonce(runId: string, conversationId: string, userId?: string): string {
+  const token = globalThis.crypto.randomUUID();
+  setEntry(token, { conversationId, runId, userId });
+  return token;
+}
+
+/** run 专用 nonce 的映射读：token → {runId, conversationId, userId?}（非 run nonce → null）。 */
+export function nonceRun(token: string): { runId: string; conversationId: string; userId?: string } | null {
+  const e = entries.get(token);
+  return e?.runId ? { runId: e.runId, conversationId: e.conversationId, userId: e.userId } : null;
+}
+
+/** run 终态后清退其全部 run nonce（ADR-0033/R-5 注释兑现）：删该 run 全部条目，stub 凭据此后失效。返清退条数。 */
+export function revokeRunNonce(runId: string): number {
+  let n = 0;
+  for (const [token, e] of entries) {
+    if (e.runId === runId) {
+      entries.delete(token);
+      n++;
+    }
+  }
+  return n;
+}
+
+function setEntry(token: string, e: Entry): void {
   if (entries.size >= maxNonces) {
-    // 兜底淘汰：Map 插入序首个即最老（issueNonce 追加，与时间单调一致）。
     const oldest = entries.keys().next().value;
     if (oldest !== undefined) entries.delete(oldest);
   }
-  const token = globalThis.crypto.randomUUID(); // 122-bit 强随机
-  entries.set(token, { conversationId });
-  return token;
+  entries.set(token, e);
 }
 
 /** bridge 中间件用：token 存在即有效（revoke/淘汰即删除 → 存在=有效未吊销）。 */

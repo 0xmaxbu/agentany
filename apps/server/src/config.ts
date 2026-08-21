@@ -64,6 +64,9 @@ export const workspaceWorkspacePath = (workspaceId: string): string =>
 export const workspaceSessionDir = (workspaceId: string): string =>
   resolve(dataDir(), "workspaces", workspaceId, "pi-sessions");
 
+// ADR-0033/R-5：远端工具 stub 扩展产物目录（DATA_DIR/stubs；run 期 -e 注入 pi，叠加在 wf.extensions 之上）。
+export const stubDirs = (): string => resolve(dataDir(), "stubs");
+
 // 通用（公司 workspace ws_company）工作区 / Pi session 目录（ADR-0009 general 沿用；ADR-0018）。
 export const generalWorkspacePath = (): string => resolve(dataDir(), "general", "workspace");
 export const generalSessionDir = (): string => resolve(dataDir(), "general", "pi-sessions");

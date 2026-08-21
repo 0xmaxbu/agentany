@@ -15,7 +15,7 @@ import type { RunDeps } from "../src/runs";
 // 覆盖传了 runLifecycle 则用之（bridge/特殊配置测试）。
 function withDefaultLifecycle(base: RunDeps, store: Stores, overrides: Partial<RunDeps>): RunDeps {
   if (Object.prototype.hasOwnProperty.call(overrides, "runLifecycle")) return { ...base, ...overrides }; // 显式（含 undefined=unavailable 测试）优先
-  return { ...base, ...overrides, runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), runPiFactory: overrides.runPiFactory ?? base.runPiFactory }) };
+  return { ...base, ...overrides, runLifecycle: new RunLifecycle({ runStore: store.runs, chatStore: store.chat, hitlStore: store.hitl, eventBus: new EventBus(), remote: store.remote, runPiFactory: overrides.runPiFactory ?? base.runPiFactory }) };
 }
 
 export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {
@@ -28,6 +28,7 @@ export function makeDeps(overrides: Partial<RunDeps> = {}): RunDeps {
     workspaceStore: new WorkspaceStore(db), // 与 store/userStore 共享同一 db（名单 join users；公司 ws 由迁移 seed）
     taskStore: new ScheduledTaskStore(db, store.chat), // #25：三表与蒸馏 seed 同 db；产出会话派生复用 store.createConversation
     imStore: new ImStore(db), // #51/T2：IM 身份绑定（IM 已接线）；IM 专项测试可覆盖
+    remote: store.remote, // ADR-0033/R-1：remote_clients/grants/cfg/pending（R-2 起 device routes 消费）
   };
   return withDefaultLifecycle(base, store, overrides);
 }
@@ -39,6 +40,7 @@ export function fullDeps(store: Stores, overrides: Partial<RunDeps> = {}): RunDe
     userStore: new UserStore(openDbMigrated(":memory:")),
     streamRegistry: new StreamRegistry(),
     workspaceStore: new WorkspaceStore(openDbMigrated(":memory:")),
+    remote: store.remote,
   };
   return withDefaultLifecycle(base, store, overrides);
 }

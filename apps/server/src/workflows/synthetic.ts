@@ -10,6 +10,7 @@ export const synthetic = defineWorkflow({
   description: "验证线性 + HITL 循环 + 终结（s1→review→s2）",
   inputSchema: schema.object({ offset: schema.optional(schema.number()) }),
   extensions: [],
+  tools: [], // 纯程序步——不调用任何工具
 })
   .step("s1", {
     // 纯程序步：产出值，带 offset。

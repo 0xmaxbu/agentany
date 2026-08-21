@@ -1,6 +1,11 @@
 // Mastra 风格 fluent builder（手搓，不用 @mastra；ADR-0001/0007）。
 // 默认链按声明顺序；execute 返回 { ...output, __next?: "stepId" } 命令式覆盖下一步（可往回=循环）。
 import type { Schema } from "./schema";
+// ADR-0033/R-1（#73）的设备环境要求类型已下沉 @agentany/ws-protocol（ADR-0034 D2，check_environment 线帧随带）；
+// DSL 仅在此 import + re-export（消费方保持原路径不变）。
+import type { EnvRequirement } from "@agentany/ws-protocol";
+
+export type { EnvRequirement };
 
 export interface RunPiResult {
   text: string;
@@ -56,6 +61,9 @@ export interface Workflow {
   outputSchema?: Schema;
   extensions?: string[]; // -e 显式扩展（ADR-0005）。skills 走标准发现，不在此声明。
   roles?: string[];
+  // ADR-0033/R-1（#73）：工具声明与设备环境要求——remote 判定（R-3 preflight）与 stub 生成（R-5）以此为据。
+  tools?: string[]; // 本工作流将调用的全部工具名（查全局工具注册表，见 tool-registry）
+  environment?: EnvRequirement[]; // 设备环境要求（仅 remote 工作流消费）
   steps: Record<string, StepDef>;
   order: string[];
   start: string;
@@ -75,6 +83,8 @@ export function defineWorkflow(opts: {
   outputSchema?: Schema;
   extensions?: string[];
   roles?: string[];
+  tools?: string[];
+  environment?: EnvRequirement[];
   start?: string;
 }): WorkflowBuilder {
   const steps: Record<string, StepDef> = {};

@@ -21,7 +21,7 @@ export const principalOf = (c: AppContext): { id: string; role: UserRole } => c.
 
 export function createAuthMiddleware(userStore: UserStore): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    if (c.req.path === "/health" || c.req.path === "/auth/login") return next();
+    if (c.req.path === "/health" || c.req.path === "/auth/login" || c.req.path === "/auth/device-login") return next();
     const tok = bearerOf(c.req.header("authorization"));
     if (tok) {
       const u = userStore.resolveToken(tok);

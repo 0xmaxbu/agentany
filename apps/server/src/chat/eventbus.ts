@@ -25,7 +25,8 @@ export type Frame =
   | { type: "step_started"; runId: string; stepId: string }
   | { type: "step_completed"; runId: string; stepId: string; status: string; output?: unknown; payload?: unknown; resumeSchema?: unknown }
   | { type: "hitl_request"; questionId: number; runId: string | null; prompt: string; options: string[]; resumeSchema?: unknown; multiple?: number; kind?: "ask" | "approval" | "task"; workflowId?: string; context?: string } // context=ADR-0025 决策 5 决策辅助 markdown（code-review F4 透出；前端渲染归后续）
-  | { type: "hitl_answered"; questionId: number; answer: unknown; kind?: "ask" | "approval" | "task"; runId?: string };
+  | { type: "hitl_answered"; questionId: number; answer: unknown; kind?: "ask" | "approval" | "task"; runId?: string }
+  | { type: "env_pending_status"; pendingId: string; workflowId: string; outcome: "cancelled" | "failed"; reason?: string }; // ADR-0033/R-4 D7：pending 挂起终态（设备拒绝/TTL 过期）按原渠道告知
 export type FrameHandler = (f: Frame) => void;
 
 export class EventBus {

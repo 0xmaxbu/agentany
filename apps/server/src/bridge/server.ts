@@ -3,7 +3,7 @@
 // 独立 Hono on loopback:BRIDGE_PORT（默认 3199），全局 per-turn nonce 中间件（Authorization: Bearer）。
 // 仅绑 127.0.0.1 + nonce 闸：只有本机持有效 nonce 的 pi 子进程能调。
 import { Hono } from "hono";
-import { verifyNonce, nonceConversation } from "./nonce";
+import { verifyNonce, nonceConversation, nonceRun } from "./nonce";
 import type { RunLifecycle } from "../runs/lifecycle";
 import type { RunsStore } from "../runs/store"; // ADR-0030：bridge 只学三域面（run/hitl/chat）
 import type { HitlStore } from "../hitl/store";
@@ -12,8 +12,13 @@ import type { EventBus, Frame } from "../chat/eventbus";
 import type { ResumeOutcome } from "../workflow-engine/runner";
 import type { UserStore } from "../auth/store";
 import type { ScheduledTaskStore } from "../scheduled-tasks/store";
+import type { DeviceToolRpc } from "../device/tool"; // ADR-0033/R-5：远端工具转发
+import type { DeviceEnvRpc } from "../device/env";
+import { getTool } from "../tool-registry";
+import { validateToolArgs } from "../tool-registry";
 import { validateCronAndFirstFire, InvalidCron, TooFrequent } from "../scheduled-tasks/cron";
 import { decide } from "../security/policy";
+import { WorkflowStartError } from "../runs"; // ADR-0033/R-3：preflight 结构化拒绝
 import { jsonBody } from "../http";
 
 export const BRIDGE_PORT = Number(process.env.BRIDGE_PORT ?? 3199);
@@ -37,11 +42,12 @@ export interface BridgeDeps {
   eventBus?: EventBus;
   userStore?: UserStore; // #28：nonce→conv→userId→role（任务工具权限分野）
   taskStore?: ScheduledTaskStore; // #28：/task/* 端点
+  toolRpc?: DeviceToolRpc; // ADR-0033/R-5：/run/remote-tool 转发
 }
 
 export function createBridgeApp(opts: BridgeDeps = {}): Hono {
   const app = new Hono();
-  const { runLifecycle: reg, runStore, hitlStore, chatStore, eventBus, userStore, taskStore } = opts;
+  const { runLifecycle: reg, runStore, hitlStore, chatStore, eventBus, userStore, taskStore, toolRpc } = opts;
 
   // 全局 nonce 闸：所有路由需 Authorization: Bearer <有效未吊销 nonce>。缺/坏 → 401。
   app.use("*", async (c, next) => {
@@ -60,14 +66,66 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     const body = await jsonBody(c);
     const { workflowId, input } = body as { workflowId?: string; input?: unknown };
     if (!workflowId) return c.json({ error: "workflowId required" }, 400);
+    // ADR-0033/R-3：nonce→conv→userId→role 推导发起人（与 #28 taskCtx 同口径），汇入单一 preflight
+    let caller: { id: string; role: import("../auth/store").UserRole } | undefined;
+    const conv = chatStore?.getConversation(conversationId);
+    const u = conv?.userId ? userStore?.getUserById(conv.userId) : undefined;
+    if (u) caller = { id: u.id, role: u.role };
     try {
-      return c.json(await reg.start({ conversationId, workflowId, input: input ?? {} }));
+      return c.json(await reg.start({ conversationId, workflowId, input: input ?? {}, caller }));
     } catch (e) {
+      if (e instanceof WorkflowStartError) {
+        return c.json({ error: e.message, code: e.code, ...(e.detail !== undefined ? { detail: e.detail } : {}) }, e.code === "not_granted" ? 403 : 409);
+      }
       return c.json({ error: (e as Error).message }, 400);
     }
   });
 
   // /run/read：read_run 工具经此。跨会话 guard（同 /ask_user /run/resume）：nonce 仅授权本会话，不得读他 conv 的 run。
+  // /run/remote-tool（ADR-0033/R-5）：远端工具 stub → 转发设备。run 级 nonce（跨 turn 长寿）。
+  // 归属链：nonce → {runId, conversationId} → run.conversationId 匹配 + 会话所有者 = 发起用户 → 其在线设备。
+  app.post("/run/remote-tool", async (c) => {
+    const token = bearerToken(c.req.header("authorization"));
+    const runN = token ? nonceRun(token) : null;
+    if (!runN) return c.json({ ok: false, error: "unauthorized", code: "bad_run_nonce" }, 401);
+    if (!toolRpc || !reg || !runStore) return c.json({ ok: false, error: "tool forwarding unavailable", code: "forwarding_unavailable" }, 503);
+    const body = await jsonBody(c);
+    const { runId, tool, args } = body as { runId?: unknown; tool?: unknown; args?: unknown };
+    if (typeof runId !== "string" || runId !== runN.runId) {
+      return c.json({ ok: false, error: "run nonce mismatch", code: "run_nonce_mismatch" }, 403);
+    }
+    if (typeof tool !== "string" || tool.length === 0) {
+      return c.json({ ok: false, error: "tool required", code: "bad_arg" }, 400);
+    }
+    const run = runStore.getRun(runId);
+    if (!run) return c.json({ ok: false, error: "run not found", code: "run_not_found" }, 404);
+    if ((run.conversationId ?? "") !== runN.conversationId) { // headless（无会话 run）：null≈""（lifecycle 签发即 ""）
+      return c.json({ ok: false, error: "run not in nonce conversation", code: "run_nonce_mismatch" }, 403);
+    }
+    // 归属链：会话 run 维持 nonce→会话→所有者不变；headless run（HTTP 同步直调，2026-08-21 真机验收补）
+    // 断于会话——nonce 签发时已带 caller.id（lifecycle ctxFor），据此解析所有者（其在线设备即转发目标）。
+    const conv = chatStore?.getConversation(runN.conversationId);
+    const user = conv?.userId
+      ? userStore?.getUserById(conv.userId)
+      : !run.conversationId && runN.userId
+        ? userStore?.getUserById(runN.userId)
+        : undefined;
+    if (!user) return c.json({ ok: false, error: "run owner not found", code: "run_owner_not_found" }, 403);
+    const toolDef = getTool(tool);
+    if (!toolDef || !toolDef.remote) {
+      return c.json({ ok: false, error: `tool not remote: ${tool}`, code: "not_remote_tool" }, 400); // 本地工具不走转发（回归护栏）
+    }
+    const v = validateToolArgs(tool, args ?? {});
+    if (!v.ok) return c.json({ ok: false, error: v.error, code: "invalid_args" }, 400);
+
+    const result = await toolRpc.invoke({ userId: user.id, tool, args: args ?? {}, schema: toolDef.argsSchema, runId, workflowId: run.workflowId }); // ADR-0038 D2：授权粒度用稳定 workflowId（run 已验）
+    // spec R-5 失败语义：转发中设备掉线/被顶号/超时/发送失败 → 该工具调用失败 → run 收 failed（不做自动重试）
+    if (!result.ok && (result.code === "tool_timeout" || result.code === "device_disconnected" || result.code === "device_offline" || result.code === "device_send_failed")) {
+      reg.abort(runId);
+    }
+    return c.json(result);
+  });
+
   app.get("/run/read", (c) => {
     if (!reg || !runStore) return c.json({ error: "run registry unavailable" }, 503);
     const convId = nonceConversation(bearerToken(c.req.header("authorization"))!);

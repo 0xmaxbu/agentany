@@ -38,6 +38,7 @@ export const brandStrategyAnalysis = defineWorkflow({
     anglesPath: schema.optional(schema.string()), // 默认从工作区 brand-research/<brand>-<region>/angles.json 读
   }),
   extensions: [],
+  tools: [], // 纯读写本地文件（skill 驱动），不调用外部工具
 })
   .step("select-angles", ask({
     // #46/T3 ADR-0025 决策 5：显式 {label,value} 锁常见点击（"all"/"1,3,5"），截图打字路径仍走宽 schema 归一化。

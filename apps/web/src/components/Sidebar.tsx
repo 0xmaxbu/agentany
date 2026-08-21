@@ -15,6 +15,7 @@ import { Dialog } from "./ui/dialog";
 /** 管理菜单（f4）：「所有 admin 管理项目」可扩展列表——M4 定时任务、M5 人审后续挂这。 */
 const ADMIN_MENU = [
   { path: "/admin/users", label: "用户" },
+  { path: "/admin/workflows", label: "工作流" }, // #75/ADR-0033 R-3：启停 + 授权管理
   { path: "/admin/workspaces", label: "Workspace" },
   { path: "/admin/tasks", label: "定时任务" },
 ] as const;

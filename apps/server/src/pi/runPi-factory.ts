@@ -11,6 +11,8 @@ export interface MakeRunPiOpts {
   scope: Scope; // workspace | general（run scope 取自会话/请求的 workspaceId）
   workspaceId: string | null; // workspace scope 必填（=workspaceId）；general（公司 ws）为 null
   sessionId: string;
+  // ADR-0033/R-5：远端工具转发的桥环境——注入时 stub 扩展（pi -e）能经 AGENTANY_BRIDGE_*/RUN_ID 回调 /run/remote-tool。
+  runBridge?: { url: string; nonce: string; port: number; runId: string };
 }
 // chat 会话可 general（公司 ws）；路径按 scope 解析（ADR-0009 / ADR-0018）。
 export interface MakeRunPiStreamOpts {
@@ -31,6 +33,15 @@ export function makeRunPi(opts: MakeRunPiOpts): ConfiguredRunPi {
       cwd,
       extensions: opts.extensions,
       timeoutMs: call.timeoutMs,
+      // R-5：远端 stub 的桥坐标 + runId 由 runPi extraEnv 注入（AGENTANY_BRIDGE_* 前缀已白名单放行）
+      extraEnv: opts.runBridge
+        ? {
+            AGENTANY_BRIDGE_URL: opts.runBridge.url,
+            AGENTANY_BRIDGE_NONCE: opts.runBridge.nonce,
+            AGENTANY_RUN_ID: opts.runBridge.runId,
+          }
+        : undefined,
+      loopbackPorts: opts.runBridge ? [opts.runBridge.port] : undefined,
     };
     return runPi(rpOpts);
   };
