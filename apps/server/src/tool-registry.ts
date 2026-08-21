@@ -163,3 +163,59 @@ registerTool({
   }),
   remote: true,
 });
+
+// ADR-0035（2026-08-21 修订）/ R-6 P4（agentany-client issue #5）：browser 六件套——统一 ChromeBackend
+// （客户端自启 Chrome/Edge + 专用持久 profile；ego 暂缓）。机械语义：tabs 列/建/关/聚焦；
+// navigate 等 loadEventFired；click x,y 视口像素（先发插值 move 轨迹）；type 逐字符键入；
+// evaluate 隔离世界 JS；screenshot 页面视口 JPEG。argsSchema 与 client-core/src/browser/executors.ts 对齐。
+registerTool({
+  name: "browser.tabs",
+  argsSchema: schema.object({
+    action: schema.optional(schema.enum("list", "new", "close", "activate")),
+    tab_id: schema.optional(schema.string()),
+    url: schema.optional(schema.string()),
+  }),
+  remote: true,
+});
+registerTool({
+  name: "browser.navigate",
+  argsSchema: schema.object({
+    url: schema.string(),
+    tab_id: schema.optional(schema.string()),
+  }),
+  remote: true,
+});
+registerTool({
+  name: "browser.click",
+  argsSchema: schema.object({
+    x: schema.number(),
+    y: schema.number(),
+    button: schema.optional(schema.enum("left", "right", "middle")),
+    tab_id: schema.optional(schema.string()),
+  }),
+  remote: true,
+});
+registerTool({
+  name: "browser.type",
+  argsSchema: schema.object({
+    text: schema.string(),
+    tab_id: schema.optional(schema.string()),
+  }),
+  remote: true,
+});
+registerTool({
+  name: "browser.evaluate",
+  argsSchema: schema.object({
+    expression: schema.string(),
+    tab_id: schema.optional(schema.string()),
+  }),
+  remote: true,
+});
+registerTool({
+  name: "browser.screenshot",
+  argsSchema: schema.object({
+    tab_id: schema.optional(schema.string()),
+    quality: schema.optional(schema.number()),
+  }),
+  remote: true,
+});
