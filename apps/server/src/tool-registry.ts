@@ -122,3 +122,44 @@ registerTool({
   }),
   remote: true,
 });
+
+// ADR-0036 / R-6 P3（agentany-client issue #4）：computer-use 三件套（macOS 原生桥 screens/observe/act）。
+// 机械语义：screens 无参；observe 截图+可选 AX outline；act 原子动作（ref AX 语义优先 / x,y 图像像素兜底）。
+// argsSchema 与 agentany-client/apps/client-core/src/computer-use.ts 执行器解析对齐。
+registerTool({
+  name: "computer_use.screens",
+  argsSchema: schema.object({}),
+  remote: true,
+});
+registerTool({
+  name: "computer_use.observe",
+  argsSchema: schema.object({
+    mode: schema.optional(schema.enum("visual", "visual+ax")),
+    display_id: schema.optional(schema.string()),
+    window_id: schema.optional(schema.number()),
+    max_long_edge: schema.optional(schema.number()),
+  }),
+  remote: true,
+});
+registerTool({
+  name: "computer_use.act",
+  argsSchema: schema.object({
+    action: schema.object({
+      type: schema.enum("move", "click", "dblclick", "rightclick", "drag", "scroll", "type", "hotkey", "wait"),
+      button: schema.optional(schema.enum("left", "right", "middle")),
+      text: schema.optional(schema.string()),
+      keys: schema.optional(schema.array(schema.string())),
+      ms: schema.optional(schema.number()),
+      dx: schema.optional(schema.number()),
+      dy: schema.optional(schema.number()),
+    }),
+    ref: schema.optional(schema.string()),
+    x: schema.optional(schema.number()),
+    y: schema.optional(schema.number()),
+    window_id: schema.optional(schema.number()),
+    display_id: schema.optional(schema.string()),
+    state_id: schema.optional(schema.number()),
+    max_long_edge: schema.optional(schema.number()),
+  }),
+  remote: true,
+});
