@@ -109,6 +109,8 @@ describe.skipIf(!chromePresent())("R-6 P4 · 集成层：真 Chrome browser roun
       deviceId: "dev-r6br",
       handlers: allExecutors(), // 五执行器 + computer-use 三件套 + browser 六件套
       workDir: (r) => join(devBase, r.replace(/[/\\:]/g, "_")),
+      grantsDir: mkdtempSync(join(tmpdir(), "r6br-grants-")), // 授权档隔离 + 借用类免弹窗（集成层放行）
+      onConsent: async () => ({ action: "allow_once" }),
     });
     agent.connect();
     await waitOnline(agent);

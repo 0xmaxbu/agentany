@@ -32,14 +32,15 @@ export class DeviceToolRpc {
     return this.inflight.size;
   }
 
-  /** 向用户当前在线设备转发工具调用并 await tool_result。设备不在线 → 结构化失败。 */
-  invoke(p: { userId: string; tool: string; args: unknown; schema: Schema; runId: string }): Promise<ToolCallResult> {
+  /** 向用户当前在线设备转发工具调用并 await tool_result。设备不在线 → 结构化失败。
+   * workflowId 必填（ADR-0038 D2：设备侧授权粒度；调用方从已验 run 取，不信任外传）。 */
+  invoke(p: { userId: string; tool: string; args: unknown; schema: Schema; runId: string; workflowId: string }): Promise<ToolCallResult> {
     const entry = this.opts.registry.get(p.userId);
     if (!entry) {
       return Promise.resolve({ ok: false, error: "device offline", code: "device_offline" });
     }
     const id = `tool-${++this.seq}`;
-    const frame: ToolCallFrame = { type: "tool_call", id, tool: p.tool, args: p.args, schema: p.schema, runId: p.runId };
+    const frame: ToolCallFrame = { type: "tool_call", id, tool: p.tool, args: p.args, schema: p.schema, runId: p.runId, workflowId: p.workflowId };
     try {
       entry.ws.send(JSON.stringify(frame));
     } catch {

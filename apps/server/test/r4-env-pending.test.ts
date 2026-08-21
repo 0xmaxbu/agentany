@@ -216,6 +216,11 @@ describe("R-4 环境检测与挂起-自动续（#76）", () => {
     expect(p.deviceId).toBe("dev1");
     await delay(30);
     expect(runsOf()).toHaveLength(0);
+    // P5b/ADR-0038 锚：挂起时服务端把补全请求推给设备（env_pending = 缺失项含 autoInstall 命令，供设备弹窗/执行）
+    const pend = (await dev.waitForMessage("env_pending")) as any;
+    expect(pend.pendingStartId).toBe(pendingId);
+    expect(pend.workflowId).toBe("remote-device-wf");
+    expect(pend.items).toEqual([{ id: "ffmpeg", name: "ffmpeg", check: "ffmpeg -version", autoInstall: "brew install ffmpeg" }]);
     dev.close();
     await dev.waitClose();
   });

@@ -23,7 +23,7 @@ import { DeviceToolRpc } from "../src/device/tool";
 import { issueRunNonce } from "../src/bridge/nonce";
 import type { RunDeps } from "../src/runs";
 import type { ConfiguredRunPi } from "../src/pi/runPi-factory";
-import { AgentClient, defaultExecutors } from "@agentany/device-core";
+import { AgentClient, defaultExecutors, writeGrants } from "@agentany/device-core";
 
 const stubFactory = (): ConfiguredRunPi => async () => ({ text: "", messages: [], toolResults: [] });
 const JH = { "content-type": "application/json" };
@@ -91,6 +91,7 @@ describe("R-6 P2 · 集成层：真客户端五执行器 round-trip（真服务�
       deviceId: "dev-r6",
       handlers: defaultExecutors(),
       workDir: (r) => join(devBase, r.replace(/[/\\:]/g, "_")),
+      grantsDir: mkdtempSync(join(tmpdir(), "r6-grants-")), // 授权档隔离（P5b：不读真 HOME）
     });
     agent.connect();
     await waitOnline(agent);
@@ -183,5 +184,32 @@ describe("R-6 P2 · 集成层：真客户端五执行器 round-trip（真服务�
     const body = (await r.json()) as any;
     expect(body.ok).toBe(true);
     expect(body.stdout).toContain("sub-dir");
+  });
+
+  test("P5b/ADR-0038 锚：tool_call 帧带 workflowId + 设备 deny 规则 → 透传 code:denied（不中止）", async () => {
+    // 独立授权档：synthetic-3step × bash 显式 deny——规则能命中即证明真服务端按 run 补了 workflowId（D2）
+    const grantsDir = mkdtempSync(join(tmpdir(), "r6-grants-deny-"));
+    writeGrants({ version: 1, rules: [{ workflowId: "synthetic-3step", tool: "bash", policy: "deny" }] }, { dir: grantsDir });
+    const agent2 = new AgentClient({
+      wsUrl: server.wsUrl("/ws/device"),
+      token: await mTok(),
+      deviceId: "dev-r6-c", // 顶掉 beforeEach 的 dev-r6（单机顶号）——本测试专用连接
+      handlers: defaultExecutors(),
+      workDir: (r) => join(devBase, r.replace(/[/\\:]/g, "_")),
+      grantsDir,
+    });
+    agent2.connect();
+    await waitOnline(agent2);
+    const r = await invoke("bash", { command: "echo denied-path" });
+    expect(r.status).toBe(200); // deny ≠ 桥层错误（工具级失败透传，ADR-0038 D6）
+    const body = (await r.json()) as any;
+    expect(body.ok).toBe(false);
+    expect(body.code).toBe("denied");
+    expect(body.error).toContain("denied by device user");
+    // 连接仍在：放行一次同连接调用（规则只 deny bash）——write 默认放行
+    const r2 = await invoke("write", { path: "after-deny.txt", content: "alive" });
+    const body2 = (await r2.json()) as any;
+    expect(body2.ok).toBe(true);
+    agent2.stop();
   });
 });

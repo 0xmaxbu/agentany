@@ -112,7 +112,7 @@ export function createBridgeApp(opts: BridgeDeps = {}): Hono {
     const v = validateToolArgs(tool, args ?? {});
     if (!v.ok) return c.json({ ok: false, error: v.error, code: "invalid_args" }, 400);
 
-    const result = await toolRpc.invoke({ userId: user.id, tool, args: args ?? {}, schema: toolDef.argsSchema, runId });
+    const result = await toolRpc.invoke({ userId: user.id, tool, args: args ?? {}, schema: toolDef.argsSchema, runId, workflowId: run.workflowId }); // ADR-0038 D2：授权粒度用稳定 workflowId（run 已验）
     // spec R-5 失败语义：转发中设备掉线/被顶号/超时/发送失败 → 该工具调用失败 → run 收 failed（不做自动重试）
     if (!result.ok && (result.code === "tool_timeout" || result.code === "device_disconnected" || result.code === "device_offline" || result.code === "device_send_failed")) {
       reg.abort(runId);

@@ -8,7 +8,7 @@ import type { EventBus } from "../chat/eventbus"; // ADR-0033/R-4 D7：pending �
 import { getWorkflow } from "../registry";
 // 线帧值类型从 @agentany/ws-protocol 导入（ADR-0034 D2；此处 re-export 兼容旧路径）。
 import type { EnvRequirement, EnvCheckItem, EnvCheckStatus } from "@agentany/ws-protocol";
-import type { CheckEnvironmentFrame } from "@agentany/ws-protocol";
+import type { CheckEnvironmentFrame, EnvPendingFrame } from "@agentany/ws-protocol";
 
 export type { EnvRequirement, EnvCheckItem, EnvCheckStatus };
 
@@ -100,6 +100,21 @@ export class DeviceEnvRpc {
   /** 已超时的在飞检测清理锚（可选调用；超时自动清）。 */
   get inFlight(): number {
     return this.checks.size;
+  }
+
+  /** 挂起补全通知（ADR-0038 env 链路）：pending 建立后推 env_pending 给设备——设备用户经 onConsent
+   * 同意/拒绝（同意 → 设备跑 items[].autoInstall → env_remediated，本端复检后续跑）。
+   * 推送失败/设备不在线 → 静默 false（pending 留 waiting_remediation，TTL sweep 兜底回收）。 */
+  notifyPending(userId: string, o: { pendingStartId: string; workflowId: string; items: EnvRequirement[] }): boolean {
+    const entry = this.opts.registry.get(userId);
+    if (!entry) return false;
+    const frame: EnvPendingFrame = { type: "env_pending", pendingStartId: o.pendingStartId, workflowId: o.workflowId, items: o.items };
+    try {
+      entry.ws.send(JSON.stringify(frame));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private reportFrom(entry: DeviceEntry, msg: Record<string, unknown>): EnvReportResult {

@@ -180,6 +180,13 @@ export class RunLifecycle {
           workspaceId: entry.workspaceId ?? null,
           conversationId: entry.conversationId ?? null,
         });
+        // ADR-0038 env 链路：把补全请求推给设备（设备用户 onConsent 同意/拒绝；items=缺失项含 autoInstall 命令。
+        // 推送失败静默——pending 留 waiting_remediation，TTL sweep 兜底）。
+        rpc.notifyPending(caller.id, {
+          pendingStartId: pendingId,
+          workflowId: wf.id,
+          items: requirements.filter((rq) => report.table.find((it) => it.id === rq.id)?.ok === false),
+        });
         throw new WorkflowStartError("env_installable_pending", `等待设备补全环境并确认后自动继续「${wf.name ?? wf.id}」`, {
           pendingStartId: pendingId,
           table: report.table,

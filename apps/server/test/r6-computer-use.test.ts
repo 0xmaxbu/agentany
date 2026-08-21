@@ -95,6 +95,8 @@ describe.skipIf(!bridgePresent())("R-6 P3 · 集成层：真桥 computer-use rou
       deviceId: "dev-r6cu",
       handlers: allExecutors(), // P2 五执行器 + computer_use 三件套
       workDir: (r) => join(devBase, r.replace(/[/\\:]/g, "_")),
+      grantsDir: mkdtempSync(join(tmpdir(), "r6cu-grants-")), // 授权档隔离 + 借用类免弹窗（集成层放行）
+      onConsent: async () => ({ action: "allow_once" }),
     });
     agent.connect();
     await waitOnline(agent);
@@ -148,6 +150,10 @@ describe.skipIf(!bridgePresent())("R-6 P3 · 集成层：真桥 computer-use rou
   });
 
   test("observe visual+ax：真实 AX outline（ref 引用可取）", async () => {
+    // 前台应用决定 AX 面：Chromium 系（Brave 等）默认不暴露 AX 树（2026-08-21 实测 count=0 → outline=null）。
+    // 置前必有原生 AX 的 Finder，消除环境抖动（桥按 NSWorkspace.frontmostApplication 建账）。
+    Bun.spawnSync(["osascript", "-e", 'tell application "Finder" to activate']);
+    await delay(500);
     const r = await invoke("computer_use.observe", { mode: "visual+ax" });
     expect(r.status).toBe(200);
     const body = (await r.json()) as any;
