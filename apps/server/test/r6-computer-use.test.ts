@@ -108,8 +108,9 @@ describe.skipIf(!bridgePresent())("R-6 P3 · 集成层：真桥 computer-use rou
     server.close();
   });
 
+  // P5a：走设备登录（真客户端同路径——公开端点 device-login；/auth/login 是 web 会话登录）
   const mTok = async () => {
-    const r = await fetch(server.url("/auth/login"), { method: "POST", headers: JH, body: JSON.stringify({ username: "m1", password: "password1" }) });
+    const r = await fetch(server.url("/auth/device-login"), { method: "POST", headers: JH, body: JSON.stringify({ username: "m1", password: "password1", deviceId: "dev-r6cu" }) });
     return ((await r.json()) as { token: string }).token;
   };
   const invoke = async (tool: string, args: unknown) =>

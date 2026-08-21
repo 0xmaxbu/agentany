@@ -103,8 +103,9 @@ describe("R-6 P2 · 集成层：真客户端五执行器 round-trip（真服务�
     server.close();
   });
 
+  // P5a：走设备登录（真客户端同路径——公开端点 device-login；/auth/login 是 web 会话登录）
   const mTok = async () => {
-    const r = await fetch(server.url("/auth/login"), { method: "POST", headers: JH, body: JSON.stringify({ username: "m1", password: "password1" }) });
+    const r = await fetch(server.url("/auth/device-login"), { method: "POST", headers: JH, body: JSON.stringify({ username: "m1", password: "password1", deviceId: "dev-r6" }) });
     return ((await r.json()) as { token: string }).token;
   };
   const invoke = async (tool: string, args: unknown) =>
