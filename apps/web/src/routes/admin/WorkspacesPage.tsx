@@ -1,16 +1,18 @@
 // Workspace 管理（f4）：表格 + 搜索 + 新建/编辑弹窗（页面默认仅表格）。渲染在 shell 中区。
 // 编辑弹窗：name/allUsers/成员名单（allUsers 开时名单灰掉——权限=allUsers ∪ 名单）。
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
 import { apiFetch } from "../../api";
 import { useAuth, ROLE } from "../../store/auth";
 import { COMPANY_WORKSPACE_ID } from "../../store/workspace"; // 域常量唯一源（本地不重定义）
-import { useTheme } from "../../lib/theme";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { MagnifyingGlassIcon, XIcon } from "@phosphor-icons/react";
 import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
 import { Dialog } from "../../components/ui/dialog";
+import { ThemeToggle } from "../../components/ui/theme-toggle";
+import { NoAccess } from "../../components/ui/no-access";
 import type { AdminUserRow } from "./UsersPage";
 
+const IW = 1.5; // 图标线宽全局统一
 const jsonHeaders = { "Content-Type": "application/json" };
 
 export interface AdminWorkspaceRow {
@@ -110,16 +112,16 @@ export function AdminWorkspacesPage() {
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-2 pb-3">
           <div className="relative flex-1">
-            <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <input
-              className="w-full rounded-md border border-input bg-background py-1.5 pl-7 pr-2 text-sm"
+            <MagnifyingGlassIcon size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="w-full py-1.5 pl-7 pr-2"
               placeholder="搜索名称 / slug…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               data-testid="ws-search"
             />
           </div>
-          <Button className="h-8 px-3 text-xs" onClick={() => setCreating(true)} data-testid="open-create-ws">
+          <Button size="sm" onClick={() => setCreating(true)} data-testid="open-create-ws">
             新建 Workspace
           </Button>
         </div>
@@ -167,10 +169,10 @@ export function AdminWorkspacesPage() {
                                 onChange={(e) => toggleArchive(w, !e.target.checked)}
                                 data-testid={`ws-archive-switch-${w.slug}`}
                               />
-                              归档关/开
+                              {archived ? "已归档" : "可见"}
                             </label>
                           )}
-                          <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => setEditing(w)}>编辑</Button>
+                          <Button variant="outline" size="xs" onClick={() => setEditing(w)}>编辑</Button>
                         </span>
                       </td>
                     </tr>
@@ -191,27 +193,7 @@ export function AdminWorkspacesPage() {
   );
 }
 
-function ThemeToggle() {
-  const [theme, setTheme] = useTheme();
-  return (
-    <button
-      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-      className="rounded-md border border-border bg-card px-2 py-1 text-xs text-card-foreground hover:opacity-80"
-    >
-      {theme === "dark" ? "浅色" : "深色"}
-    </button>
-  );
-}
-
-function NoAccess() {
-  const navigate = useNavigate();
-  return (
-    <div className="main flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-3">
-      <p className="text-sm text-muted-foreground">无权限：管理页仅管理员可用。</p>
-      <Button onClick={() => navigate("/")}>返回对话</Button>
-    </div>
-  );
-}
+const PLATFORM_TITLES: Record<string, string> = { feishu: "飞书", telegram: "Telegram" };
 
 /** 名单编辑子组件（新建/编辑弹窗共用）：chips + 下拉添加。allUsers 开时灰掉。 */
 function MemberList({ users, members, onAdd, onRemove, disabled }: {
@@ -226,11 +208,17 @@ function MemberList({ users, members, onAdd, onRemove, disabled }: {
         {members.map((m) => (
           <span key={m.userId} className="flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs">
             {m.displayName ?? m.username ?? m.userId}
-            <button className="text-muted-foreground hover:text-foreground" onClick={() => onRemove(m.userId)}>×</button>
+            <button
+              className="rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => onRemove(m.userId)}
+              aria-label={`移除成员 ${m.displayName ?? m.username ?? m.userId}`}
+            >
+              <XIcon size={11} strokeWidth={IW} />
+            </button>
           </span>
         ))}
         <select
-          className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+          className="rounded-md border border-input bg-background px-2 py-1 text-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20"
           value=""
           onChange={(e) => { const id = e.target.value; if (id) onAdd(id); }}
         >
@@ -273,7 +261,7 @@ function CreateWsDialog({ open, onClose, users, onCreated }: { open: boolean; on
   return (
     <Dialog open={open} onClose={close} title="新建 Workspace">
       <div className="flex flex-col gap-2">
-        <input className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" placeholder="名称（如：acme 品牌）" value={name} onChange={(e) => setName(e.target.value)} data-testid="new-ws-name" />
+        <Input className="py-1.5" placeholder="名称（如：acme 品牌）" value={name} onChange={(e) => setName(e.target.value)} data-testid="new-ws-name" />
         <p className="text-xs text-muted-foreground">slug 自动生成（检索用标识，无需填写）。</p>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={allUsers} onChange={(e) => setAllUsers(e.target.checked)} data-testid="new-ws-allusers" />
@@ -288,8 +276,8 @@ function CreateWsDialog({ open, onClose, users, onCreated }: { open: boolean; on
         />
         {err && <p className="text-xs text-destructive">{err}</p>}
         <div className="flex justify-end gap-2 pt-1">
-          <Button variant="outline" className="h-8 px-3 text-xs" onClick={close}>取消</Button>
-          <Button className="h-8 px-3 text-xs" disabled={busy || !name.trim()} onClick={() => void submit()} data-testid="create-ws">创建</Button>
+          <Button variant="outline" size="sm" onClick={close}>取消</Button>
+          <Button size="sm" disabled={busy || !name.trim()} onClick={() => void submit()} data-testid="create-ws">创建</Button>
         </div>
       </div>
     </Dialog>
@@ -328,7 +316,7 @@ function EditWsDialog({ ws, onClose, users, onChanged }: { ws: AdminWorkspaceRow
   return (
     <Dialog open={ws !== null} onClose={onClose} title={ws ? `编辑：${ws.name}` : ""}>
       <div className="flex flex-col gap-2">
-        <input className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" value={name} onChange={(e) => setName(e.target.value)} data-testid="edit-ws-name" />
+        <Input className="py-1.5" value={name} onChange={(e) => setName(e.target.value)} data-testid="edit-ws-name" />
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={allUsers} onChange={(e) => setAllUsers(e.target.checked)} />
           全员可见
@@ -353,8 +341,8 @@ function EditWsDialog({ ws, onClose, users, onChanged }: { ws: AdminWorkspaceRow
         )}
         {err && <p className="text-xs text-destructive">{err}</p>}
         <div className="flex justify-end gap-2 pt-1">
-          <Button variant="outline" className="h-8 px-3 text-xs" onClick={onClose}>取消</Button>
-          <Button className="h-8 px-3 text-xs" disabled={busy} onClick={() => void save()} data-testid="edit-ws-save">保存</Button>
+          <Button variant="outline" size="sm" onClick={onClose}>取消</Button>
+          <Button size="sm" disabled={busy} onClick={() => void save()} data-testid="edit-ws-save">保存</Button>
         </div>
       </div>
     </Dialog>

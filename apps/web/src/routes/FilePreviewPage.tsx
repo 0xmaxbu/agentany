@@ -4,7 +4,7 @@
 // blob URL iframe）；其余 → 挂载即自动下载（无预览能力，票面：直接下载）。
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
-import { ArrowLeftIcon, DownloadIcon, FileIcon, WarningIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, CircleNotchIcon, DownloadIcon, FileIcon, WarningIcon } from "@phosphor-icons/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fetchFile } from "../api";
@@ -51,6 +51,8 @@ export function FilePreviewPage() {
   const [text, setText] = useState<string | null>(null); // md/txt/html 源文本
   const [blobUrl, setBlobUrl] = useState<string | null>(null); // pdf blob
   const [error, setError] = useState<string | null>(null);
+  // 加载中显性化（原 pdf/html 分支直接返回 null → 白屏；空态与「加载中」分开判断）
+  const loading = text == null && blobUrl == null && error == null;
 
   useEffect(() => {
     let alive = true;
@@ -104,6 +106,14 @@ export function FilePreviewPage() {
         </div>
       );
     }
+    if (loading) {
+      return (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-muted-foreground">
+          <CircleNotchIcon size={22} weight="light" strokeWidth={IW} className="animate-spin" />
+          <span className="text-sm">加载中…</span>
+        </div>
+      );
+    }
     if (ext === "pdf") {
       return blobUrl ? (
         <iframe title={name} src={blobUrl} className="h-full w-full flex-1 border-0" />
@@ -138,12 +148,12 @@ export function FilePreviewPage() {
         <span>该文件类型无预览，已开始下载…</span>
       </div>
     );
-  }, [error, blobUrl, text, ext, name]);
+  }, [error, loading, blobUrl, text, ext, name]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
-        <Link to=".." relative="path" className="flex items-center gap-1 rounded px-1 py-0.5 text-sm text-muted-foreground hover:bg-accent">
+        <Link to=".." relative="path" className="flex items-center gap-1 rounded px-1 py-0.5 text-sm text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <ArrowLeftIcon size={15} weight="light" strokeWidth={IW} />
           返回
         </Link>

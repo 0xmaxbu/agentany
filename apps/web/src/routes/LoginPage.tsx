@@ -2,10 +2,13 @@
 // 表单对比度 AA、label 在输入上方、错误内联在输入下方、加载态禁用）。
 import { useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router";
+import { CircleNotch } from "@phosphor-icons/react";
 import { useAuth } from "../store/auth";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+
+const IW = 1.5; // 图标线宽全局统一
 
 export function LoginPage() {
   const status = useAuth((s) => s.status);
@@ -72,7 +75,14 @@ export function LoginPage() {
             </p>
           )}
           <Button type="submit" disabled={busy || !username || !password}>
-            {busy ? "登录中…" : "登录"}
+            {busy ? (
+              <span className="inline-flex items-center gap-1.5">
+                <CircleNotch size={14} strokeWidth={IW} className="animate-spin" />
+                登录中…
+              </span>
+            ) : (
+              "登录"
+            )}
           </Button>
         </form>
       </div>

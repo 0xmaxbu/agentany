@@ -31,7 +31,7 @@ function Toggle({
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 h-3.5 w-3.5 accent-[hsl(var(--primary))]"
+        className="mt-0.5 h-3.5 w-3.5 accent-primary"
         data-testid={testid}
       />
       <span className="flex flex-col">
@@ -115,7 +115,7 @@ export function TaskDialog({
             onChange={(e) => setName(e.target.value)}
             disabled={isDistill}
             placeholder="如：周报巡检"
-            className="h-8 rounded border border-border bg-background px-2 text-sm disabled:opacity-50"
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20 disabled:opacity-50"
             data-testid="task-form-name"
           />
         </label>
@@ -126,7 +126,7 @@ export function TaskDialog({
             value={cron}
             onChange={(e) => setCron(e.target.value)}
             placeholder="0 5 * * 1（分 时 日 月 周；最小间隔 1 小时）"
-            className={`h-8 rounded border bg-background px-2 font-mono text-sm ${cronLooksWrong(cron) ? "border-destructive" : "border-border"}`}
+            className={`h-8 rounded-md border bg-background px-2 font-mono text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/20 ${cronLooksWrong(cron) ? "border-destructive" : "border-input focus-visible:border-ring"}`}
             data-testid="task-form-cron"
           />
           {cronLooksWrong(cron) && (
@@ -148,7 +148,7 @@ export function TaskDialog({
                 value={prompt}
                 disabled
                 rows={3}
-                className="resize-none rounded border border-border bg-secondary/40 px-2 py-1.5 text-xs text-muted-foreground"
+                className="resize-none rounded-md border border-input bg-secondary/40 px-2 py-1.5 text-xs text-muted-foreground"
                 data-testid="task-form-prompt"
               />
               <span className="text-[11px] text-muted-foreground" data-testid="distill-note">
@@ -161,7 +161,7 @@ export function TaskDialog({
               onChange={(e) => setPrompt(e.target.value)}
               rows={3}
               placeholder="任务要完成什么（LLM 无人值守执行）"
-              className="resize-none rounded border border-border bg-background px-2 py-1.5 text-sm"
+              className="resize-none rounded-md border border-input bg-background px-2 py-1.5 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20"
               data-testid="task-form-prompt"
             />
           )}
@@ -203,8 +203,8 @@ export function TaskDialog({
         )}
 
         <div className="flex justify-end gap-2">
-          <Button variant="outline" className="h-8 px-3 text-xs" onClick={onClose} disabled={busy}>取消</Button>
-          <Button className="h-8 px-3 text-xs" onClick={() => void submit()} disabled={!canSubmit} data-testid="task-submit">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>取消</Button>
+          <Button size="sm" onClick={() => void submit()} disabled={!canSubmit} data-testid="task-submit">
             {busy ? "保存中…" : isEdit ? "保存" : "创建"}
           </Button>
         </div>

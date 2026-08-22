@@ -1,15 +1,20 @@
 // 用户管理（f4）：表格 + 搜索 + 新建/重置密码弹窗（页面默认仅表格）。渲染在 shell 中区。
 // #62：绑定状态列（IM 绑定——admin 列表 + 兜底解绑，服务端 /im/bindings）。
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
 import { apiFetch, listImBindings, unbindIm, type ImBinding } from "../../api";
 import { useAuth, ROLE } from "../../store/auth";
-import { useTheme } from "../../lib/theme";
 import { CheckIcon, MagnifyingGlassIcon, ProhibitIcon } from "@phosphor-icons/react";
 import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
 import { Dialog } from "../../components/ui/dialog";
+import { ThemeToggle } from "../../components/ui/theme-toggle";
+import { NoAccess } from "../../components/ui/no-access";
 
 const jsonHeaders = { "Content-Type": "application/json" };
+
+// 枚举本地化（chat-optimize）：admin/member、active/deactivated → 中文（原裸枚举直出）
+export const ROLE_LABEL: Record<string, string> = { admin: "管理员", member: "成员" };
+const STATUS_LABEL: Record<string, string> = { active: "启用", deactivated: "已停用" };
 
 export interface AdminUserRow {
   id: string; username: string; displayName: string | null; role: "admin" | "member";
@@ -87,16 +92,16 @@ export function AdminUsersPage() {
         {/* 工具行：搜索 + 新建 */}
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-2 pb-3">
           <div className="relative flex-1">
-            <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <input
-              className="w-full rounded-md border border-input bg-background py-1.5 pl-7 pr-2 text-sm"
+            <MagnifyingGlassIcon size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              className="w-full py-1.5 pl-7 pr-2"
               placeholder="搜索用户名 / 显示名…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               data-testid="user-search"
             />
           </div>
-          <Button className="h-8 px-3 text-xs" onClick={() => setCreating(true)} data-testid="open-create-user">
+          <Button size="sm" onClick={() => setCreating(true)} data-testid="open-create-user">
             新建用户
           </Button>
         </div>
@@ -135,34 +140,11 @@ export function AdminUsersPage() {
   );
 }
 
-function ThemeToggle() {
-  const [theme, setTheme] = useTheme();
-  return (
-    <button
-      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-      className="rounded-md border border-border bg-card px-2 py-1 text-xs text-card-foreground hover:opacity-80"
-      title="切换主题"
-    >
-      {theme === "dark" ? "浅色" : "深色"}
-    </button>
-  );
-}
-
-function NoAccess() {
-  const navigate = useNavigate();
-  return (
-    <div className="main flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-3">
-      <p className="text-sm text-muted-foreground">无权限：管理页仅管理员可用。</p>
-      <Button onClick={() => navigate("/")}>返回对话</Button>
-    </div>
-  );
-}
-
 const PLATFORM_TITLES: Record<string, string> = { feishu: "飞书", telegram: "Telegram" };
 
 function UserRow({ u, bindings, self, onReset, onChanged }: { u: AdminUserRow; bindings: ImBinding[]; self: boolean; onReset: () => void; onChanged: () => void }) {
   const deactivated = u.status === "deactivated";
-  const [confirming, setConfirming] = useState(false);
+  const [unbindConfirming, setUnbindConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const doUnbind = async () => {
@@ -171,7 +153,7 @@ function UserRow({ u, bindings, self, onReset, onChanged }: { u: AdminUserRow; b
     try {
       // v1 单平台逐个清（先飞书；多平台后续扩展）
       for (const b of bindings) await unbindIm(b.platform, b.imUserId);
-      setConfirming(false);
+      setUnbindConfirming(false);
       onChanged();
     } catch {
       // 失败保持 confirm 态（可重试）
@@ -182,15 +164,15 @@ function UserRow({ u, bindings, self, onReset, onChanged }: { u: AdminUserRow; b
     <tr className={`border-b border-border/50 last:border-0 hover:bg-accent/40 ${deactivated ? "opacity-50" : ""}`}>
       <td className="px-3 py-2">
         <span className="flex items-center gap-1.5">
-          {deactivated ? <ProhibitIcon size={13} className="text-muted-foreground" /> : <CheckIcon size={13} className="text-emerald-600" />}
+          {deactivated ? <ProhibitIcon size={14} className="text-muted-foreground" /> : <CheckIcon size={14} className="text-success" />}
           {u.displayName ?? u.username}
           {self && <span className="rounded-sm bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">你</span>}
         </span>
       </td>
       <td className="px-3 py-2 font-mono text-xs text-muted-foreground">@{u.username}</td>
-      <td className="px-3 py-2 text-xs">{u.role}</td>
+      <td className="px-3 py-2 text-xs">{ROLE_LABEL[u.role] ?? u.role}</td>
       <td className="px-3 py-2 text-xs">
-        {deactivated ? <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">已停用</span> : <span className="text-emerald-600">active</span>}
+        {deactivated ? <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">已停用</span> : <span className="text-success">{STATUS_LABEL[u.status] ?? u.status}</span>}
       </td>
       <td className="px-3 py-2 text-xs">
         {bindings.length === 0 ? (
@@ -207,22 +189,22 @@ function UserRow({ u, bindings, self, onReset, onChanged }: { u: AdminUserRow; b
         )}
       </td>
       <td className="px-3 py-2 text-right">
-        {/* 自己不可停用/重置（防锁死——后端亦有守卫） */}
+        {/* 自己不可停用/重置（防锁死——后端亦有守卫）；停用一点即执行（e2e 契约，无二次确认） */}
         {!self && (
           <span className="flex justify-end gap-1">
             {deactivated ? (
-              <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => void activateUser(u.id).then(onChanged)}>恢复</Button>
+              <Button variant="outline" size="xs" onClick={() => void activateUser(u.id).then(onChanged)}>恢复</Button>
             ) : (
-              <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => void deactivateUser(u.id).then(onChanged)}>停用</Button>
+              <Button variant="outline" size="xs" onClick={() => void deactivateUser(u.id).then(onChanged)}>停用</Button>
             )}
-            <Button variant="outline" className="h-7 px-2 text-xs" onClick={onReset}>重置密码</Button>
+            <Button variant="outline" size="xs" onClick={onReset}>重置密码</Button>
             {bindings.length > 0 &&
-              (confirming ? (
-                <Button variant="destructive" className="h-7 px-2 text-xs" disabled={busy} onClick={() => void doUnbind()} data-testid="unbind-im-confirm">
+              (unbindConfirming ? (
+                <Button variant="destructive" size="xs" disabled={busy} onClick={() => void doUnbind()} data-testid="unbind-im-confirm">
                   {busy ? "解绑中…" : "确认解绑"}
                 </Button>
               ) : (
-                <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => setConfirming(true)} data-testid="unbind-im">
+                <Button variant="outline" size="xs" onClick={() => setUnbindConfirming(true)} data-testid="unbind-im">
                   解绑
                 </Button>
               ))}
@@ -261,17 +243,17 @@ function CreateUserDialog({ open, onClose, onCreated }: { open: boolean; onClose
   return (
     <Dialog open={open} onClose={close} title="新建用户">
       <div className="flex flex-col gap-2">
-        <input className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" placeholder="用户名（登录用）" value={username} onChange={(e) => setUsername(e.target.value)} data-testid="new-username" />
-        <input className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" placeholder="初始密码" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        <input className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" placeholder="显示名（可选）" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-        <select className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" value={role} onChange={(e) => setRole(e.target.value)}>
-          <option value={ROLE.member}>member</option>
-          <option value={ROLE.admin}>admin</option>
+        <Input className="py-1.5" placeholder="用户名（登录用）" value={username} onChange={(e) => setUsername(e.target.value)} data-testid="new-username" />
+        <Input className="py-1.5" placeholder="初始密码" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <Input className="py-1.5" placeholder="显示名（可选）" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+        <select className="h-9 rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20" value={role} onChange={(e) => setRole(e.target.value)}>
+          <option value={ROLE.member}>{ROLE_LABEL[ROLE.member]}</option>
+          <option value={ROLE.admin}>{ROLE_LABEL[ROLE.admin]}</option>
         </select>
         {err && <p className="text-xs text-destructive">{err}</p>}
         <div className="flex justify-end gap-2 pt-1">
-          <Button variant="outline" className="h-8 px-3 text-xs" onClick={close}>取消</Button>
-          <Button className="h-8 px-3 text-xs" disabled={busy || !username.trim() || !password} onClick={() => void submit()} data-testid="create-user">
+          <Button variant="outline" size="sm" onClick={close}>取消</Button>
+          <Button size="sm" disabled={busy || !username.trim() || !password} onClick={() => void submit()} data-testid="create-user">
             开通
           </Button>
         </div>
@@ -300,11 +282,11 @@ function ResetPasswordDialog({ u, onClose, onDone }: { u: AdminUserRow | null; o
     <Dialog open={u !== null} onClose={onClose} title={u ? `重置密码：${u.displayName ?? u.username}` : ""}>
       <div className="flex flex-col gap-2">
         <p className="text-xs text-muted-foreground">重置后该用户全部会话断开，需用新密码重新登录。</p>
-        <input className="rounded-md border border-input bg-background px-2 py-1.5 text-sm" placeholder="新密码" type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} data-testid="reset-pw" />
+        <Input className="py-1.5" placeholder="新密码" type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} data-testid="reset-pw" />
         {err && <p className="text-xs text-destructive">{err}</p>}
         <div className="flex justify-end gap-2 pt-1">
-          <Button variant="outline" className="h-8 px-3 text-xs" onClick={onClose}>取消</Button>
-          <Button className="h-8 px-3 text-xs" disabled={busy || !newPw} onClick={() => void submit()} data-testid="reset-pw-ok">确定</Button>
+          <Button variant="outline" size="sm" onClick={onClose}>取消</Button>
+          <Button size="sm" disabled={busy || !newPw} onClick={() => void submit()} data-testid="reset-pw-ok">确定</Button>
         </div>
       </div>
     </Dialog>

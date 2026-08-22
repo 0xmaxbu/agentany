@@ -4,7 +4,6 @@
 // 权限：member 任务与 system 任务的服务端闸在路由层（member 只见自己的、system 硬拒）——
 // 本页只在 admin 菜单出现；直接输 URL 的 member 由列表空/NoAccess 兜底。
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router";
 import {
   CaretDownIcon,
   CaretRightIcon,
@@ -28,6 +27,7 @@ import {
 } from "../../api";
 import { useAuth, ROLE } from "../../store/auth";
 import { Button } from "../../components/ui/button";
+import { NoAccess } from "../../components/ui/no-access";
 import { TaskDialog } from "./TaskDialog";
 
 const IW = 1.5;
@@ -67,7 +67,7 @@ const scopeBadge = (t: ScheduledTask): string =>
   t.scope === "system"
     ? "bg-primary/15 text-primary"
     : t.enabled
-      ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+      ? "bg-success/15 text-success"
       : "bg-muted text-muted-foreground";
 
 export function AdminTasksPage() {
@@ -102,7 +102,7 @@ export function AdminTasksPage() {
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <h1 className="text-base font-semibold">定时任务</h1>
         {/* #40：admin 新建 system 任务（全域+权限开关在弹窗内定） */}
-        <Button className="h-7 px-2 text-xs" onClick={() => setDialogTask("new")} data-testid="task-create-btn">
+        <Button size="xs" onClick={() => setDialogTask("new")} data-testid="task-create-btn">
           <PlusIcon size={12} strokeWidth={IW} />
           新建
         </Button>
@@ -185,7 +185,7 @@ function TaskRow({
   return (
     <div className={`border-b border-border/50 last:border-0 ${task.enabled ? "" : "opacity-60"}`}>
       <div className="flex items-center gap-2 px-3 py-2 hover:bg-accent/40">
-        <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onToggle} data-testid="task-row">
+        <button className="flex min-w-0 flex-1 items-center gap-2 rounded text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={onToggle} data-testid="task-row">
           {expanded ? <CaretDownIcon size={12} strokeWidth={IW} /> : <CaretRightIcon size={12} strokeWidth={IW} />}
           <span className="min-w-0 flex-1 truncate text-sm text-foreground">{task.displayName}</span>
           <span className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] ${scopeBadge(task)}`}>
@@ -204,7 +204,7 @@ function TaskRow({
         <span className="flex shrink-0 items-center gap-1">
           <Button
             variant="outline"
-            className="h-7 px-2 text-xs"
+            size="xs"
             disabled={running || !task.enabled}
             onClick={() => void runNow()}
             title={running ? "执行中" : "立即执行一次"}
@@ -219,7 +219,8 @@ function TaskRow({
             <>
               <Button
                 variant="outline"
-                className="h-7 px-2 text-xs"
+                size="icon"
+                className="h-7 w-7"
                 onClick={onEdit}
                 title={isDistill ? "编辑（仅触发频率）" : "编辑任务"}
                 data-testid="task-edit-btn"
@@ -228,7 +229,7 @@ function TaskRow({
               </Button>
               <Button
                 variant="outline"
-                className="h-7 px-2 text-xs"
+                size="xs"
                 onClick={() => void setTaskEnabled(task.id, !task.enabled).then(onChanged)}
               >
                 {task.enabled ? <PauseIcon size={12} strokeWidth={IW} /> : <PlayIcon size={12} strokeWidth={IW} />}
@@ -236,41 +237,33 @@ function TaskRow({
               </Button>
               {!isDistill && (
                 confirming ? (
-                  <span className="flex items-center gap-1">
-                    <button className="text-[11px] text-destructive hover:underline" onClick={() => void deleteTask(task.id).then(onChanged)} data-testid="confirm-delete">
-                      确认删除
-                    </button>
-                    <button className="text-[11px] text-muted-foreground hover:underline" onClick={() => setConfirming(false)}>
-                      取消
-                    </button>
-                  </span>
+                  <Button variant="destructive" size="xs" onClick={() => void deleteTask(task.id).then(onChanged)} data-testid="confirm-delete">
+                    确认删除
+                  </Button>
                 ) : (
-                  <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => setConfirming(true)} data-testid="delete-task">
+                  <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => setConfirming(true)} data-testid="delete-task">
                     <TrashIcon size={12} strokeWidth={IW} />
                   </Button>
                 )
               )}
             </>
           ) : confirming ? (
-            <span className="flex items-center gap-1">
-              <button className="text-[11px] text-destructive hover:underline" onClick={() => void deleteTask(task.id).then(onChanged)} data-testid="confirm-delete">
-                确认删除
-              </button>
-              <button className="text-[11px] text-muted-foreground hover:underline" onClick={() => setConfirming(false)}>
-                取消
-              </button>
-            </span>
+            <Button variant="destructive" size="xs" onClick={() => void deleteTask(task.id).then(onChanged)} data-testid="confirm-delete">
+              确认删除
+            </Button>
           ) : (
             <>
               <Button
                 variant="outline"
-                className="h-7 px-2 text-xs"
+                size="xs"
                 onClick={() => void setTaskEnabled(task.id, !task.enabled).then(onChanged)}
                 data-testid="toggle-enabled"
               >
+                <PlayIcon size={12} strokeWidth={IW} className={task.enabled ? "hidden" : undefined} />
+                <PauseIcon size={12} strokeWidth={IW} className={task.enabled ? undefined : "hidden"} />
                 {task.enabled ? "停用" : "启用"}
               </Button>
-              <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => setConfirming(true)} data-testid="delete-task">
+              <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => setConfirming(true)} data-testid="delete-task">
                 <TrashIcon size={12} strokeWidth={IW} />
               </Button>
             </>
@@ -297,7 +290,7 @@ function TaskRow({
                       <span
                         className={
                           r.status === "ok"
-                            ? "text-emerald-600 dark:text-emerald-400"
+                            ? "text-success"
                             : r.status === "failed"
                               ? "text-destructive"
                               : "text-muted-foreground"
@@ -309,7 +302,7 @@ function TaskRow({
                       <span>{fmtTime(r.startedAt ?? r.finishedAt)}</span>
                     </span>
                     {/* #32 headless 日志：失败详情（管理页执行历史可读——system 任务产出即此） */}
-                    {r.note && <span className="block truncate text-destructive/90" title={r.note}>{r.note}</span>}
+                    {r.note && <span className="block truncate text-destructive" title={r.note}>{r.note}</span>}
                   </li>
                 ))}
               </ul>
@@ -317,16 +310,6 @@ function TaskRow({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function NoAccess() {
-  const navigate = useNavigate();
-  return (
-    <div className="main flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-3">
-      <p className="text-sm text-muted-foreground">无权限：管理页仅管理员可用。</p>
-      <Button onClick={() => navigate("/")}>返回对话</Button>
     </div>
   );
 }
