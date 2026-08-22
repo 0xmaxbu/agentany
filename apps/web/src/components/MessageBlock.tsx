@@ -43,7 +43,7 @@ export function ThinkingBlock({ block }: { block: Extract<UIAnyBlock, { kind: "t
     <div className="my-1">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground hover:bg-accent"
+        className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {open ? <CaretDownIcon size={12} strokeWidth={IW} /> : <CaretRightIcon size={12} strokeWidth={IW} />}
         <BrainIcon size={14} weight="light" strokeWidth={IW} className={streaming ? "animate-pulse" : undefined} />
@@ -56,7 +56,7 @@ export function ThinkingBlock({ block }: { block: Extract<UIAnyBlock, { kind: "t
         </span>
       </button>
       {open && (
-        <div className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap border-l-2 border-border pl-3 text-xs leading-relaxed text-muted-foreground">
+        <div className="reveal mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap border-l-2 border-border pl-3 text-xs leading-relaxed text-muted-foreground">
           {block.text}
           {streaming && <span className="cursor">▍</span>}
         </div>
@@ -74,23 +74,23 @@ export function ToolUseBlock({ block }: { block: Extract<UIAnyBlock, { kind: "to
     <div className="my-1 rounded-md border border-border bg-card text-[13px]">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left font-mono text-xs text-card-foreground hover:bg-accent"
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left font-mono text-xs text-card-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {open ? <CaretDownIcon size={12} strokeWidth={IW} /> : <CaretRightIcon size={12} strokeWidth={IW} />}
         <Icon size={14} weight="light" strokeWidth={IW} />
         <span className="truncate">{text}</span>
         {block.result == null && <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">运行中…</span>}
         {block.result != null && !isError && (
-          <CheckSquareIcon size={13} weight="light" strokeWidth={IW} className="ml-auto shrink-0 text-emerald-600 dark:text-emerald-400" />
+          <CheckSquareIcon size={14} weight="light" strokeWidth={IW} className="ml-auto shrink-0 text-success" />
         )}
-        {isError && <WarningIcon size={13} weight="light" strokeWidth={IW} className="ml-auto shrink-0 text-destructive" />}
+        {isError && <WarningIcon size={14} weight="light" strokeWidth={IW} className="ml-auto shrink-0 text-destructive" />}
       </button>
       {/* 错误摘要永远露出（折叠态也可见） */}
       {isError && !open && (
         <div className="truncate px-2.5 pb-1.5 font-mono text-xs text-destructive">{block.result?.text.slice(0, 200)}</div>
       )}
       {open && block.result != null && (
-        <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t border-border px-2.5 py-2 font-mono text-xs leading-relaxed text-muted-foreground">
+        <pre className="reveal max-h-64 overflow-auto whitespace-pre-wrap border-t border-border px-2.5 py-2 font-mono text-xs leading-relaxed text-muted-foreground">
           {block.result.text}
         </pre>
       )}
@@ -112,7 +112,8 @@ function CodeBlock({ code, lang, streaming }: { code: string; lang?: string; str
     };
   }, [code, lang, streaming]);
   if (html) return <code className="block" dangerouslySetInnerHTML={{ __html: html }} />;
-  return <code className="block font-mono text-xs">{code}</code>;
+  // 流式/高亮未落定 fallback：先给代码卡底色（与 shiki 卡视觉连续，不闪裸文本）
+  return <code className="block rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{code}</code>;
 }
 
 /**

@@ -49,7 +49,7 @@ function MyTasks() {
                 <span className="flex shrink-0 items-center gap-0.5">
                   <button
                     title={running === t.id ? "执行中" : "立即执行一次"}
-                    className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+                    className="rounded-sm p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40"
                     disabled={running === t.id || !t.enabled}
                     onClick={() => {
                       setRunning(t.id);
@@ -62,20 +62,21 @@ function MyTasks() {
                   </button>
                   <button
                     title={t.enabled ? "停用" : "启用"}
-                    className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    className="rounded-sm p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => void setTaskEnabled(t.id, !t.enabled).then(reload)}
                   >
                     {t.enabled ? <PauseIcon size={12} strokeWidth={IW} /> : <PlayIcon size={12} strokeWidth={IW} />}
                   </button>
                   {confirming === t.id ? (
-                    <span className="flex items-center gap-0.5 text-[10px]">
-                      <button className="text-destructive hover:underline" onClick={() => void deleteTask(t.id).then(reload)}>删</button>
-                      <button className="text-muted-foreground hover:underline" onClick={() => setConfirming(null)}>消</button>
+                    <span className="flex items-center gap-1 text-[11px]">
+                      {/* 「删/消」= e2e 契约文本（tasks.spec hasText）——不可改 */}
+                      <button className="rounded px-0.5 text-destructive hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => void deleteTask(t.id).then(reload)}>删</button>
+                      <button className="rounded px-0.5 text-muted-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setConfirming(null)}>消</button>
                     </span>
                   ) : (
                     <button
                       title="删除"
-                      className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-destructive"
+                      className="rounded-sm p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onClick={() => setConfirming(t.id)}
                     >
                       <TrashIcon size={12} strokeWidth={IW} />
@@ -103,7 +104,10 @@ export function ContextPanel() {
     <aside className="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-l border-border bg-background p-4">
       <div>
         <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">会话</h2>
-        <p className="mt-1 break-all font-mono text-xs text-foreground">{conversationId ?? "-"}</p>
+        {/* 调试信息不常驻（chat-optimize）：只显尾码，完整 id 收进 title */}
+        <p className="mt-1 truncate font-mono text-xs text-foreground" title={conversationId ?? undefined}>
+          {conversationId ? `…${conversationId.slice(-8)}` : "-"}
+        </p>
       </div>
       <div>
         <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">待处理</h2>

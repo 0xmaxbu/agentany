@@ -12,6 +12,12 @@ import { useAuth, ROLE } from "../store/auth";
 import { listConversations, issueBindCode, listImBindings, type ConversationRow, type Workspace } from "../api";
 import { Dialog } from "./ui/dialog";
 
+const IW = 1.5; // 图标线宽全局统一（design 纪律——本文件此前漏配 12 处，chat-optimize 补齐）
+
+/** 微图标钮通用态：hover/焦点环/过渡 + p-1 扩命中区（14 图标 → 24px）。 */
+const ICON_BTN =
+  "rounded-sm p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
 /** 管理菜单（f4）：「所有 admin 管理项目」可扩展列表——M4 定时任务、M5 人审后续挂这。 */
 const ADMIN_MENU = [
   { path: "/admin/users", label: "用户" },
@@ -38,37 +44,47 @@ function UserFooter({ isAdmin, onBindOpen }: { isAdmin: boolean; onBindOpen: () 
       className="relative mt-auto shrink-0 border-t border-border pt-2"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") setOpen(false);
+      }}
     >
-      <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent" data-testid="user-footer">
+      <button
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        data-testid="user-footer"
+      >
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
           {initial}
         </span>
         <span className="min-w-0 flex-1 truncate text-xs text-foreground">{name}</span>
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 flex flex-col gap-0.5 rounded-md border border-border bg-card p-1 shadow-md">
+        <div className="reveal absolute bottom-full left-0 right-0 mb-1 flex flex-col gap-0.5 rounded-md border border-border bg-card p-1 shadow-md">
           {isAdmin && (
             <button
-              className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
+              className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => {
                 setOpen(false);
                 navigate("/admin/users");
               }}
             >
-              <GearSixIcon size={13} />
+              <GearSixIcon size={14} strokeWidth={IW} />
               管理
             </button>
           )}
           {isAdmin && <BindFeishuMenuItem onOpen={() => { setOpen(false); onBindOpen(); }} />}
           {status === "authenticated" && (
             <button
-              className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
+              className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => {
                 setOpen(false);
                 void logout();
               }}
             >
-              <SignOutIcon size={13} />
+              <SignOutIcon size={14} strokeWidth={IW} />
               登出
             </button>
           )}
@@ -102,10 +118,10 @@ function ConvItemActions({ convId, isAdmin, onRemoved }: { convId: string; isAdm
   if (confirming) {
     return (
       <span className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-        <button className="text-[11px] text-destructive hover:underline" onClick={() => void remove(convId).then(onRemoved)}>
+        <button className="rounded px-0.5 text-[11px] text-destructive hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => void remove(convId).then(onRemoved)}>
           确认删除
         </button>
-        <button className="text-[11px] text-muted-foreground hover:underline" onClick={() => setConfirming(false)}>
+        <button className="rounded px-0.5 text-[11px] text-muted-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setConfirming(false)}>
           取消
         </button>
       </span>
@@ -115,18 +131,18 @@ function ConvItemActions({ convId, isAdmin, onRemoved }: { convId: string; isAdm
     <span className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
       <button
         title="归档"
-        className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+        className={ICON_BTN}
         onClick={() => void archive(convId).then(onRemoved)}
       >
-        <ArchiveIcon size={13} />
+        <ArchiveIcon size={14} strokeWidth={IW} />
       </button>
       {isAdmin && (
         <button
           title="删除（不可恢复）"
-          className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-destructive"
+          className={`${ICON_BTN} hover:text-destructive`}
           onClick={() => setConfirming(true)}
         >
-          <TrashIcon size={13} />
+          <TrashIcon size={14} strokeWidth={IW} />
         </button>
       )}
     </span>
@@ -155,29 +171,29 @@ function ArchiveSection() {
 
   return (
     <div className="border-t border-border pt-2">
-      <button className="flex w-full items-center gap-1 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground" onClick={toggle}>
-        <ArchiveIcon size={12} />
+      <button className="flex w-full items-center gap-1 rounded px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={toggle}>
+        <ArchiveIcon size={12} strokeWidth={IW} />
         归档
       </button>
       {open && (
-        <div className="flex flex-col gap-0.5">
+        <div className="reveal flex flex-col gap-0.5">
           {archived.length === 0 && <div className="px-2 py-1 text-xs text-muted-foreground">暂无归档会话</div>}
           {archived.map((c) => (
             <div key={c.id} className={`archived-item flex items-center justify-between gap-1 rounded-md px-2 py-1 hover:bg-accent ${c.id === current ? "bg-accent" : ""}`}>
               <button
-                className="min-w-0 flex-1 truncate text-left text-xs text-muted-foreground"
+                className="min-w-0 flex-1 truncate rounded text-left text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => navigate(`/c/${c.id}`)}
                 title={c.title ?? c.id}
               >
                 {c.title || UNTITLED}
               </button>
               <span className="flex shrink-0 items-center gap-0.5">
-                <button title="恢复" className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => void restore(c.id)}>
-                  <ArrowUUpLeftIcon size={13} />
+                <button title="恢复" className={ICON_BTN} onClick={() => void restore(c.id)}>
+                  <ArrowUUpLeftIcon size={14} strokeWidth={IW} />
                 </button>
                 {isAdmin && (
-                  <button title="删除（不可恢复）" className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-destructive" onClick={() => void remove(c.id).then(() => { if (c.id === current) fallbackNav(c.id); })}>
-                    <TrashIcon size={13} />
+                  <button title="删除（不可恢复）" className={`${ICON_BTN} hover:text-destructive`} onClick={() => void remove(c.id).then(() => { if (c.id === current) fallbackNav(c.id); })}>
+                    <TrashIcon size={14} strokeWidth={IW} />
                   </button>
                 )}
               </span>
@@ -220,16 +236,16 @@ export function Sidebar() {
       {adminMode ? (
         <div className="flex flex-col gap-0.5">
           <button
-            className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={() => navigate("/")}
           >
-            <ArrowUUpLeftIcon size={13} />
+            <ArrowUUpLeftIcon size={14} strokeWidth={IW} />
             返回对话
           </button>
           {ADMIN_MENU.map((m) => (
             <button
               key={m.path}
-              className={`item rounded-md px-3 py-1.5 text-left text-sm ${pathname === m.path ? "active" : "text-foreground hover:bg-accent"}`}
+              className={`item rounded-md px-3 py-1.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${pathname === m.path ? "active" : "text-foreground hover:bg-accent"}`}
               onClick={() => navigate(m.path)}
             >
               {m.label}
@@ -259,7 +275,7 @@ function BindFeishuMenuItem({ onOpen }: { onOpen: () => void }) {
       data-testid="bind-feishu"
     >
       绑定飞书
-      {bound && <span className="rounded-sm bg-emerald-600/15 px-1.5 py-0.5 text-[10px] text-emerald-600" data-testid="bind-feishu-tag">已绑定</span>}
+      {bound && <span className="rounded-sm bg-success/15 px-1.5 py-0.5 text-[10px] text-success" data-testid="bind-feishu-tag">已绑定</span>}
     </button>
   );
 }
@@ -334,7 +350,7 @@ function BindFeishuDialog({ open, onClose }: { open: boolean; onClose: () => voi
   return (
     <Dialog open={open} onClose={onClose} title="绑定飞书">
       {bound ? (
-        <p className="text-sm text-emerald-600" data-testid="bind-success">已绑定飞书，卡片将推送到您的飞书。</p>
+        <p className="text-sm text-success" data-testid="bind-success">已绑定飞书，卡片将推送到您的飞书。</p>
       ) : code && expiresAt ? (
         <div className="flex flex-col gap-2 text-sm">
           <p className="text-muted-foreground">在飞书私聊机器人发送：</p>
@@ -415,9 +431,9 @@ function ConvAccordion({ isAdmin, current, loaded, fallbackNav }: {
     <>
       {/* 搜索框（#手风琴）：空=分页态；非空全量过滤 */}
       <div className="relative mb-2">
-        <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+        <MagnifyingGlassIcon size={14} strokeWidth={IW} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
         <input
-          className="w-full rounded-md border border-input bg-background py-1.5 pl-7 pr-2 text-sm"
+          className="w-full rounded-md border border-input bg-background py-1.5 pl-7 pr-2 text-sm transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20"
           placeholder="搜索会话…"
           value={query}
           onChange={(e) => void setQuery(e.target.value)}
@@ -443,19 +459,19 @@ function ConvAccordion({ isAdmin, current, loaded, fallbackNav }: {
             const open = expanded.has(w.id);
             return (
               <div key={w.id} className="flex flex-col gap-0.5" data-testid={`ws-group-${w.slug}`}>
-                {/* 组头：箭头 + 名 + 「+」建会话 */}
+                {/* 组头：箭头 + 名 + 「+」建会话（hover 或键盘聚焦行内均可见 +） */}
                 <div className="group/head mt-1 flex items-center gap-1 px-1 py-1">
-                  <button className="flex min-w-0 flex-1 items-center gap-1 text-left" onClick={() => toggle(w.id)} data-testid={`ws-toggle-${w.slug}`}>
-                    {open ? <CaretDownIcon size={12} className="shrink-0 text-muted-foreground" /> : <CaretRightIcon size={12} className="shrink-0 text-muted-foreground" />}
+                  <button className="flex min-w-0 flex-1 items-center gap-1 rounded px-0.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => toggle(w.id)} data-testid={`ws-toggle-${w.slug}`}>
+                    {open ? <CaretDownIcon size={12} strokeWidth={IW} className="shrink-0 text-muted-foreground" /> : <CaretRightIcon size={12} strokeWidth={IW} className="shrink-0 text-muted-foreground" />}
                     <span className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground group-hover/head:text-foreground">{w.name}</span>
                   </button>
                   <button
-                    className="hidden rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground group-hover/head:block"
+                    className="hidden rounded-sm p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/head:block group-focus-within/head:block"
                     title={`在 ${w.name} 新建会话`}
                     onClick={(e) => void newInWs(w.id, e)}
                     data-testid={`ws-new-${w.slug}`}
                   >
-                    <PlusIcon size={12} />
+                    <PlusIcon size={12} strokeWidth={IW} />
                   </button>
                 </div>
                 {open && (
@@ -505,7 +521,7 @@ function ConvItem({ c, current, isAdmin, fallbackNav, showTime = false }: { c: C
   return (
     <div className="group/item relative flex items-center">
       <button
-        className={`item min-w-0 flex-1 truncate rounded-md px-3 py-1.5 text-left text-sm ${c.id === current ? "active" : "text-foreground hover:bg-accent"}`}
+        className={`item min-w-0 flex-1 truncate rounded-md px-3 py-1.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${c.id === current ? "active" : "text-foreground hover:bg-accent"}`}
         onClick={() => navigate(`/c/${c.id}`)}
         data-testid={`conv-item-${c.id}`} // #命名：显示名不再含 id——e2e 唯一定位锚
         title={c.title ?? c.id}
@@ -580,8 +596,8 @@ function BrowseDialog({ ws, current, isAdmin, fallbackNav, onClose }: {
       >
         <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold text-foreground">{ws.name} · 全部会话</h2>
-          <button className="rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground" onClick={onClose} data-testid="browse-close">
-            <XIcon size={14} />
+          <button className="rounded-sm p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={onClose} data-testid="browse-close">
+            <XIcon size={14} strokeWidth={IW} />
           </button>
         </div>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-2" onScroll={onScroll} data-testid="browse-scroll">

@@ -18,9 +18,9 @@ export const filePreviewPath = (workspaceId: string, path: string): string =>
 export function FileListCard({ group, workspaceId }: { group: TaskFileGroup; workspaceId: string }) {
   if (group.files.length === 0) return null;
   return (
-    <Card className="my-2 border-border bg-secondary/40 text-[13px]">
+    <Card className="my-2 border-border bg-secondary/60 text-[13px]">
       <CardHeader>
-        <CardTitle className="flex items-center gap-1.5 opacity-80">
+        <CardTitle className="flex items-center gap-1.5 text-muted-foreground">
           <FileIcon size={14} weight="light" strokeWidth={IW} />
           <span>本次产出文件（{group.files.length}）</span>
         </CardTitle>
@@ -31,10 +31,10 @@ export function FileListCard({ group, workspaceId }: { group: TaskFileGroup; wor
             <li key={f.id}>
               <Link
                 to={filePreviewPath(workspaceId, f.path)}
-                className="flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-accent"
+                className="flex items-center gap-1.5 rounded px-1.5 py-1 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 title={f.path}
               >
-                <FileIcon size={13} weight="light" strokeWidth={IW} className="shrink-0 text-muted-foreground" />
+                <FileIcon size={14} weight="light" strokeWidth={IW} className="shrink-0 text-muted-foreground" />
                 <span className="truncate">{f.name}</span>
                 <span className="ml-auto shrink-0 text-xs text-muted-foreground">{fmtTime(f.createdAt)}</span>
               </Link>

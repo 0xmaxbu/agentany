@@ -3,10 +3,14 @@
 // 主题切换 + 右栏折叠钮也在 header 右侧——经 context 下传）。
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { Outlet, useLocation } from "react-router";
+import { ArrowLineRightIcon, SidebarSimpleIcon } from "@phosphor-icons/react";
 import { Sidebar } from "../components/Sidebar";
 import { ContextPanel } from "../components/ContextPanel";
 import { useWorkspace } from "../store/workspace";
-import { useTheme } from "../lib/theme";
+import { Button } from "../components/ui/button";
+import { ThemeToggle } from "../components/ui/theme-toggle";
+
+const IW = 1.5; // 图标线宽全局统一
 
 // header 右侧控制（ChatPage header 消费——ShellLayout 持状态，切会话不丢）
 const ShellControlsContext = createContext<ReactNode>(null);
@@ -17,7 +21,6 @@ export function useShellControls(): ReactNode {
 
 export function ShellLayout() {
   const [panelOpen, setPanelOpen] = useState(false);
-  const [theme, setTheme] = useTheme();
   const load = useWorkspace((s) => s.load);
   const adminMode = useLocation().pathname.startsWith("/admin"); // Sidebar/右栏按此切态（f4）
 
@@ -26,21 +29,23 @@ export function ShellLayout() {
   }, [load]);
 
   const controls = (
-    <div className="flex items-center gap-1">
-      <button
-        onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-        className="rounded-md border border-border bg-card px-2 py-1 text-xs text-card-foreground hover:opacity-80"
-        title="切换主题"
-      >
-        {theme === "dark" ? "浅色" : "深色"}
-      </button>
-      <button
+    <div className="flex items-center gap-0.5">
+      <ThemeToggle />
+      <Button
+        variant="ghost"
+        size="sm"
+        className="gap-1 text-xs"
         onClick={() => setPanelOpen((v) => !v)}
-        className="rounded-md border border-border bg-card px-2 py-1 text-xs text-card-foreground hover:opacity-80"
-        title="上下文栏"
+        aria-label={panelOpen ? "收起上下文栏" : "展开上下文栏"}
+        title={panelOpen ? "收起上下文" : "上下文"}
       >
+        {panelOpen ? (
+          <ArrowLineRightIcon size={15} strokeWidth={IW} />
+        ) : (
+          <SidebarSimpleIcon size={15} strokeWidth={IW} />
+        )}
         {panelOpen ? "收起" : "上下文"}
-      </button>
+      </Button>
     </div>
   );
 

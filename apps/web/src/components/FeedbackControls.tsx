@@ -65,42 +65,42 @@ export function MessageFeedback({ messageId }: { messageId: string | number }) {
         title="有帮助"
         disabled={busy}
         onClick={() => void rate(true)}
-        className={`rounded p-1 transition-colors hover:bg-accent ${up ? "text-primary" : "text-muted-foreground/60"}`}
+        className={`rounded p-1 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${up ? "text-primary" : "text-muted-foreground"}`}
         data-testid="thumb-up"
       >
-        <ThumbsUpIcon size={13} strokeWidth={IW} weight={up ? "fill" : "regular"} />
+        <ThumbsUpIcon size={14} strokeWidth={IW} weight={up ? "fill" : "regular"} />
       </button>
       <button
         title="没帮助"
         disabled={busy}
         onClick={() => void rate(false)}
-        className={`rounded p-1 transition-colors hover:bg-accent ${down ? "text-destructive" : "text-muted-foreground/60"}`}
+        className={`rounded p-1 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${down ? "text-destructive" : "text-muted-foreground"}`}
         data-testid="thumb-down"
       >
-        <ThumbsDownIcon size={13} strokeWidth={IW} weight={down ? "fill" : "regular"} />
+        <ThumbsDownIcon size={14} strokeWidth={IW} weight={down ? "fill" : "regular"} />
       </button>
       <button
         title="写备注"
         onClick={() => setExpanded((v) => !v)}
-        className="rounded p-1 text-muted-foreground/60 transition-colors hover:bg-accent"
+        className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         data-testid="feedback-note-toggle"
       >
-        <ChatTextIcon size={13} strokeWidth={IW} />
+        <ChatTextIcon size={14} strokeWidth={IW} />
       </button>
       {mine?.text ? (
         <span className="max-w-64 truncate text-[11px] text-muted-foreground" title={mine.text}>{mine.text}</span>
       ) : null}
       {expanded && (
-        <span className="flex items-center gap-1">
+        <span className="reveal flex items-center gap-1">
           <input
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder="可选备注…"
-            className="h-6 w-44 rounded border border-border bg-background px-2 text-xs"
+            className="h-7 w-44 rounded-md border border-input bg-background px-2 text-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20"
             data-testid="feedback-note-input"
           />
           <Button
-            variant="outline" className="h-6 px-2 text-xs" disabled={busy || !note.trim()}
+            variant="outline" className="h-7 px-2 text-xs" disabled={busy || !note.trim()}
             onClick={() => void rate(noteDirection(), note.trim())}
             data-testid="feedback-note-submit"
           >
@@ -148,30 +148,30 @@ export function RunFeedback({ runId }: { runId: string }) {
         </div>
       ) : null}
       {open ? (
-        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+        <div className="reveal mt-1 flex flex-wrap items-center gap-1.5">
           <input
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="对这次执行的批注…"
-            className="h-6 min-w-40 flex-1 rounded border border-border bg-background px-2 text-xs"
+            className="h-7 min-w-40 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20"
             data-testid="run-feedback-text"
           />
           <select
             value={rating ?? ""}
             onChange={(e) => setRating(e.target.value ? Number(e.target.value) : undefined)}
-            className="h-6 rounded border border-border bg-background px-1 text-xs"
+            className="h-7 rounded-md border border-input bg-background px-1 text-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20"
             data-testid="run-feedback-rating"
           >
             <option value="">不评分</option>
             {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
-          <Button variant="outline" className="h-6 px-2 text-xs" disabled={busy || !text.trim()} onClick={() => void submit()} data-testid="run-feedback-submit">
+          <Button variant="outline" className="h-7 px-2 text-xs" disabled={busy || !text.trim()} onClick={() => void submit()} data-testid="run-feedback-submit">
             提交
           </Button>
-          <button className="text-[11px] text-muted-foreground hover:underline" onClick={() => setOpen(false)}>取消</button>
+          <button className="rounded px-0.5 text-[11px] text-muted-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setOpen(false)}>取消</button>
         </div>
       ) : (
-        <button className="text-[11px] text-muted-foreground/70 hover:underline" onClick={() => setOpen(true)} data-testid="run-feedback-open">
+        <button className="rounded px-0.5 text-[11px] text-muted-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setOpen(true)} data-testid="run-feedback-open">
           批注这次执行
         </button>
       )}
