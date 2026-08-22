@@ -19,7 +19,10 @@ const langOf = (lang: string | undefined): string => {
 
 const getHighlighter = async (lang: string): Promise<Highlighter> => {
   if (!highlighter) {
-    loading ??= import("shiki").then((m) => m.createHighlighter({ themes: ["github-dark-default"], langs: [lang] }));
+    // 双主题（chat-optimize）：light 内联 + --shiki-dark 变量，深模经 styles.css 覆盖
+    loading ??= import("shiki").then((m) =>
+      m.createHighlighter({ themes: ["github-light-default", "github-dark-default"], langs: [lang] }),
+    );
     highlighter = await loading;
   }
   if (!loadedLangs.has(lang)) {
@@ -33,7 +36,11 @@ const getHighlighter = async (lang: string): Promise<Highlighter> => {
 export async function highlight(code: string, lang?: string): Promise<string | null> {
   try {
     const h = await getHighlighter(langOf(lang));
-    return h.codeToHtml(code, { lang: langOf(lang), theme: "github-dark-default" });
+    return h.codeToHtml(code, {
+      lang: langOf(lang),
+      themes: { light: "github-light-default", dark: "github-dark-default" },
+      defaultColor: "light",
+    });
   } catch {
     return null; // 未知语言/加载失败——不阻塞渲染
   }
