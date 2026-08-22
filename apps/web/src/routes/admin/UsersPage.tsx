@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, listImBindings, unbindIm, type ImBinding } from "../../api";
 import { useAuth, ROLE } from "../../store/auth";
-import { CheckIcon, MagnifyingGlassIcon, ProhibitIcon } from "@phosphor-icons/react";
+import { CheckIcon, CircleNotchIcon, MagnifyingGlassIcon, ProhibitIcon } from "@phosphor-icons/react";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Dialog } from "../../components/ui/dialog";
@@ -13,7 +13,7 @@ import { NoAccess } from "../../components/ui/no-access";
 const jsonHeaders = { "Content-Type": "application/json" };
 
 // 枚举本地化（chat-optimize）：admin/member、active/deactivated → 中文（原裸枚举直出）
-export const ROLE_LABEL: Record<string, string> = { admin: "管理员", member: "成员" };
+const ROLE_LABEL: Record<string, string> = { admin: "管理员", member: "成员" };
 const STATUS_LABEL: Record<string, string> = { active: "启用", deactivated: "已停用" };
 
 export interface AdminUserRow {
@@ -107,7 +107,12 @@ export function AdminUsersPage() {
         </div>
 
         {err && <p className="mx-auto mb-4 max-w-3xl text-sm text-destructive">{err}</p>}
-        {filtered === null && <p className="text-sm text-muted-foreground">加载中…</p>}
+        {filtered === null && (
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <CircleNotchIcon size={14} className="animate-spin" />
+            加载中…
+          </p>
+        )}
         {filtered !== null && (
           <div className="mx-auto max-w-3xl overflow-hidden rounded-md border border-border">
             <table className="w-full text-sm" data-testid="users-table">

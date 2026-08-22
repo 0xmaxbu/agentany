@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   CaretDownIcon,
   CaretRightIcon,
+  CircleNotchIcon,
   ClockIcon,
   PauseIcon,
   PencilSimpleIcon,
@@ -108,10 +109,15 @@ export function AdminTasksPage() {
         </Button>
       </header>
       <div className="flex-1 overflow-y-auto p-6">
-        {err && <p className="mx-auto mb-4 max-w-4xl text-sm text-destructive">{err}</p>}
-        {tasks === null && <p className="text-sm text-muted-foreground">加载中…</p>}
+        {err && <p className="mx-auto mb-4 max-w-3xl text-sm text-destructive">{err}</p>}
+        {tasks === null && (
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <CircleNotchIcon size={14} strokeWidth={IW} className="animate-spin" />
+            加载中…
+          </p>
+        )}
         {tasks !== null && (
-          <div className="mx-auto max-w-4xl overflow-hidden rounded-md border border-border" data-testid="tasks-table">
+          <div className="mx-auto max-w-3xl overflow-hidden rounded-md border border-border" data-testid="tasks-table">
             {tasks.map((t) => (
               <TaskRow
                 key={t.id}
@@ -153,6 +159,7 @@ function TaskRow({
   onEdit: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false); // 删除 busy（防双击双删）
   const [running, setRunning] = useState(false);
   const [runs, setRuns] = useState<TaskRun[] | null>(null);
   const isSystem = task.scope === "system";
@@ -164,6 +171,18 @@ function TaskRow({
     setRuns(null);
     void listTaskRuns(task.id).then(setRuns).catch(() => setRuns([]));
   }, [expanded, task.id, task.unreadRuns]);
+
+  // 确认删除：busy 防抖（成功=行随 reload 消失；失败=复位可重试/取消）
+  const doDelete = () => {
+    if (deleting) return;
+    setDeleting(true);
+    void deleteTask(task.id)
+      .then(onChanged)
+      .catch(() => {
+        setDeleting(false);
+        setConfirming(false);
+      });
+  };
 
   const runNow = async () => {
     setRunning(true);
@@ -237,9 +256,14 @@ function TaskRow({
               </Button>
               {!isDistill && (
                 confirming ? (
-                  <Button variant="destructive" size="xs" onClick={() => void deleteTask(task.id).then(onChanged)} data-testid="confirm-delete">
+                <>
+                  <Button variant="destructive" size="xs" disabled={deleting} onClick={doDelete} data-testid="confirm-delete">
                     确认删除
                   </Button>
+                  <Button variant="outline" size="xs" disabled={deleting} onClick={() => setConfirming(false)}>
+                    取消
+                  </Button>
+                </>
                 ) : (
                   <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => setConfirming(true)} data-testid="delete-task">
                     <TrashIcon size={12} strokeWidth={IW} />
@@ -248,9 +272,14 @@ function TaskRow({
               )}
             </>
           ) : confirming ? (
-            <Button variant="destructive" size="xs" onClick={() => void deleteTask(task.id).then(onChanged)} data-testid="confirm-delete">
-              确认删除
-            </Button>
+            <>
+              <Button variant="destructive" size="xs" disabled={deleting} onClick={doDelete} data-testid="confirm-delete">
+                确认删除
+              </Button>
+              <Button variant="outline" size="xs" disabled={deleting} onClick={() => setConfirming(false)}>
+                取消
+              </Button>
+            </>
           ) : (
             <>
               <Button
@@ -259,8 +288,7 @@ function TaskRow({
                 onClick={() => void setTaskEnabled(task.id, !task.enabled).then(onChanged)}
                 data-testid="toggle-enabled"
               >
-                <PlayIcon size={12} strokeWidth={IW} className={task.enabled ? "hidden" : undefined} />
-                <PauseIcon size={12} strokeWidth={IW} className={task.enabled ? undefined : "hidden"} />
+                {task.enabled ? <PauseIcon size={12} strokeWidth={IW} /> : <PlayIcon size={12} strokeWidth={IW} />}
                 {task.enabled ? "停用" : "启用"}
               </Button>
               <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => setConfirming(true)} data-testid="delete-task">

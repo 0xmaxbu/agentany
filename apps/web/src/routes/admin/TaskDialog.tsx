@@ -10,6 +10,7 @@ import { GlobeHemisphereWestIcon, MagnifyingGlassIcon, PencilSimpleIcon, Warning
 import { createSystemTask, updateTask, isDistillSeed, type ScheduledTask } from "../../api";
 import { Button } from "../../components/ui/button";
 import { Dialog } from "../../components/ui/dialog";
+import { Input } from "../../components/ui/input";
 
 const IW = 1.5;
 
@@ -110,23 +111,24 @@ export function TaskDialog({
 
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-foreground">名称</span>
-          <input
+          <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
             disabled={isDistill}
             placeholder="如：周报巡检"
-            className="h-8 rounded-md border border-input bg-background px-2 text-sm outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20 disabled:opacity-50"
+            className="h-8 px-2"
             data-testid="task-form-name"
           />
         </label>
 
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-foreground">触发时间（cron）</span>
-          <input
+          {/* cn 合并：cron 错形时 border-destructive 覆盖基础 border-input */}
+          <Input
             value={cron}
             onChange={(e) => setCron(e.target.value)}
             placeholder="0 5 * * 1（分 时 日 月 周；最小间隔 1 小时）"
-            className={`h-8 rounded-md border bg-background px-2 font-mono text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/20 ${cronLooksWrong(cron) ? "border-destructive" : "border-input focus-visible:border-ring"}`}
+            className={`h-8 px-2 font-mono${cronLooksWrong(cron) ? " border-destructive" : ""}`}
             data-testid="task-form-cron"
           />
           {cronLooksWrong(cron) && (

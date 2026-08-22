@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../../api";
 import { useAuth, ROLE } from "../../store/auth";
 import { COMPANY_WORKSPACE_ID } from "../../store/workspace"; // 域常量唯一源（本地不重定义）
-import { MagnifyingGlassIcon, XIcon } from "@phosphor-icons/react";
+import { CircleNotchIcon, MagnifyingGlassIcon, XIcon } from "@phosphor-icons/react";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Dialog } from "../../components/ui/dialog";
@@ -127,7 +127,12 @@ export function AdminWorkspacesPage() {
         </div>
 
         {err && <p className="mx-auto mb-4 max-w-3xl text-sm text-destructive">{err}</p>}
-        {filtered === null && <p className="text-sm text-muted-foreground">加载中…</p>}
+        {filtered === null && (
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <CircleNotchIcon size={14} strokeWidth={IW} className="animate-spin" />
+            加载中…
+          </p>
+        )}
         {filtered !== null && (
           <div className="mx-auto max-w-3xl overflow-hidden rounded-md border border-border">
             <table className="w-full text-sm" data-testid="ws-table">
@@ -192,8 +197,6 @@ export function AdminWorkspacesPage() {
     </div>
   );
 }
-
-const PLATFORM_TITLES: Record<string, string> = { feishu: "飞书", telegram: "Telegram" };
 
 /** 名单编辑子组件（新建/编辑弹窗共用）：chips + 下拉添加。allUsers 开时灰掉。 */
 function MemberList({ users, members, onAdd, onRemove, disabled }: {
